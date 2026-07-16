@@ -1,0 +1,93 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.tmdb.example
+service-account*.json
+*service-account*.json
+credentials*.json
+secrets*.json
+*.pem
+*.p12
+
+# Databases & data files
+/data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+data/app.db
+data/audits/
+
+# Logs
+logs/
+*.log
+pipeline.log
+test_pipeline_yoast.log
+output.txt
+update_log.txt
+
+# Debug output
+debug/
+RESULTADO_FINAL.txt
+news_sitemap_validation.txt
+sitemap_check.txt
+estadao-politica.xml
+app/store.db
+
+# Test / cache
+.pytest_cache/
+.cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node (if any frontend tooling)
+node_modules/
+
+# Replit
+.replit
+.local/
+uv.lock
+
+# Local AI assistants
+.claude/
+
+# Build outputs
+output.txt
+reports/
+
+# Backup files
+*.bak

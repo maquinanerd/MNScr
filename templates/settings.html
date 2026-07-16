@@ -1,0 +1,179 @@
+
+{% extends "base.html" %}
+
+{% block title %}Configurações - RSS to WordPress{% endblock %}
+
+{% block content %}
+<div class="min-h-screen bg-gray-100">
+    <!-- Header -->
+    <nav class="bg-blue-600 text-white p-4">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold">RSS to WordPress Dashboard</h1>
+            <div class="flex space-x-4">
+                <a href="/" class="px-3 py-2 rounded hover:bg-blue-700">Dashboard</a>
+                <a href="/feeds" class="px-3 py-2 rounded hover:bg-blue-700">Feeds</a>
+                <a href="/settings" class="px-3 py-2 rounded bg-blue-700">Configurações</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container mx-auto p-6">
+        <h2 class="text-2xl font-bold mb-6">Configurações do Sistema</h2>
+
+        <!-- WordPress Settings -->
+        <div class="bg-white rounded-lg shadow mb-6">
+            <div class="p-6 border-b">
+                <h3 class="text-xl font-bold">Configurações do WordPress</h3>
+            </div>
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">URL do WordPress</label>
+                        <input type="text" value="{{ settings.wordpress_url }}" readonly
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Usuário</label>
+                        <input type="text" value="{{ settings.wordpress_user }}" readonly
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50">
+                    </div>
+                </div>
+                <p class="text-sm text-gray-600 mt-4">
+                    <i class="fas fa-info-circle mr-2"></i>
+                    As configurações do WordPress são definidas através de variáveis de ambiente.
+                </p>
+            </div>
+        </div>
+
+        <!-- AI API Settings -->
+        <div class="bg-white rounded-lg shadow mb-6">
+            <div class="p-6 border-b">
+                <h3 class="text-xl font-bold">Configurações da API de IA</h3>
+            </div>
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div class="text-center">
+                        <div class="bg-blue-50 rounded-lg p-4">
+                            <i class="fas fa-film text-blue-600 text-2xl mb-2"></i>
+                            <h4 class="font-bold text-gray-800">Filmes</h4>
+                            <p class="text-sm text-gray-600">4 chaves configuradas</p>
+                        </div>
+                    </div>
+                    <div class="text-center">
+                        <div class="bg-green-50 rounded-lg p-4">
+                            <i class="fas fa-tv text-green-600 text-2xl mb-2"></i>
+                            <h4 class="font-bold text-gray-800">Séries</h4>
+                            <p class="text-sm text-gray-600">3 chaves configuradas</p>
+                        </div>
+                    </div>
+                    <div class="text-center">
+                        <div class="bg-purple-50 rounded-lg p-4">
+                            <i class="fas fa-gamepad text-purple-600 text-2xl mb-2"></i>
+                            <h4 class="font-bold text-gray-800">Games</h4>
+                            <p class="text-sm text-gray-600">2 chaves configuradas</p>
+                        </div>
+                    </div>
+                </div>
+                <p class="text-sm text-gray-600 mt-4">
+                    <i class="fas fa-info-circle mr-2"></i>
+                    Total de {{ settings.gemini_keys_count }} chaves Gemini API configuradas.
+                </p>
+            </div>
+        </div>
+
+        <!-- System Settings -->
+        <div class="bg-white rounded-lg shadow mb-6">
+            <div class="p-6 border-b">
+                <h3 class="text-xl font-bold">Configurações do Sistema</h3>
+            </div>
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Nível de Log</label>
+                        <input type="text" value="{{ settings.log_level }}" readonly
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Intervalo do Pipeline</label>
+                        <input type="text" value="{{ settings.pipeline_interval }}" readonly
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Intervalo de Limpeza</label>
+                        <input type="text" value="{{ settings.cleanup_interval }}" readonly
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Keys Information -->
+        <div class="bg-white rounded-lg shadow">
+            <div class="p-6 border-b">
+                <h3 class="text-xl font-bold">Mapeamento de Chaves API</h3>
+            </div>
+            <div class="p-6">
+                <div class="space-y-6">
+                    <!-- Movies -->
+                    <div>
+                        <h4 class="font-bold text-gray-800 mb-3">Filmes (Movies)</h4>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between p-2 bg-gray-50 rounded">
+                                <span>ScreenRant Movies → GEMINI_MOVIES_1</span>
+                                <span class="text-green-600">✓</span>
+                            </div>
+                            <div class="flex justify-between p-2 bg-gray-50 rounded">
+                                <span>MovieWeb Movies → GEMINI_MOVIES_2</span>
+                                <span class="text-green-600">✓</span>
+                            </div>
+                            <div class="flex justify-between p-2 bg-gray-50 rounded">
+                                <span>Collider Movies → GEMINI_MOVIES_3</span>
+                                <span class="text-green-600">✓</span>
+                            </div>
+                            <div class="flex justify-between p-2 bg-gray-50 rounded">
+                                <span>CBR Movies → GEMINI_MOVIES_4</span>
+                                <span class="text-green-600">✓</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Series -->
+                    <div>
+                        <h4 class="font-bold text-gray-800 mb-3">Séries (Series)</h4>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between p-2 bg-gray-50 rounded">
+                                <span>ScreenRant TV → GEMINI_SERIES_1</span>
+                                <span class="text-green-600">✓</span>
+                            </div>
+                            <div class="flex justify-between p-2 bg-gray-50 rounded">
+                                <span>Collider TV → GEMINI_SERIES_2</span>
+                                <span class="text-green-600">✓</span>
+                            </div>
+                            <div class="flex justify-between p-2 bg-gray-50 rounded">
+                                <span>CBR TV → GEMINI_SERIES_3</span>
+                                <span class="text-green-600">✓</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Games -->
+                    <div>
+                        <h4 class="font-bold text-gray-800 mb-3">Games</h4>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between p-2 bg-gray-50 rounded">
+                                <span>GameRant Games → GEMINI_GAMES_1</span>
+                                <span class="text-green-600">✓</span>
+                            </div>
+                            <div class="flex justify-between p-2 bg-gray-50 rounded">
+                                <span>TheGamer Games → GEMINI_GAMES_2</span>
+                                <span class="text-green-600">✓</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

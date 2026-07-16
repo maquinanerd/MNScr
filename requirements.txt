@@ -1,0 +1,17 @@
+python-dotenv
+requests
+urllib3==2.5.0
+charset-normalizer==3.4.4
+google-auth
+httpx
+beautifulsoup4
+feedparser
+python-dateutil
+lxml
+python-slugify
+google-generativeai
+APScheduler
+tmdbv3api
+trafilatura
+Pillow
+SQLAlchemy
