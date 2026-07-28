@@ -71,7 +71,7 @@ def test_entity_validator_fixes_canonical_entity_casing_inside_anchor_text():
     source = "<p>Steven Spielberg comentou Harry Potter em entrevista.</p>"
     rewritten = (
         '<p>O diretor citou a adaptaÃ§Ã£o cinematogrÃ¡fica de '
-        '<a href="https://maquinanerd.com.br/harry-potter/">harry potter</a>.</p>'
+        '<a href="https://cinerie.example/harry-potter/">harry potter</a>.</p>'
     )
 
     fixed, corrections = validate_and_fix_entities(source, rewritten)

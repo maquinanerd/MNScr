@@ -6,15 +6,15 @@ def test_select_internal_links_scores_real_link_map_shape_and_excludes_current_u
     link_map = {
         "posts": [
             {
-                "link": "https://maquinanerd.com.br/star-wars-ordem-cronologica/",
+                "link": "https://cinerie.example/star-wars-ordem-cronologica/",
                 "keywords": ["Star Wars", "Star Wars: ordem cronologica dos filmes"],
             },
             {
-                "link": "https://maquinanerd.com.br/marvel-fase-6/",
+                "link": "https://cinerie.example/marvel-fase-6/",
                 "keywords": ["Marvel", "Marvel: Fase 6 ganha novas datas"],
             },
             {
-                "link": "https://maquinanerd.com.br/star-wars-atual/",
+                "link": "https://cinerie.example/star-wars-atual/",
                 "keywords": ["Star Wars: filme atual"],
             },
         ]
@@ -27,13 +27,13 @@ def test_select_internal_links_scores_real_link_map_shape_and_excludes_current_u
         tags=["cinema"],
         topic="movies",
         k=3,
-        current_url="https://maquinanerd.com.br/star-wars-atual/",
+        current_url="https://cinerie.example/star-wars-atual/",
     )
 
     assert selected == [
         {
             "titulo": "Star Wars: ordem cronologica dos filmes",
-            "url": "https://maquinanerd.com.br/star-wars-ordem-cronologica/",
+            "url": "https://cinerie.example/star-wars-ordem-cronologica/",
         }
     ]
 
@@ -41,8 +41,8 @@ def test_select_internal_links_scores_real_link_map_shape_and_excludes_current_u
 def test_select_internal_links_supports_title_url_maps_and_does_not_force_zero_score():
     selected = select_internal_links(
         {
-            "Batman: guia de filmes": "https://maquinanerd.com.br/batman-guia/",
-            "https://maquinanerd.com.br/mario-guia/": "Mario: guia dos jogos",
+            "Batman: guia de filmes": "https://cinerie.example/batman-guia/",
+            "https://cinerie.example/mario-guia/": "Mario: guia dos jogos",
         },
         article_title="Metroid Prime ganha janela de lancamento",
         entities=["Samus"],
@@ -59,7 +59,7 @@ def test_add_internal_links_falls_back_to_same_category_when_keyword_match_fails
     link_map = {
         "posts": [
             {
-                "link": "https://maquinanerd.com.br/cinema/",
+                "link": "https://cinerie.example/cinema/",
                 "title": "Cinema",
                 "keywords": ["Christopher Nolan"],
                 "categories": [7],
@@ -69,5 +69,5 @@ def test_add_internal_links_falls_back_to_same_category_when_keyword_match_fails
 
     result = add_internal_links(html, link_map, current_post_categories=[7], max_links=6)
 
-    assert 'href="https://maquinanerd.com.br/cinema/"' in result
+    assert 'href="https://cinerie.example/cinema/"' in result
     assert "Leia tambem" in result

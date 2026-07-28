@@ -63,7 +63,7 @@ class TokenTracker:
         error_message: Optional[str] = None,
         metadata: Optional[Dict] = None,
         source_url: Optional[str] = None,
-        wp_post_id: Optional[int] = None,
+        draft_id: Optional[str] = None,
         article_title: Optional[str] = None
     ) -> bool:
         """
@@ -79,7 +79,7 @@ class TokenTracker:
             error_message: Mensagem de erro se falhou
             metadata: Dados adicionais para registrar
             source_url: URL de origem do artigo (novo!)
-            wp_post_id: ID do post no WordPress após publicação (novo!)
+            draft_id: identificador do draft editorial gerado
             article_title: Título do artigo processado (novo!)
         
         Returns:
@@ -101,7 +101,7 @@ class TokenTracker:
                 "error_message": error_message,
                 "metadata": metadata or {},
                 "source_url": source_url,
-                "wp_post_id": wp_post_id,
+                "draft_id": draft_id,
                 "article_title": article_title
             }
             
@@ -119,10 +119,10 @@ class TokenTracker:
                 )
             else:
                 title_str = f'"{article_title[:70]}" ' if article_title else ""
-                id_str = f"| Post ID: {wp_post_id} " if wp_post_id else ""
+                id_str = f"| Draft: {draft_id} " if draft_id else ""
                 self.logger.info(
                     f"[{api_type.upper()}] {title_str}{id_str}"
-                    f"— publicado no WordPress (tokens de IA registrados em chamadas anteriores)"
+                    f"— draft gerado (tokens de IA registrados em chamadas anteriores)"
                 )
             
             return True

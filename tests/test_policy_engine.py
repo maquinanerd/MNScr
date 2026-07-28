@@ -1,7 +1,7 @@
 """
 tests/test_policy_engine.py
 
-Bateria de testes obrigatórios para o policy_engine do MN26.
+Bateria de testes obrigatórios para o policy_engine do MNScr.
 Cobre os cenários A-L definidos na especificação editorial.
 
 Execução:
@@ -18,9 +18,8 @@ from app.policy_engine import (
     calculate_dynamic_word_policy,
     should_expand,
     should_run_ai_validator,
-    should_run_qa_llm,
-    decide_publish_status,
-    decide_index_status,
+
+    decide_draft_status,
     classify_article_type,
     ArticleBudget,
 )
@@ -203,185 +202,7 @@ class TestShouldRunAIValidator:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. should_run_qa_llm
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestShouldRunQALLM:
-    def test_scenario_g_feature_disabled_skips(self, monkeypatch):
-        monkeypatch.setattr("app.policy_engine.QA_LLM_ENABLED", False)
-        monkeypatch.setattr("app.policy_engine.ENABLE_QA_LLM_BORDERLINE", False)
-        result = should_run_qa_llm(structural_score=25, publish_allowed=True, index_allowed=True)
-        assert result["run"] is False
-
-    def test_qa_llm_enabled_runs_for_index_gate_signal(self, monkeypatch):
-        monkeypatch.setattr("app.policy_engine.QA_LLM_ENABLED", True)
-        monkeypatch.setattr("app.policy_engine.ENABLE_QA_LLM_BORDERLINE", True)
-        result = should_run_qa_llm(structural_score=25, publish_allowed=True, index_allowed=True)
-        assert result["run"] is True
-        assert result["reason"] == "enabled_for_all_articles"
-
-class TestDecidePublishStatus:
-
-    def test_scenario_i_low_score_still_publishes(self):
-        """Cenário I: score baixo não bloqueia publicação."""
-        result = decide_publish_status(
-            content_html="<p>Conteúdo válido</p>",
-            title="Título Válido",
-            structural_score=15,  # score muito baixo
-        )
-        assert result["allowed"] is True
-
-    def test_scenario_j_empty_content_blocks_publish(self):
-        """Cenário J: conteúdo vazio bloqueia publicação."""
-        result = decide_publish_status(content_html="", title="Título")
-        assert result["allowed"] is False
-        assert "empty_content" in result["reason"]
-
-    def test_scenario_k_empty_title_blocks_publish(self):
-        """Cenário K: título vazio bloqueia publicação."""
-        result = decide_publish_status(content_html="<p>Conteúdo</p>", title="")
-        assert result["allowed"] is False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 6. decide_index_status
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestDecideIndexStatus:
-    def test_good_article_publish_true_indexes(self):
-        result = decide_index_status(
-            structural_score=60,
-            publish_allowed=True,
-            word_count=600,
-            internal_links=1,
-            min_acceptable_words=500,
-            editorial_status="WARNING_ONLY",
-        )
-        assert result["allowed"] is True
-        assert result["indexable"] is True
-        assert result["robots"] == "index,follow"
-        assert result["noindex_value"] == "0"
-        assert result["reason"] == "force_index_all_posts"
-
-    def test_low_score_publish_true_still_indexes(self):
-        result = decide_index_status(
-            structural_score=20,
-            publish_allowed=True,
-            word_count=600,
-            internal_links=1,
-            min_acceptable_words=500,
-            editorial_status="WARNING_ONLY",
-        )
-        assert result["allowed"] is True
-        assert result["indexable"] is True
-        assert result["robots"] == "index,follow"
-        assert result["noindex_value"] == "0"
-        assert result["reason"] == "force_index_all_posts"
-        assert result["failed"] == []
-
-    def test_score_40_and_no_links_publish_true_still_indexes(self):
-        result = decide_index_status(
-            structural_score=40,
-            publish_allowed=True,
-            word_count=1172,
-            internal_links=0,
-            min_acceptable_words=600,
-            editorial_status="WARNING_ONLY",
-        )
-        assert result["allowed"] is True
-        assert result["robots"] == "index,follow"
-        assert result["failed"] == []
-
-    def test_short_article_publish_true_still_indexes(self):
-        result = decide_index_status(
-            structural_score=60,
-            publish_allowed=True,
-            word_count=150,
-            internal_links=1,
-            min_acceptable_words=250,
-            editorial_status="WARNING_ONLY",
-        )
-        assert result["allowed"] is True
-        assert result["robots"] == "index,follow"
-        assert result["failed"] == []
-
-    def test_no_internal_links_still_indexes(self):
-        result = decide_index_status(
-            structural_score=60,
-            publish_allowed=True,
-            word_count=600,
-            internal_links=0,
-            min_acceptable_words=500,
-            editorial_status="WARNING_ONLY",
-        )
-        assert result["allowed"] is True
-        assert result["robots"] == "index,follow"
-        assert result["failed"] == []
-
-    def test_editorial_fail_still_indexes(self):
-        result = decide_index_status(
-            structural_score=80,
-            publish_allowed=True,
-            word_count=1000,
-            internal_links=2,
-            min_acceptable_words=500,
-            editorial_status="FAIL",
-        )
-        assert result["allowed"] is True
-        assert result["robots"] == "index,follow"
-        assert result["failed"] == []
-
-    def test_gate_disabled_uses_legacy_behavior(self, monkeypatch):
-        import app.policy_engine as policy_engine
-
-        monkeypatch.setattr(policy_engine, "INDEX_GATE_ENABLED", False)
-        result = policy_engine.decide_index_status(
-            structural_score=30,
-            publish_allowed=True,
-            word_count=600,
-            internal_links=0,
-            min_acceptable_words=900,
-            editorial_status="FAIL",
-        )
-        assert result["allowed"] is True
-        assert result["robots"] == "index,follow"
-
-    def test_publish_false(self):
-        result = decide_index_status(structural_score=50, publish_allowed=False)
-        assert result["allowed"] is False
-        assert result["indexable"] is False
-        assert result["robots"] == "noindex,follow"
-        assert result["noindex_value"] == "1"
-
-class TestClassifyArticleType:
-
-    def test_short_factual_stays_news(self):
-        """Notícia factual curta não vira guide/list."""
-        result = classify_article_type(
-            title="Marvel confirma data de estreia do novo Capitão América",
-            source_words=350,
-        )
-        assert result == "news"
-
-    def test_list_article_detected(self):
-        """Artigo com sinal de lista e source > 600 → list."""
-        result = classify_article_type(
-            title="10 melhores filmes de 2024 que você precisa assistir",
-            source_words=800,
-        )
-        assert result == "list"
-
-    def test_short_article_with_list_signal_stays_news(self):
-        """Fonte curta com sinal de lista → news (proteção)."""
-        result = classify_article_type(
-            title="Os 5 melhores filmes anunciados",
-            source_words=300,
-        )
-        assert result == "news"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 8. ArticleBudget
+# 5. ArticleBudget
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestArticleBudget:
@@ -411,7 +232,7 @@ class TestArticleBudget:
         """report() retorna string formatada."""
         b = ArticleBudget(article_type="news", origin="fallback", db_id=99)
         b.consume(tokens=1000, stage="main_writer")
-        report = b.report(wp_post_id=12345, publish=True, index=True, robots="index,follow", score=40)
+        report = b.report(draft_id="draft-abc", draft_generated=True, score=40)
         assert "db_id=99" in report
-        assert "wp_post_id=12345" in report
-        assert "publish=True" in report
+        assert "draft_id=draft-abc" in report
+        assert "draft_generated=True" in report

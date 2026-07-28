@@ -388,7 +388,7 @@ def _yt_id_from_url(url: str) -> Optional[str]:
 def strip_credits_and_normalize_youtube(html: str) -> str:
     """
     - Remove linhas de crédito (figcaption/p/span iniciando com Crédito/Credito/Fonte)
-    - Converte iframes do YouTube em <p> com URL watch (WordPress oEmbed)
+    - Converte iframes do YouTube em <p> com URL watch (oEmbed do CMS)
     - Remove iframes não-YouTube, vazios ou com placeholders (ex.: URL_DO_EMBED_AQUI)
     - Remove <p> vazios após a limpeza e desfaz <figure> que só envolvem embed
     """
@@ -658,7 +658,7 @@ def merge_images_into_content(content_html: str, image_urls: List[str], max_imag
 
 def merge_videos_into_content(content_html: str, videos: List[Dict[str, str]], max_videos: int = 2) -> str:
     """
-    Garante que videos do YouTube entrem no corpo via URL watch para oEmbed do WordPress.
+    Garante que videos do YouTube entrem no corpo via URL watch para oEmbed do CMS.
     Nao duplica videos ja presentes no HTML.
     """
     if not videos:
@@ -703,39 +703,6 @@ def merge_videos_into_content(content_html: str, videos: List[Dict[str, str]], m
         added += 1
         if added >= max_videos:
             break
-
-    return soup.body.decode_contents() if soup.body else str(soup)
-
-
-def rewrite_img_srcs_with_wp(content_html: str, uploaded_src_map: Dict[str, str]) -> str:
-    """
-    Reaponta <img> e srcset para as URLs do WordPress já enviadas.
-    - uploaded_src_map: {url_original (normalizada) -> new_source_url_no_wp}
-    """
-    if not content_html or not uploaded_src_map:
-        return content_html
-
-    # normalizar chaves do mapping
-    norm_map: Dict[str, str] = {_norm_key(k): v for k, v in uploaded_src_map.items() if k and v}
-
-    soup = BeautifulSoup(content_html, "lxml")
-    for img in soup.find_all("img"):
-        # src
-        src = (img.get("src") or "").strip()
-        key = _norm_key(src)
-        if key in norm_map:
-            img["src"] = norm_map[key]
-
-        # srcset
-        if img.get("srcset"):
-            img["srcset"] = _replace_in_srcset(img["srcset"], norm_map)
-
-        # data-* (evita rehydration quebrado)
-        for a in ("data-src", "data-original", "data-lazy-src", "data-image", "data-img-url"):
-            if img.has_attr(a):
-                k2 = _norm_key(img.get(a) or "")
-                if k2 in norm_map:
-                    img[a] = norm_map[k2]
 
     return soup.body.decode_contents() if soup.body else str(soup)
 
@@ -981,7 +948,7 @@ def remove_broken_image_placeholders(html: str) -> str:
 def downgrade_h1_to_h2(html: str) -> str:
     """
     Replaces any <h1>...</h1> in the article body with <h2>...</h2>.
-    The WordPress title is already injected as H1 by the theme/Yoast.
+    The CMS renders the title as H1; a second H1 in the body hurts SEO.
     A second H1 in the content is a duplicate and hurts SEO.
     """
     if not html or '<h1' not in html.lower():
@@ -1033,9 +1000,8 @@ def remove_source_domain_schemas(html: str) -> str:
     """
     Remove todos os blocos JSON-LD que vieram do conteúdo original da fonte.
     
-    O WordPress injeta automaticamente os schemas corretos com o domínio 
-    o domínio configurado no WordPress via plugins. Remover os schemas originais 
-    evita conflitos de Schema.org e problemas de SEO/Google News.
+    O schema estruturado é responsabilidade do sistema que publica. Remover os
+    schemas da fonte evita conflitos de Schema.org no destino editorial.
     
     Remove:
     - <script type="application/ld+json">...</script> com qualquer conteúdo

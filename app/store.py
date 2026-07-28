@@ -129,6 +129,18 @@ class Database:
             "meta_desc_status": "ALTER TABLE seen_articles ADD COLUMN meta_desc_status TEXT",
             "claimed_by": "ALTER TABLE seen_articles ADD COLUMN claimed_by TEXT",
             "claimed_at": "ALTER TABLE seen_articles ADD COLUMN claimed_at TEXT",
+            # MS-1: registro do draft editorial (substitui o registro de publicação)
+            "draft_id": "ALTER TABLE seen_articles ADD COLUMN draft_id TEXT",
+            "draft_status": "ALTER TABLE seen_articles ADD COLUMN draft_status TEXT",
+            "draft_artifact_path": "ALTER TABLE seen_articles ADD COLUMN draft_artifact_path TEXT",
+            "draft_output_hash": "ALTER TABLE seen_articles ADD COLUMN draft_output_hash TEXT",
+            "draft_revision": "ALTER TABLE seen_articles ADD COLUMN draft_revision INTEGER DEFAULT 1",
+            "draft_generated_at": "ALTER TABLE seen_articles ADD COLUMN draft_generated_at TEXT",
+            "submission_destination": "ALTER TABLE seen_articles ADD COLUMN submission_destination TEXT",
+            "submission_status": "ALTER TABLE seen_articles ADD COLUMN submission_status TEXT",
+            "submission_error": "ALTER TABLE seen_articles ADD COLUMN submission_error TEXT",
+            # MS-1: proveniência que a MS-0 apontou como calculada e descartada
+            "sources_used_json": "ALTER TABLE seen_articles ADD COLUMN sources_used_json TEXT",
         }
 
         for column_name, sql in missing_columns.items():
@@ -151,6 +163,12 @@ class Database:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_seen_articles_status_claimed_at "
             "ON seen_articles(status, claimed_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_seen_articles_draft_id ON seen_articles(draft_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_seen_articles_draft_status ON seen_articles(draft_status)"
         )
         self._backfill_seen_articles_runtime_metadata()
 
@@ -357,7 +375,7 @@ class Database:
                     last_seen       TEXT,
                     published_at DATETIME,
                     inserted_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
-                    status TEXT DEFAULT 'NEW', -- NEW, PROCESSING, REWRITTEN, PUBLISHED, FAILED, DEFERRED
+                    status TEXT DEFAULT 'NEW', -- NEW, PROCESSING, DRAFT_GENERATED, DRAFT_FAILED, FAILED, SUPERSEDED, SKIPPED
                     retry_at DATETIME,
                     fail_reason TEXT,
                     fail_count INTEGER DEFAULT 0,
@@ -366,7 +384,7 @@ class Database:
             ''')
             self._ensure_seen_articles_schema()
             self._ensure_superfeed_covered_urls_schema()
-            # Tabela para rastrear posts publicados no WordPress
+            # LEGADO (MS-1): tabela mantida apenas para leitura de dados antigos.
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS posts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -493,7 +511,7 @@ class Database:
                         (item["cluster_signature"],)
                     )
                     row = cursor.fetchone()
-                    if row and row["status"] in ("PUBLISHED", "DRAFT", "REWRITTEN"):
+                    if row and row["status"] in ("DRAFT_GENERATED", "PUBLISHED", "REWRITTEN"):
                         already_seen = True
                         logger.info(
                             f"[CLUSTER_SIG] Bloqueado por cluster_signature={item['cluster_signature']}"
@@ -621,77 +639,166 @@ class Database:
             return False
 
 
-    def save_processed_post(
+    def record_draft_generated(
         self,
         article_db_id: int,
-        wp_post_id: int,
-        claimed_by: str,
+        *,
+        draft_id: str,
+        draft_output_hash: str,
+        draft_revision: int = 1,
+        artifact_path: Optional[str] = None,
+        submission_destination: Optional[str] = None,
+        submission_status: Optional[str] = None,
+        claimed_by: Optional[str] = None,
     ) -> bool:
-        """Save a published post only while the caller still owns the claim."""
+        """Record a generated editorial draft, guarded by the worker claim.
+
+        This replaces ``save_processed_post``: MNScr no longer publishes, so the
+        terminal success state is DRAFT_GENERATED, never PUBLISHED.
+        """
         try:
             cursor = self._get_cursor()
-            claim_row = cursor.execute(
-                "SELECT status, claimed_by FROM seen_articles WHERE id = ?",
-                (article_db_id,),
-            ).fetchone()
-            token_currently_in_db = claim_row["claimed_by"] if claim_row else None
-            logger.info(
-                "[TOKEN_TRACE] stage=save_entry db_id=%s "
-                "token_presented_by_worker=%r token_currently_in_db=%r match=%s",
-                article_db_id,
-                claimed_by,
-                token_currently_in_db,
-                str(token_currently_in_db == claimed_by).lower(),
-            )
-            logger.info(
-                "[TOKEN_TRACE] stage=save_comparison db_id=%s "
-                "predicate=\"id = ? AND status = 'PROCESSING' AND claimed_by = ? "
-                "AND NOT EXISTS(posts.seen_article_id = seen_articles.id)\" "
-                "status_currently_in_db=%r token_normalization=none "
-                "null_handling=\"SQL '=' with NULL never matches\"",
-                article_db_id,
-                claim_row["status"] if claim_row else None,
-            )
-            cursor.execute(
-                """
-                UPDATE seen_articles
-                SET status = 'PUBLISHED',
-                    fail_reason = NULL,
-                    retry_at = NULL,
-                    fail_count = 0,
-                    claimed_by = NULL,
-                    claimed_at = NULL
-                WHERE id = ?
-                  AND status = 'PROCESSING'
-                  AND claimed_by = ?
-                  AND NOT EXISTS (
-                      SELECT 1 FROM posts WHERE posts.seen_article_id = seen_articles.id
-                  )
-                """,
-                (article_db_id, claimed_by),
-            )
+            now = datetime.utcnow().isoformat()
+            if claimed_by:
+                cursor.execute(
+                    """
+                    UPDATE seen_articles
+                    SET status = 'DRAFT_GENERATED',
+                        draft_status = 'DRAFT_GENERATED',
+                        draft_id = ?,
+                        draft_output_hash = ?,
+                        draft_revision = ?,
+                        draft_artifact_path = ?,
+                        draft_generated_at = ?,
+                        submission_destination = ?,
+                        submission_status = ?,
+                        submission_error = NULL,
+                        fail_reason = NULL,
+                        retry_at = NULL,
+                        fail_count = 0,
+                        claimed_by = NULL,
+                        claimed_at = NULL
+                    WHERE id = ?
+                      AND status = 'PROCESSING'
+                      AND claimed_by = ?
+                    """,
+                    (
+                        draft_id,
+                        draft_output_hash,
+                        int(draft_revision or 1),
+                        artifact_path,
+                        now,
+                        submission_destination,
+                        submission_status,
+                        article_db_id,
+                        claimed_by,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE seen_articles
+                    SET status = 'DRAFT_GENERATED',
+                        draft_status = 'DRAFT_GENERATED',
+                        draft_id = ?,
+                        draft_output_hash = ?,
+                        draft_revision = ?,
+                        draft_artifact_path = ?,
+                        draft_generated_at = ?,
+                        submission_destination = ?,
+                        submission_status = ?,
+                        submission_error = NULL,
+                        fail_reason = NULL,
+                        retry_at = NULL,
+                        fail_count = 0,
+                        claimed_by = NULL,
+                        claimed_at = NULL
+                    WHERE id = ?
+                    """,
+                    (
+                        draft_id,
+                        draft_output_hash,
+                        int(draft_revision or 1),
+                        artifact_path,
+                        now,
+                        submission_destination,
+                        submission_status,
+                        article_db_id,
+                    ),
+                )
             if cursor.rowcount != 1:
                 self.conn.rollback()
                 logger.warning(
-                    "[CLAIM_LOST] recusando registro do post %s para artigo %s; claim nao e mais atual",
-                    wp_post_id,
+                    "[CLAIM_LOST] recusando registro do draft %s para artigo %s",
+                    draft_id,
                     article_db_id,
                 )
                 return False
-            # Then, insert the record into the 'posts' table
-            cursor.execute(
-                "INSERT INTO posts (seen_article_id, wp_post_id) VALUES (?, ?)",
-                (article_db_id, wp_post_id)
-            )
             self.conn.commit()
-            logger.info(f"Successfully recorded published post for article DB ID {article_db_id} (WP Post ID: {wp_post_id}).")
+            logger.info(
+                "Draft registrado para artigo %s (draft_id=%s destino=%s).",
+                article_db_id,
+                draft_id,
+                submission_destination,
+            )
             return True
-        except sqlite3.IntegrityError:
-            logger.warning(f"Post record for article DB ID {article_db_id} already exists.")
+        except sqlite3.Error as e:
+            logger.error(f"Error recording draft for article DB ID {article_db_id}: {e}")
             self.conn.rollback()
             return False
+
+    def record_draft_failure(
+        self,
+        article_db_id: int,
+        *,
+        reason: str,
+        draft_id: Optional[str] = None,
+        draft_output_hash: Optional[str] = None,
+        draft_revision: Optional[int] = None,
+        submission_destination: Optional[str] = None,
+        submission_status: Optional[str] = None,
+        submission_error: Optional[str] = None,
+        artifact_path: Optional[str] = None,
+    ) -> bool:
+        """Mark an article as DRAFT_FAILED, preserving the diagnostic reason."""
+        try:
+            cursor = self._get_cursor()
+            cursor.execute(
+                """
+                UPDATE seen_articles
+                SET status = 'DRAFT_FAILED',
+                    draft_status = 'DRAFT_FAILED',
+                    draft_id = COALESCE(?, draft_id),
+                    draft_output_hash = COALESCE(?, draft_output_hash),
+                    draft_revision = COALESCE(?, draft_revision),
+                    draft_artifact_path = COALESCE(?, draft_artifact_path),
+                    submission_destination = COALESCE(?, submission_destination),
+                    submission_status = COALESCE(?, submission_status),
+                    submission_error = ?,
+                    fail_reason = ?,
+                    claimed_by = NULL,
+                    claimed_at = NULL
+                WHERE id = ?
+                """,
+                (
+                    draft_id,
+                    draft_output_hash,
+                    int(draft_revision) if draft_revision is not None else None,
+                    artifact_path,
+                    submission_destination,
+                    submission_status,
+                    submission_error,
+                    reason,
+                    article_db_id,
+                ),
+            )
+            self.conn.commit()
+            logger.info(
+                "[DRAFT_FAILED] db_id=%s reason=%s", article_db_id, reason,
+            )
+            return cursor.rowcount == 1
         except sqlite3.Error as e:
-            logger.error(f"Error saving processed post for article DB ID {article_db_id}: {e}")
+            logger.error(f"Failed to record draft failure for id {article_db_id}: {e}")
             self.conn.rollback()
             return False
 
@@ -834,7 +941,10 @@ class Database:
                     (status, retry_at, reason, article_id)
                 )
             else:
-                terminal_statuses = {'PUBLISHED', 'FAILED', 'FAILED_PERMANENT', 'SUPERSEDED', 'SKIPPED'}
+                terminal_statuses = {
+                    'DRAFT_GENERATED', 'DRAFT_FAILED', 'PUBLISHED',
+                    'FAILED', 'FAILED_PERMANENT', 'SUPERSEDED', 'SKIPPED',
+                }
                 if reason:
                     if status in terminal_statuses:
                         cursor.execute(
@@ -888,9 +998,7 @@ class Database:
                 SELECT status, claimed_by
                 FROM seen_articles
                 WHERE id = ?
-                  AND NOT EXISTS (
-                      SELECT 1 FROM posts WHERE posts.seen_article_id = seen_articles.id
-                  )
+                  AND draft_id IS NULL
                 """,
                 (article_id,),
             )
@@ -902,7 +1010,7 @@ class Database:
 
     def recover_stale_processing_claims(self, stale_seconds: int, max_recoveries: int) -> dict:
         """Recover PROCESSING rows only when the owning process is gone."""
-        result = {"published_fixed": 0, "requeued": 0, "failed_permanent": 0, "still_alive": 0}
+        result = {"draft_recovered": 0, "requeued": 0, "failed_permanent": 0, "still_alive": 0}
         cutoff = (datetime.utcnow() - timedelta(seconds=stale_seconds)).strftime("%Y-%m-%d %H:%M:%S.%f")
         try:
             cursor = self._get_cursor()
@@ -910,18 +1018,17 @@ class Database:
             cursor.execute(
                 """
                 UPDATE seen_articles
-                SET status = 'PUBLISHED',
+                SET status = 'DRAFT_GENERATED',
+                    draft_status = 'DRAFT_GENERATED',
                     fail_reason = NULL,
                     retry_at = NULL,
                     claimed_by = NULL,
                     claimed_at = NULL
                 WHERE status = 'PROCESSING'
-                  AND EXISTS (
-                      SELECT 1 FROM posts WHERE posts.seen_article_id = seen_articles.id
-                  )
+                  AND draft_id IS NOT NULL
                 """
             )
-            result["published_fixed"] = cursor.rowcount
+            result["draft_recovered"] = cursor.rowcount
 
             rows = cursor.execute(
                 """
@@ -930,9 +1037,7 @@ class Database:
                 WHERE status = 'PROCESSING'
                   AND claimed_at IS NOT NULL
                   AND claimed_at < ?
-                  AND NOT EXISTS (
-                      SELECT 1 FROM posts WHERE posts.seen_article_id = seen_articles.id
-                  )
+                  AND draft_id IS NULL
                 """,
                 (cutoff,),
             ).fetchall()
@@ -1068,16 +1173,6 @@ class Database:
         except sqlite3.Error as e:
             logger.error(f"Failed to get status for article id {article_id}: {e}")
             return None
-
-    def has_processed_post(self, article_id: int) -> bool:
-        """Returns True when a WordPress post was already recorded for an article."""
-        try:
-            cursor = self._get_cursor()
-            cursor.execute("SELECT 1 FROM posts WHERE seen_article_id = ? LIMIT 1", (article_id,))
-            return cursor.fetchone() is not None
-        except sqlite3.Error as e:
-            logger.error(f"Failed to check processed post for article id {article_id}: {e}")
-            return False
 
     def get_articles_to_process(self, source_id: str, limit: int, clusters_only: bool = False) -> list:
         """Gets eligible pending articles for a given feed source."""
@@ -1290,7 +1385,8 @@ class Database:
 
             # Find IDs of old articles to delete
             cursor.execute(
-                "SELECT id FROM seen_articles WHERE inserted_at < ? AND status IN ('PUBLISHED', 'FAILED', 'SUPERSEDED')",
+                "SELECT id FROM seen_articles WHERE inserted_at < ? AND status IN "
+                "('DRAFT_GENERATED', 'DRAFT_FAILED', 'PUBLISHED', 'FAILED', 'SUPERSEDED')",
                 (cutoff_time,)
             )
             article_ids_to_delete = [row['id'] for row in cursor.fetchall()]

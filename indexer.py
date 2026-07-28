@@ -1,21 +1,19 @@
-"""Wrapper para o indexador instantaneo de URLs."""
+"""Legacy indexing entrypoint — disabled in MNScr.
 
-import os
+MNScr produces editorial drafts. Search-engine notification (Google Indexing
+API, IndexNow, sitemap ping, News Sitemap, recrawl, URL Inspection) belongs to
+whoever publishes the content, which is the Cinerie system — never MNScr.
+"""
+
 import sys
 
-os.environ.setdefault("PYTHONUTF8", "1")
-os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-for _stream in (sys.stdout, sys.stderr):
-    if hasattr(_stream, "reconfigure"):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+MESSAGE = "Legacy indexing is disabled in MNScr."
 
-from app.indexing_service import main
 
-__all__ = ["main"]
+def main(argv: list[str] | None = None) -> int:
+    print(MESSAGE, file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

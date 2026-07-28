@@ -47,7 +47,7 @@ def test_internal_link_block_is_appended_only_when_candidates_exist():
             "internal_link_candidates": [
                 {
                     "titulo": "Star Wars: ordem cronologica dos filmes",
-                    "url": "https://maquinanerd.com.br/star-wars-ordem-cronologica/",
+                    "url": "https://cinerie.example/star-wars-ordem-cronologica/",
                 }
             ],
         }
@@ -55,5 +55,5 @@ def test_internal_link_block_is_appended_only_when_candidates_exist():
     prompt_with_links = AIProcessor._build_article_prompt(template, fields_with_links)
 
     assert "LINKS INTERNOS DISPONIVEIS" in prompt_with_links
-    assert "- [Star Wars: ordem cronologica dos filmes](https://maquinanerd.com.br/star-wars-ordem-cronologica/)" in prompt_with_links
+    assert "- [Star Wars: ordem cronologica dos filmes](https://cinerie.example/star-wars-ordem-cronologica/)" in prompt_with_links
     assert "<a href=\"URL\">texto ancora</a>" in prompt_with_links

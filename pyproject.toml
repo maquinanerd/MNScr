@@ -1,23 +1,47 @@
 [project]
 name = "mnscr"
-version = "0.1.0"
-description = "Motor editorial e de publicação para The Screen e Cinerie"
+version = "0.2.0"
+description = "Motor editorial do Cinerie: gera drafts estruturados a partir de acontecimentos do RSS Prime"
 requires-python = ">=3.11"
 dependencies = [
     "apscheduler>=3.11.0",
     "beautifulsoup4>=4.13.4",
     "feedparser>=6.0.11",
-    "flask>=3.1.1",
     "google-genai>=1.29.0",
     "lxml>=5.4.0",
-    "pillow>=11.3.0",
-    "psutil>=7.0.0",
-    "python-dateutil>=2.9.0.post0",
     "python-dotenv>=1.1.1",
     "python-slugify>=8.0.4",
-    "readability-lxml>=0.8.4.1",
     "requests>=2.32.4",
     "trafilatura>=2.0.0",
     "urllib3==2.5.0",
     "charset-normalizer==3.4.4",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]

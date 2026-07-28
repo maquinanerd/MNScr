@@ -2,7 +2,7 @@
 Entry policy for RSSPRIME Superfeed items.
 
 The checks here run before extraction so bad cluster candidates do not spend
-network, AI, or WordPress budget.
+network or AI budget.
 """
 
 from __future__ import annotations

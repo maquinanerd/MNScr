@@ -53,15 +53,16 @@ def test_claim_survives_article_reconstruction_and_reaches_save(tmp_path, path):
         }
 
     art_data = pipeline._preserve_claim_metadata(claimed_payload, rebuilt)
-    saved = db.save_processed_post(
-        art_data["db_id"],
-        90000 + article_id,
-        claimed_by=art_data.get("_claim_owner"),
+    saved = db.record_draft_generated(
+        article_id,
+        draft_id="draft-test",
+        draft_output_hash="h" * 64,
+        claimed_by=claimed_payload["_claim_owner"],
     )
 
     assert art_data["_claim_owner"] == claim_owner
     assert saved is True
-    assert db.has_processed_post(article_id) is True
+    assert db.get_article_status(article_id) == "DRAFT_GENERATED"
 
 
 def test_all_extracted_article_rebuild_sites_preserve_claim_metadata():

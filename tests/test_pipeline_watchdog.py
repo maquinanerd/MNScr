@@ -37,7 +37,12 @@ def test_watchdog_timeout_keeps_live_claim_and_original_worker_can_save(tmp_path
     should_requeue = pipeline._handle_watchdog_timeout(
         {"db_id": article_id, "_claim_owner": claim_owner}
     )
-    saved = db.save_processed_post(article_id, 98765, claimed_by=claim_owner)
+    saved = db.record_draft_generated(
+        article_id,
+        draft_id="draft-watchdog",
+        draft_output_hash="h" * 64,
+        claimed_by=claim_owner,
+    )
 
     row = db.conn.execute(
         """
@@ -48,7 +53,7 @@ def test_watchdog_timeout_keeps_live_claim_and_original_worker_can_save(tmp_path
     ).fetchone()
     assert should_requeue is False
     assert saved is True
-    assert row["status"] == "PUBLISHED"
+    assert row["status"] == "DRAFT_GENERATED"
     assert row["fail_count"] == 0
     assert row["fail_reason"] is None
     assert row["claimed_by"] is None
@@ -74,7 +79,12 @@ def test_stale_recovery_during_live_processing_preserves_claim_and_save(tmp_path
         "SELECT status, claimed_by FROM seen_articles WHERE id = ?",
         (article_id,),
     ).fetchone()
-    saved = db.save_processed_post(article_id, 98765, claimed_by=claim_owner)
+    saved = db.record_draft_generated(
+        article_id,
+        draft_id="draft-watchdog",
+        draft_output_hash="h" * 64,
+        claimed_by=claim_owner,
+    )
 
     row = db.conn.execute(
         """
@@ -84,7 +94,7 @@ def test_stale_recovery_during_live_processing_preserves_claim_and_save(tmp_path
         (article_id,),
     ).fetchone()
     assert recovery == {
-        "published_fixed": 0,
+        "draft_recovered": 0,
         "requeued": 0,
         "failed_permanent": 0,
         "still_alive": 1,
@@ -92,7 +102,7 @@ def test_stale_recovery_during_live_processing_preserves_claim_and_save(tmp_path
     assert claimed_row["status"] == "PROCESSING"
     assert claimed_row["claimed_by"] == claim_owner
     assert saved is True
-    assert row["status"] == "PUBLISHED"
+    assert row["status"] == "DRAFT_GENERATED"
     assert row["fail_count"] == 0
     assert row["claimed_by"] is None
     assert row["claimed_at"] is None
@@ -129,7 +139,12 @@ def test_zombie_thread_cannot_save_post_after_dead_owner_recovery_and_reclaim(
         ),
     )
     db.conn.commit()
-    saved = db.save_processed_post(article_id, 98765, claimed_by=claim_owner)
+    saved = db.record_draft_generated(
+        article_id,
+        draft_id="draft-watchdog",
+        draft_output_hash="h" * 64,
+        claimed_by=claim_owner,
+    )
 
     row = db.conn.execute(
         "SELECT status, fail_count FROM seen_articles WHERE id = ?",

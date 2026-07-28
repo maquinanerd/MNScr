@@ -145,10 +145,10 @@ def test_non_ceiling_parse_failure_keeps_existing_retry_behavior(monkeypatch):
     assert db.fail_count_reads == 1
 
 
-def test_runaway_failure_stops_before_wordpress_publication():
+def test_runaway_failure_stops_before_draft_submission():
     source = getsource(pipeline.process_batch)
     failure_handler = source.index("_handle_ai_processing_failure")
     stop_processing = source.index("continue", failure_handler)
-    wordpress_publish = source.index("wp_client.create_post")
+    draft_submit = source.index("submitter.submit(draft)")
 
-    assert failure_handler < stop_processing < wordpress_publish
+    assert failure_handler < stop_processing < draft_submit

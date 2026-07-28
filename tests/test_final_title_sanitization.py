@@ -111,7 +111,7 @@ class TestPipelineImportsSanitizer(unittest.TestCase):
             "pipeline.py must call sanitize_final_title() after optimize_title",
         )
 
-    def test_sanitize_before_wordpress_payload(self):
+    def test_sanitize_before_draft_payload(self):
         """sanitize_final_title must appear before 'post_payload' construction."""
         import pathlib
         source = pathlib.Path(
@@ -119,9 +119,9 @@ class TestPipelineImportsSanitizer(unittest.TestCase):
         ) / "app" / "pipeline.py"
         text = source.read_text(encoding="utf-8-sig")
         idx_sanitize = text.find("sanitize_final_title(")
-        idx_payload = text.find("post_payload = {")
+        idx_payload = text.find("draft = build_editorial_draft(")
         self.assertGreater(idx_payload, idx_sanitize,
-            "sanitize_final_title must run before post_payload is assembled")
+            "sanitize_final_title must run before the draft is assembled")
 
 
 if __name__ == "__main__":

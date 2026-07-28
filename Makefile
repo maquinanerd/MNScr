@@ -1,23 +1,21 @@
-.PHONY: help install run run-once test clean
+.PHONY: help install run run-once test lint clean
 
 VENV_NAME=.venv
 PYTHON=$(VENV_NAME)/Scripts/python
 
 help:
-	@echo "Comandos disponíveis:"
-	@echo "  install    - Cria o ambiente virtual e instala as dependências"
-	@echo "  run        - Inicia o scheduler para rodar o pipeline em loop"
-	@echo "  run-once   - Roda o pipeline uma única vez para teste"
-	@echo "  test       - Roda os testes unitários"
-	@echo "  clean      - Remove o ambiente virtual e arquivos de cache"
+	@echo "Comandos disponiveis:"
+	@echo "  install    - Cria o ambiente virtual e instala as dependencias"
+	@echo "  run        - Executa o pipeline editorial em loop"
+	@echo "  run-once   - Executa um unico ciclo do pipeline"
+	@echo "  test       - Roda a suite de testes"
+	@echo "  lint       - Roda o ruff"
+	@echo "  clean      - Remove ambiente virtual, caches e drafts locais"
 
 install:
-	@echo "Criando ambiente virtual em $(VENV_NAME)..."
 	python -m venv $(VENV_NAME)
-	@echo "Instalando dependências de requirements.txt..."
 	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install -r requirements.txt
-	@echo "Instalação concluída. Ative o ambiente com: source $(VENV_NAME)/bin/activate (Linux/macOS) ou .\\$(VENV_NAME)\\Scripts\\activate (Windows)"
+	$(PYTHON) -m pip install -e ".[dev]"
 
 run:
 	$(PYTHON) -m app.main
@@ -28,6 +26,9 @@ run-once:
 test:
 	$(PYTHON) -m pytest
 
+lint:
+	$(PYTHON) -m ruff check .
+
 clean:
-	@echo "Limpando ambiente..."
-	rm -rf $(VENV_NAME) __pycache__ app/__pycache__ tests/__pycache__ .pytest_cache .coverage data/*.db*
+	rm -rf $(VENV_NAME) __pycache__ app/__pycache__ tests/__pycache__ .pytest_cache .ruff_cache .coverage
+	rm -rf artifacts/local-drafts data/*.db*

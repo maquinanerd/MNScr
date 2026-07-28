@@ -4,7 +4,7 @@ Smoke test isolado para AIClient.
 - Chama a IA com payload minimo.
 - Imprime o modelo real usado.
 - Valida JSON basico na resposta.
-- Nao chama WordPress.
+- Nao chama nenhum CMS.
 - Nao altera banco.
 - Nao publica.
 - Nao indexa.

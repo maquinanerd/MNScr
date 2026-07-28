@@ -441,53 +441,6 @@ def validate_editorial_quality(
 
 
 # ---------------------------------------------------------------------------
-# Decisao de indexacao (separada da decisao de publicacao)
-# ---------------------------------------------------------------------------
-
-def decide_index_allowed(
-    structural_score: int,
-    editorial_issues: List[str],
-    content_type: str,
-    word_count: int,
-    qa_llm_result: Optional[Dict[str, Any]] = None,
-    index_min_score: int = 30,
-) -> Dict[str, Any]:
-    """
-    Decide se o post pode ser indexado no Google.
-
-    Publicacao e sempre liberada; indexacao e seletiva.
-    Esta funcao nao bloqueia publicacao — apenas decide index/noindex.
-
-    Retorna dict com 'allowed' (bool) e 'reason' (str).
-    """
-    reasons_noindex: List[str] = []
-
-    # Regra central: score < index_min_score → NOINDEX
-    # (CONTENT_TOO_THIN com mínimos relativos não bloqueia mais a indexação per se;
-    #  o score estrutural é o árbitro principal)
-    if structural_score < index_min_score:
-        reasons_noindex.append(f"SCORE_TOO_LOW:{structural_score}")
-
-    if word_count < 200:
-        reasons_noindex.append(f"WORD_COUNT_TOO_LOW:{word_count}")
-
-    if qa_llm_result and qa_llm_result.get("has_original_value") is False:
-        reasons_noindex.append("QA_LLM_NOT_ORIGINAL")
-
-    if reasons_noindex:
-        return {
-            "allowed": False,
-            "reason": " ".join(reasons_noindex),
-        }
-
-    # Passou por todos os filtros sem blockers → INDEX
-    return {
-        "allowed": True,
-        "reason": f"passed_all_checks score={structural_score} word_count={word_count}",
-    }
-
-
-# ---------------------------------------------------------------------------
 # Relatorio de auditoria editorial em Markdown
 # ---------------------------------------------------------------------------
 

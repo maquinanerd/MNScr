@@ -1,3 +1,1 @@
-"""
-Test package for RSS to WordPress Automation System
-"""
+"""Test package for the MNScr editorial draft pipeline."""

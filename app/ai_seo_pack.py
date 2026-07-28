@@ -28,7 +28,7 @@ Retorne EXCLUSIVAMENTE um JSON válido com os campos listados. NÃO inclua o con
 {{
   "titulo_final": "Título SEO (55–65 chars, texto puro, sem HTML)",
   "meta_description": "Frase factual 140–155 chars com keyword, fato principal e contexto editorial, sem CTA",
-  "subtitle": "Resumo editorial 140–220 chars para o excerpt do WordPress, sem CTA",
+  "subtitle": "Resumo editorial 140–220 chars para o excerpt do CMS, sem CTA",
   "focus_keyphrase": "frase-chave principal (máx 60 chars)",
   "related_keyphrases": ["variação 1", "variação 2", "variação 3"],
   "slug": "url-amigavel-ate-5-palavras",
@@ -68,7 +68,7 @@ REGRAS PARA meta_description:
 
 REGRAS PARA subtitle:
 - 140–220 caracteres
-- Resumo editorial exibido abaixo do título no site e enviado como excerpt do WordPress
+- Resumo editorial exibido abaixo do título no site e enviado como excerpt do CMS
 - Deve ter o mesmo cuidado factual da meta_description, mas com texto próprio
 - Não pode ser igual ao título nem igual à meta_description
 - Sem CTA, opinião ou fato ausente do artigo
