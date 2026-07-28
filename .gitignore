@@ -80,7 +80,6 @@ node_modules/
 # Replit
 .replit
 .local/
-uv.lock
 
 # Local AI assistants
 .claude/
@@ -88,6 +87,9 @@ uv.lock
 # Build outputs
 output.txt
 reports/
+
+# Drafts editoriais gerados localmente
+artifacts/local-drafts/
 
 # Backup files
 *.bak

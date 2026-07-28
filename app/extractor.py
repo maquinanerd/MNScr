@@ -1,13 +1,13 @@
-import logging
-from bs4 import BeautifulSoup
-import requests
-import html # New import for html.unescape
-from typing import Dict, Optional, Any, Set, List, Tuple, Union
+import html  # New import for html.unescape
 import json
+import logging
 import re
-import os
 import time
-from urllib.parse import urljoin, urlparse, parse_qs, unquote
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
+
+import requests
+from bs4 import BeautifulSoup
 
 from .config import USER_AGENT
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import trafilatura
-    from trafilatura.metadata import extract_metadata as trafilatura_extract_metadata # New import
+    from trafilatura.metadata import extract_metadata as trafilatura_extract_metadata  # New import
     _TRAFILATURA_IMPORT_ERROR: Optional[Exception] = None
 except Exception as exc:
     trafilatura = None
@@ -174,7 +174,7 @@ def _parse_srcset(srcset: str):
     """Retorna a URL com maior largura declarada em um srcset."""
     best = None
     best_w = -1
-    for part in (srcset or "").split(","): 
+    for part in (srcset or "").split(","):
         part = part.strip()
         if not part:
             continue
@@ -277,6 +277,21 @@ def _extract_from_style(style_attr: str) -> Optional[str]:
         return url[1:-1]
     return url
 
+def _select_first_by_priority(soup: BeautifulSoup, selectors: List[str]):
+    """Return the first element matching the highest-priority selector.
+
+    ``soup.select_one("a, b")`` returns whichever element comes first in the
+    *document*, not the first selector that matches. Site cleaners rely on
+    selector priority (a specific article body must win over a generic
+    wrapper), so the list is evaluated in order.
+    """
+    for selector in selectors:
+        found = soup.select_one(selector)
+        if found is not None:
+            return found
+    return None
+
+
 def _find_article_body(soup: BeautifulSoup) -> BeautifulSoup:
     """
     Tenta localizar o nó raiz do corpo do artigo.
@@ -291,7 +306,7 @@ def _find_article_body(soup: BeautifulSoup) -> BeautifulSoup:
         return article_body
 
     logger.info("Could not find <article> tag, falling back to other selectors.")
-    
+
     # Enhanced with user suggestions for more specific content containers
     candidates = soup.select(
         "article .entry-content, article .content, article [itemprop='articleBody'], "
@@ -462,7 +477,8 @@ def _get(url, timeout=25, tries=2):
     raise RuntimeError(f"HTTP error fetching {url}")
 
 def _clean_text(s):
-    if not s: return ""
+    if not s:
+        return ""
     return re.sub(r"[ \t]+", " ", html.unescape(s)).strip()
 
 def _warn_trafilatura_unavailable(context: str) -> None:
@@ -560,8 +576,10 @@ def _estadao_arc_fallback(soup):
 
 def _choose_best(a, b):
     # Fills empty fields in A with values from B
-    if not a: return b
-    if not b: return a
+    if not a:
+        return b
+    if not b:
+        return a
     out = {}
     for k in {"title","text","author","date","top_image"}:
         out[k] = a.get(k) or b.get(k)
@@ -588,7 +606,7 @@ def _extract_site_specific(soup: BeautifulSoup, url: str, selectors: Dict[str, U
         for junk_selector in selectors.get('junk', []):
             for junk_tag in content_tag.select(str(junk_selector)):
                 junk_tag.decompose()
-        
+
         content_html = str(content_tag)
 
         # Use existing helpers for media and metadata
@@ -597,7 +615,7 @@ def _extract_site_specific(soup: BeautifulSoup, url: str, selectors: Dict[str, U
         featured_image_url = extractor._pick_featured_image(soup, url)
         images = collect_images_from_article(soup, url) # This also uses its own logic to find the body
         videos = extractor._extract_youtube_videos(soup)
-        
+
         excerpt_tag = soup.select_one('meta[name="description"], meta[property="og:description"]')
         excerpt = excerpt_tag['content'].strip() if excerpt_tag and excerpt_tag.get('content') else ''
 
@@ -613,7 +631,7 @@ def _extract_site_specific(soup: BeautifulSoup, url: str, selectors: Dict[str, U
             "videos": videos,
             "source_url": url,
         }
-        
+
         logger.info(f"Successfully extracted content using specific extractor for {url}. Title: {result['title'][:50]}...")
         return result
 
@@ -694,24 +712,24 @@ def _is_likely_english_caption(text: str) -> bool:
     """
     if not text or len(text.strip()) < 3:
         return False
-    
+
     text_lower = text.lower().strip()
     words = re.findall(r'\b\w+\b', text_lower)
-    
+
     if len(words) < 2:
         return False
-    
+
     # Count how many words are common English vs Portuguese words
     english_word_count = sum(1 for w in words if w in ENGLISH_COMMON_WORDS)
     portuguese_word_count = sum(1 for w in words if w in PORTUGUESE_COMMON_WORDS)
-    
+
     # If more Portuguese words than English, likely Portuguese
     if portuguese_word_count > english_word_count:
         return False
-    
+
     # Count capitalized words (likely proper nouns) - if many, ignore them
     capitalized_words = sum(1 for w in re.findall(r'\b\w+\b', text) if w[0].isupper())
-    
+
     # If text is mostly proper nouns (e.g., "Tom Holland in Spider-Man"), check other signals
     if capitalized_words > len(words) * 0.4:  # More than 40% capitalized
         # Check for common prepositions "in", "as", "from" which are very English
@@ -719,15 +737,15 @@ def _is_likely_english_caption(text: str) -> bool:
             # Check if these prepositions connect English common words
             if english_word_count >= 1:  # At least one English common word
                 return True
-    
+
     # If more than 30% of words are common English words, likely English
     if len(words) > 0 and english_word_count / len(words) > 0.3:
         return True
-    
+
     # Also check for typical English article structure (starts with article + noun)
     if text_lower.startswith(('the ', 'a ', 'an ', 'this ', 'that ')):
         return True
-    
+
     return False
 
 def _image_caption_keys(image_url: str) -> list[str]:
@@ -846,14 +864,14 @@ class ContentExtractor:
                         if next_sibling and next_sibling.name in ("div", "ul", "section", "ol"):
                             next_sibling.decompose()
                         h.decompose()
-            
+
             # 2. Remove by site-specific selectors
             source_host = (urlparse(url).hostname or "").replace("www.", "")
             if source_host in SITE_SPECIFIC_RELATED_SELECTORS:
                 for sel in SITE_SPECIFIC_RELATED_SELECTORS[source_host]:
                     for el in soup.select(sel):
                         el.decompose()
-            
+
             # 3. Remove links that are likely related content wrappers
             for a in soup.select("a"):
                 cls = " ".join(a.get("class", [])).lower()
@@ -871,7 +889,7 @@ class ContentExtractor:
             ".sharing", ".share", ".social", ".banner", ".ads", ".advertisement",
             "[data-ad]", "[data-ad-slot]",
             ".sponsored", ".paid-content", ".partner", ".outbrain", ".taboola",
-            
+
             # Original selectors
             '[class*="srdb"]', '[class*="rating"]', '.review', '.score', '.meter',
             'header', 'footer', 'nav', 'aside',
@@ -992,23 +1010,23 @@ class ContentExtractor:
         if json_ld_script and json_ld_script.string:
             try:
                 data = json.loads(json_ld_script.string)
-                
+
                 # O JSON-LD pode ser uma lista (com @graph) ou um objeto.
                 if isinstance(data, list):
                     data = data[0]
-                
+
                 image_data = data.get('image')
                 if image_data:
                     # A imagem pode ser uma lista, um objeto ou uma string.
                     image_url = None
                     if isinstance(image_data, list):
                         image_data = image_data[0]
-                    
+
                     if isinstance(image_data, dict) and image_data.get('url'):
                         image_url = image_data['url']
                     elif isinstance(image_data, str):
                         image_url = image_data
-                    
+
                     if image_url:
                         logger.info("[SUCCESS] Imagem encontrada com sucesso via JSON-LD.")
                         return urljoin(base_url, image_url)
@@ -1038,7 +1056,7 @@ class ContentExtractor:
                     if area > max_area:
                         max_area = area
                         best_image_url = src
-            
+
             if best_image_url:
                 logger.warning("[WARNING] Imagem encontrada via método de fallback (maior imagem no artigo).")
                 return urljoin(base_url, best_image_url)
@@ -1187,7 +1205,7 @@ class ContentExtractor:
             # 9) pós-processar corpo
             article_soup = BeautifulSoup(content_html, 'lxml')
             self._remove_forbidden_blocks(article_soup)
-            
+
             # 9.5) REMOVER CTAs AGRESSIVAMENTE (NOVO)
             # Remove qualquer parágrafo/div que contenha frases de CTA
             cta_phrases = [
@@ -1212,7 +1230,7 @@ class ContentExtractor:
                 'leia mais',
                 'cadastre-se',
             ]
-            
+
             for elem in list(article_soup.find_all(['p', 'div', 'span', 'article', 'blockquote', 'section'])):
                 if not elem.parent:
                     continue
@@ -1263,7 +1281,9 @@ class ContentExtractor:
         Mantém APENAS paragrafos, headings, blockquotes e figuras legítimas com contexto.
         """
         # 1. Isolar o article-body específico do Collider
-        article_body = soup.select_one('#article-body, .article-body, [itemprop="articleBody"]')
+        article_body = _select_first_by_priority(
+            soup, ['#article-body', '.article-body', '[itemprop="articleBody"]']
+        )
         if not article_body:
             article_container = soup.find('article')
             if article_container:
@@ -1300,10 +1320,10 @@ class ContentExtractor:
         for elem in list(article_body.find_all(True)):
             if not elem.parent:
                 continue
-            
+
             elem_classes = " ".join(elem.get('class', []))
             elem_id = elem.get('id', '')
-            
+
             # Verificar se algum padrão de classe ou ID bate
             for pattern in class_patterns_to_remove:
                 if re.search(pattern, elem_classes, re.I) or re.search(pattern, elem_id, re.I):
@@ -1315,58 +1335,58 @@ class ContentExtractor:
         for elem in list(article_body.find_all(True)):
             if not elem.parent:
                 continue
-            
+
             if elem.get('data-is-tag-interaction'):
-                logger.info(f"INFO (Collider): Removendo elemento com data-is-tag-interaction")
+                logger.info("INFO (Collider): Removendo elemento com data-is-tag-interaction")
                 elem.decompose()
 
         # 5. Remove aside tags e sidebars
         for elem in list(article_body.find_all('aside')):
-            logger.info(f"INFO (Collider): Removendo tag <aside>")
+            logger.info("INFO (Collider): Removendo tag <aside>")
             elem.decompose()
 
         # 6. Remove figuras indesejadas (SVGs, logos, imagens sem contexto)
         for fig in list(article_body.find_all('figure')):
             if not fig.parent:
                 continue
-            
+
             img = fig.find('img')
             if not img:
-                logger.info(f"INFO (Collider): Removendo figura vazia (sem <img>)")
+                logger.info("INFO (Collider): Removendo figura vazia (sem <img>)")
                 fig.decompose()
                 continue
-            
+
             src = img.get('src', '').lower()
             alt = img.get('alt', '').lower()
-            
+
             # Remove SVGs decorativos, logos, e imagens com padrões ruins
             if '.svg' in src or 'logo' in src or 'icon' in src or 'sr-db' in src or 'sr-db' in alt:
                 logger.info(f"INFO (Collider): Removendo figura decorativa/logo: {src}")
                 fig.decompose()
                 continue
-            
+
             # CRUCIAL: Remove imagens de THUMBNAIL/PEQUENO TAMANHO
             # Sites usam ?w=300, ?w=400 para widgets, carousels, e blocos relacionados
             if '?w=300' in src or '?w=400' in src or '&w=300' in src or '&w=400' in src:
                 logger.info(f"INFO (Collider): Removendo figura de thumbnail (?w=300/400): {src}")
                 fig.decompose()
                 continue
-            
+
             # Remove figuras órfãs (sem parágrafo antes ou depois)
             prev_p = fig.find_previous(['p', 'h2', 'h3', 'blockquote'])
             next_p = fig.find_next(['p', 'h2', 'h3', 'blockquote'])
-            
+
             if not prev_p and not next_p:
-                logger.info(f"INFO (Collider): Removendo figura órfã (sem contexto textual)")
+                logger.info("INFO (Collider): Removendo figura órfã (sem contexto textual)")
                 fig.decompose()
 
         # 7. Remove CTAs e "Thank you" messages
         for elem in list(article_body.find_all(['p', 'div', 'span', 'article', 'blockquote', 'section'])):
             if not elem.parent:
                 continue
-            
+
             text = (elem.get_text(strip=True) or "").lower()
-            
+
             # Remove CTAs - lista mais agressiva
             if any(cta in text for cta in [
                 'thank you for reading',
@@ -1403,7 +1423,7 @@ class ContentExtractor:
         if not article_container:
             # Tentar encontrar por classe article-body
             article_container = soup.select_one('[id*="article"], [class*="article-body"], .article-body')
-        
+
         if not article_container:
             logger.error("ERRO CRÍTICO (GameRant): Nenhum contêiner de artigo encontrado.")
             return None
@@ -1441,10 +1461,10 @@ class ContentExtractor:
         for elem in list(article_body.find_all(True)):
             if not elem.parent:
                 continue
-            
+
             elem_classes = " ".join(elem.get('class', []))
             elem_id = elem.get('id', '')
-            
+
             # Verificar se algum padrão de classe ou ID bate
             for pattern in class_patterns_to_remove:
                 if re.search(pattern, elem_classes, re.I) or re.search(pattern, elem_id, re.I):
@@ -1456,49 +1476,49 @@ class ContentExtractor:
         for elem in list(article_body.find_all(True)):
             if not elem.parent:
                 continue
-            
+
             if elem.get('data-is-tag-interaction'):
-                logger.info(f"INFO (GameRant): Removendo elemento com data-is-tag-interaction")
+                logger.info("INFO (GameRant): Removendo elemento com data-is-tag-interaction")
                 elem.decompose()
 
         # 6. Remove aside tags
         for elem in article_body.find_all('aside'):
-            logger.info(f"INFO (GameRant): Removendo tag <aside>")
+            logger.info("INFO (GameRant): Removendo tag <aside>")
             elem.decompose()
 
         # 7. Remove figuras indesejadas (SVGs, logos, imagens sem contexto)
         for fig in list(article_body.find_all('figure')):
             if not fig.parent:
                 continue
-            
+
             img = fig.find('img')
             if not img:
-                logger.info(f"INFO (GameRant): Removendo figura vazia (sem <img>)")
+                logger.info("INFO (GameRant): Removendo figura vazia (sem <img>)")
                 fig.decompose()
                 continue
-            
+
             src = img.get('src', '').lower()
             alt = img.get('alt', '').lower()
-            
+
             # Remove SVGs decorativos, logos, e imagens com padrões ruins
             if '.svg' in src or 'logo' in src or 'icon' in src or 'sr-db' in src or 'sr-db' in alt:
                 logger.info(f"INFO (GameRant): Removendo figura decorativa/logo: {src}")
                 fig.decompose()
                 continue
-            
+
             # CRUCIAL: Remove imagens de THUMBNAIL/PEQUENO TAMANHO
             # Sites usam ?w=300, ?w=400 para widgets, carousels, e blocos relacionados
             if '?w=300' in src or '?w=400' in src or '&w=300' in src or '&w=400' in src:
                 logger.info(f"INFO (GameRant): Removendo figura de thumbnail (?w=300/400): {src}")
                 fig.decompose()
                 continue
-            
+
             # Remove figuras órfãs (sem parágrafo antes ou depois)
             prev_p = fig.find_previous(['p', 'h2', 'h3', 'blockquote'])
             next_p = fig.find_next(['p', 'h2', 'h3', 'blockquote'])
-            
+
             if not prev_p and not next_p:
-                logger.info(f"INFO (GameRant): Removendo figura órfã (sem contexto textual)")
+                logger.info("INFO (GameRant): Removendo figura órfã (sem contexto textual)")
                 fig.decompose()
 
         # 8. Remove parágrafos com CTAs
@@ -1506,7 +1526,7 @@ class ContentExtractor:
             if not elem.parent:
                 continue
             text = (elem.get_text(strip=True) or "").lower()
-            
+
             # Remove CTAs - lista mais agressiva
             if any(cta in text for cta in [
                 'thank you for reading',
@@ -1577,10 +1597,10 @@ class ContentExtractor:
         for elem in list(article_body.find_all(True)):  # Converter para list para evitar issues de iteração
             if not elem.parent:  # Já foi removido
                 continue
-                
+
             elem_classes = " ".join(elem.get('class', []))
             elem_id = elem.get('id', '')
-            
+
             # Verificar se algum padrão de classe ou ID bate
             for pattern in class_patterns_to_remove:
                 if re.search(pattern, elem_classes, re.I) or re.search(pattern, elem_id, re.I):
@@ -1592,13 +1612,13 @@ class ContentExtractor:
         for elem in list(article_body.find_all(True)):
             if not elem.parent:  # Já foi removido
                 continue
-            
+
             # Remover por atributo data-is-tag-interaction
             if elem.get('data-is-tag-interaction'):
-                logger.info(f"INFO (ComicBook): Removendo elemento com data-is-tag-interaction")
+                logger.info("INFO (ComicBook): Removendo elemento com data-is-tag-interaction")
                 elem.decompose()
                 continue
-            
+
             # Remover por atributo data-stnl-*
             for attr in list(elem.attrs.keys()):
                 if attr.startswith('data-stnl-'):
@@ -1608,29 +1628,29 @@ class ContentExtractor:
 
         # 6. Remove aside tags
         for elem in article_body.find_all('aside'):
-            logger.info(f"INFO (ComicBook): Removendo tag <aside>")
+            logger.info("INFO (ComicBook): Removendo tag <aside>")
             elem.decompose()
 
         # 8. Remove figuras soltas (imagens sem contexto) - MUITO ESPECÍFICO PARA COMICBOOK
         for fig in list(article_body.find_all('figure')):
             if not fig.parent:
                 continue
-            
+
             img = fig.find('img')
             if not img:
-                logger.info(f"INFO (ComicBook): Removendo figura vazia (sem <img>)")
+                logger.info("INFO (ComicBook): Removendo figura vazia (sem <img>)")
                 fig.decompose()
                 continue
-            
+
             src = img.get('src', '').lower()
             alt = img.get('alt', '').lower()
-            
+
             # Remove SVGs decorativos, logos, e imagens com padrões ruins
             if '.svg' in src or 'logo' in src or 'icon' in src or 'sr-db' in src or 'sr-db' in alt:
                 logger.info(f"INFO (ComicBook): Removendo figura decorativa/logo: {src}")
                 fig.decompose()
                 continue
-            
+
             # CRUCIAL: Remove imagens de THUMBNAIL/PEQUENO TAMANHO
             # ComicBook usa ?w=300 para imagens de widgets, carousels, e blocos relacionados
             # Imagens de conteúdo principal geralmente têm w=600+ ou sem parâmetro de tamanho
@@ -1638,15 +1658,15 @@ class ContentExtractor:
                 logger.info(f"INFO (ComicBook): Removendo figura de thumbnail (?w=300/400): {src}")
                 fig.decompose()
                 continue
-            
+
             # Se a figura não tem um parágrafo antes ou depois dela, é provavelmente decoration
             prev_p = fig.find_previous(['p', 'h2', 'h3', 'blockquote'])
             next_p = fig.find_next(['p', 'h2', 'h3', 'blockquote'])
-            
+
             # Se tiver um parágrafo relacionado, manter. Caso contrário, remover.
             # Figuras que vêm de display-card removem muito lixo
             if not prev_p and not next_p:
-                logger.info(f"INFO (ComicBook): Removendo figura órfã (sem contexto textual)")
+                logger.info("INFO (ComicBook): Removendo figura órfã (sem contexto textual)")
                 fig.decompose()
 
         # 9. Remove parágrafos com "Thank you for reading" ou "Subscribe"
@@ -1654,7 +1674,7 @@ class ContentExtractor:
             if not elem.parent:
                 continue
             text = (elem.get_text(strip=True) or "").lower()
-            
+
             # Remove CTAs - lista mais agressiva
             if any(cta in text for cta in [
                 'thank you for reading',
@@ -1725,10 +1745,10 @@ class ContentExtractor:
         for elem in list(article_body.find_all(True)):  # Converter para list para evitar issues de iteração
             if not elem.parent:  # Já foi removido
                 continue
-                
+
             elem_classes = " ".join(elem.get('class', []))
             elem_id = elem.get('id', '')
-            
+
             # Verificar se algum padrão de classe ou ID bate
             for pattern in class_patterns_to_remove:
                 if re.search(pattern, elem_classes, re.I) or re.search(pattern, elem_id, re.I):
@@ -1740,13 +1760,13 @@ class ContentExtractor:
         for elem in list(article_body.find_all(True)):
             if not elem.parent:  # Já foi removido
                 continue
-            
+
             # Remover por atributo data-is-tag-interaction
             if elem.get('data-is-tag-interaction'):
-                logger.info(f"INFO (ScreenRant): Removendo elemento com data-is-tag-interaction")
+                logger.info("INFO (ScreenRant): Removendo elemento com data-is-tag-interaction")
                 elem.decompose()
                 continue
-            
+
             # Remover por atributo data-stnl-*
             for attr in list(elem.attrs.keys()):
                 if attr.startswith('data-stnl-'):
@@ -1756,42 +1776,42 @@ class ContentExtractor:
 
         # 6. Remove aside tags
         for elem in article_body.find_all('aside'):
-            logger.info(f"INFO (ScreenRant): Removendo tag <aside>")
+            logger.info("INFO (ScreenRant): Removendo tag <aside>")
             elem.decompose()
 
         # 7. Remove figuras indesejadas (SVGs, logos, imagens sem contexto)
         for fig in list(article_body.find_all('figure')):
             if not fig.parent:
                 continue
-            
+
             img = fig.find('img')
             if not img:
-                logger.info(f"INFO (ScreenRant): Removendo figura vazia (sem <img>)")
+                logger.info("INFO (ScreenRant): Removendo figura vazia (sem <img>)")
                 fig.decompose()
                 continue
-            
+
             src = img.get('src', '').lower()
             alt = img.get('alt', '').lower()
-            
+
             # Remove SVGs decorativos, logos, e imagens com padrões ruins
             if '.svg' in src or 'logo' in src or 'icon' in src or 'sr-db' in src or 'sr-db' in alt:
                 logger.info(f"INFO (ScreenRant): Removendo figura decorativa/logo: {src}")
                 fig.decompose()
                 continue
-            
+
             # CRUCIAL: Remove imagens de THUMBNAIL/PEQUENO TAMANHO
             # Sites usam ?w=300, ?w=400 para widgets, carousels, e blocos relacionados
             if '?w=300' in src or '?w=400' in src or '&w=300' in src or '&w=400' in src:
                 logger.info(f"INFO (ScreenRant): Removendo figura de thumbnail (?w=300/400): {src}")
                 fig.decompose()
                 continue
-            
+
             # Remove figuras órfãs (sem parágrafo antes ou depois)
             prev_p = fig.find_previous(['p', 'h2', 'h3', 'blockquote'])
             next_p = fig.find_next(['p', 'h2', 'h3', 'blockquote'])
-            
+
             if not prev_p and not next_p:
-                logger.info(f"INFO (ScreenRant): Removendo figura órfã (sem contexto textual)")
+                logger.info("INFO (ScreenRant): Removendo figura órfã (sem contexto textual)")
                 fig.decompose()
 
         # 8. Remove parágrafos com "Thank you for reading" ou "Subscribe" e outras CTAs
@@ -1800,7 +1820,7 @@ class ContentExtractor:
             if not elem.parent:
                 continue
             text = (elem.get_text(strip=True) or "").lower()
-            
+
             # Remove CTAs - lista mais agressiva
             if any(cta in text for cta in [
                 'thank you for reading',
@@ -1847,7 +1867,7 @@ class ContentExtractor:
 
         # 4. Iterar e capturar apenas o que está na nossa lista de permissão.
         for element in article_container.find_all(['p', 'h2', 'figure', 'blockquote']):
-            
+
             # Pega parágrafos e subtítulos
             if element.name in ['p', 'h2']:
                 good_elements.append(str(element))
@@ -1858,12 +1878,12 @@ class ContentExtractor:
                 logger.info("INFO (Lance!): Embed de Twitter encontrado e MANTIDO.")
                 good_elements.append(str(element))
                 continue
-                
+
             # REGRA REFINADA PARA <figure>
             if element.name == 'figure':
                 # Procura por uma tag <img> dentro da figura
                 img_tag = element.find('img')
-                
+
                 # Se não houver tag <img>, ou se a imagem for um ícone .svg, IGNORA a figura.
                 if not img_tag or (img_tag.get('src') and img_tag.get('src').endswith('.svg')):
                     logger.info(f"INFO (Lance!): Ignorando <figure> de ícone SVG: {img_tag.get('src') if img_tag else 'Figura vazia'}")
@@ -1876,10 +1896,10 @@ class ContentExtractor:
         if not good_elements:
             logger.warning("AVISO (Lance!): Nenhum conteúdo válido foi encontrado.")
             return None
-            
+
         # 5. Juntar apenas os elementos bons para formar o HTML final.
         final_html = "".join(good_elements)
-        
+
         # 6. Retorna o novo <article> contendo apenas os elementos bons.
         return BeautifulSoup(final_html, 'lxml')
 
@@ -1915,7 +1935,7 @@ class ContentExtractor:
 
             # Blocos de "Relacionados"
             {'tag': 'div', 'class_': 'related-materia'},
-            
+
             # NOVO BLOCO DO CARTOLA FC (MAIS ESCALADOS)
             {'tag': 'div', 'id': 'gm-widget-mais-escalados-root'},
         ]
@@ -1924,11 +1944,11 @@ class ContentExtractor:
         for selector in selectors_to_destroy:
             # Busca tanto por 'class_' quanto por 'id'
             elements_to_remove = main_container.find_all(
-                selector['tag'], 
-                class_=selector.get('class_'), 
+                selector['tag'],
+                class_=selector.get('class_'),
                 id=selector.get('id')
             )
-            
+
             for element in elements_to_remove:
                 logger.info(f"INFO (GE): Removendo bloco indesejado com seletor: {selector}")
                 element.decompose()
@@ -1947,10 +1967,10 @@ class ContentExtractor:
         Mantém apenas parágrafos e headings do corpo do artigo.
         """
         # 1. Isolar o container do artigo
-        article_body = soup.select_one(
-            '[data-testid="article-body"], .article-body, .entry-content, '
-            '.c-entry-content, [itemprop="articleBody"], .c-content'
-        )
+        article_body = _select_first_by_priority(soup, [
+            '[data-testid="article-body"]', '.article-body', '.entry-content',
+            '.c-entry-content', '[itemprop="articleBody"]', '.c-content',
+        ])
         if not article_body:
             article_container = soup.find('article')
             if article_container:
@@ -2047,10 +2067,10 @@ class ContentExtractor:
         Mantém apenas parágrafos e headings do corpo do artigo.
         """
         # 1. Isolar o container do artigo
-        article_body = soup.select_one(
-            '[data-testid="article-body"], .article-content, .article-body, '
-            '.entry-content, [itemprop="articleBody"], .c-content'
-        )
+        article_body = _select_first_by_priority(soup, [
+            '[data-testid="article-body"]', '.article-content', '.article-body',
+            '.entry-content', '[itemprop="articleBody"]', '.c-content',
+        ])
         if not article_body:
             article_container = soup.find('article')
             if article_container:
@@ -2144,11 +2164,11 @@ class ContentExtractor:
         Limpador especifico para MOVIEWEB.COM.
         Usa whitelist editorial para evitar CTAs, ads e blocos de navegacao.
         """
-        article_body = soup.select_one(
-            '.article-body, .w-article-body, .article-content, .entry-content, '
-            '.post-content, [itemprop="articleBody"], article .article-body, '
-            'main article, article, main'
-        )
+        article_body = _select_first_by_priority(soup, [
+            '[itemprop="articleBody"]', '#article-body', '.article-body',
+            '.w-article-body', 'article .article-body', '.article-content',
+            '.entry-content', '.post-content', 'main article', 'article', 'main',
+        ])
         if not article_body:
             logger.error("ERRO CRITICO (MovieWeb): Nenhum container de artigo encontrado.")
             return None
@@ -2403,7 +2423,7 @@ class ContentExtractor:
         # --- Step 3: Process content if a cleaned container was returned ---
         if cleaned_container:
             logger.info(f"Successfully cleaned content for {domain} using specific extractor.")
-            
+
             # Extract images and videos from WITHIN the cleaned container
             image_captions = _merge_image_captions(
                 collect_image_captions_from_article(cleaned_container, base_url=url),
@@ -2420,7 +2440,7 @@ class ContentExtractor:
                 if is_valid_article_image(image_url):
                     body_images.append(image_url)
             videos_in_container = self._extract_youtube_videos(cleaned_container)
-            
+
             _append_missing_x_embeds(cleaned_container, x_embeds)
             final_content_html = str(cleaned_container)
             specific_words = _html_word_count_without_x_embeds(final_content_html)
@@ -2435,7 +2455,7 @@ class ContentExtractor:
                         specific_words,
                     )
                     return generic
-            
+
             # Combine videos, prioritizing ones from the container
             video_ids = set()
             all_videos = []

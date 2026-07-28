@@ -1,5 +1,5 @@
 """
-Adapter: transforma item do RSSPRIME Superfeed em objeto compatível com o pipeline MN26.
+Adapter: transforma item do RSS Prime Superfeed em objeto compatível com o pipeline MNScr.
 """
 
 def is_superfeed_item(entry: dict) -> bool:

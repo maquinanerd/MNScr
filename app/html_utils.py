@@ -1,13 +1,13 @@
 # app/html_utils.py
-import re
-import os
-import logging
 import html
+import logging
+import os
+import re
 import unicodedata
-import json
-from typing import Any, List, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, urlparse
+
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, parse_qs
 
 logger = logging.getLogger(__name__)
 
@@ -388,7 +388,7 @@ def _yt_id_from_url(url: str) -> Optional[str]:
 def strip_credits_and_normalize_youtube(html: str) -> str:
     """
     - Remove linhas de crédito (figcaption/p/span iniciando com Crédito/Credito/Fonte)
-    - Converte iframes do YouTube em <p> com URL watch (WordPress oEmbed)
+    - Converte iframes do YouTube em <p> com URL watch (oEmbed do CMS)
     - Remove iframes não-YouTube, vazios ou com placeholders (ex.: URL_DO_EMBED_AQUI)
     - Remove <p> vazios após a limpeza e desfaz <figure> que só envolvem embed
     """
@@ -580,7 +580,7 @@ def merge_images_into_content(content_html: str, image_urls: List[str], max_imag
       - injeta até `max_images` novas (que não estejam no HTML)
       - não adiciona créditos/legendas
       - insere após o primeiro parágrafo; se não houver, ao final
-      
+
     IMPORTANTE: Garante que cada imagem tem pelo menos um alt text e está dentro
     de uma figura com figcaption corretamente estruturada.
     """
@@ -624,7 +624,7 @@ def merge_images_into_content(content_html: str, image_urls: List[str], max_imag
             image_url = image["url"]
             fig = soup.new_tag("figure")
             img = soup.new_tag("img", src=image_url, alt="")
-            
+
             # Extrair um nome descritivo da URL para usar como alt text básico
             try:
                 filename = image_url.split('/')[-1].split('?')[0]
@@ -638,14 +638,14 @@ def merge_images_into_content(content_html: str, image_urls: List[str], max_imag
 
             if image.get("alt"):
                 img['alt'] = image["alt"]
-            
+
             fig.append(img)
-            
+
             # Adicionar figcaption vazio (para ser preenchido posteriormente se necessário)
             figcaption = soup.new_tag("figcaption")
             figcaption.string = image.get("caption") or img.get('alt', 'Imagem')
             fig.append(figcaption)
-            
+
             if insertion_point:
                 insertion_point.insert_after(fig)
                 insertion_point = fig  # próximo entra depois do que inserimos
@@ -658,7 +658,7 @@ def merge_images_into_content(content_html: str, image_urls: List[str], max_imag
 
 def merge_videos_into_content(content_html: str, videos: List[Dict[str, str]], max_videos: int = 2) -> str:
     """
-    Garante que videos do YouTube entrem no corpo via URL watch para oEmbed do WordPress.
+    Garante que videos do YouTube entrem no corpo via URL watch para oEmbed do CMS.
     Nao duplica videos ja presentes no HTML.
     """
     if not videos:
@@ -707,55 +707,22 @@ def merge_videos_into_content(content_html: str, videos: List[Dict[str, str]], m
     return soup.body.decode_contents() if soup.body else str(soup)
 
 
-def rewrite_img_srcs_with_wp(content_html: str, uploaded_src_map: Dict[str, str]) -> str:
-    """
-    Reaponta <img> e srcset para as URLs do WordPress já enviadas.
-    - uploaded_src_map: {url_original (normalizada) -> new_source_url_no_wp}
-    """
-    if not content_html or not uploaded_src_map:
-        return content_html
-
-    # normalizar chaves do mapping
-    norm_map: Dict[str, str] = {_norm_key(k): v for k, v in uploaded_src_map.items() if k and v}
-
-    soup = BeautifulSoup(content_html, "lxml")
-    for img in soup.find_all("img"):
-        # src
-        src = (img.get("src") or "").strip()
-        key = _norm_key(src)
-        if key in norm_map:
-            img["src"] = norm_map[key]
-
-        # srcset
-        if img.get("srcset"):
-            img["srcset"] = _replace_in_srcset(img["srcset"], norm_map)
-
-        # data-* (evita rehydration quebrado)
-        for a in ("data-src", "data-original", "data-lazy-src", "data-image", "data-img-url"):
-            if img.has_attr(a):
-                k2 = _norm_key(img.get(a) or "")
-                if k2 in norm_map:
-                    img[a] = norm_map[k2]
-
-    return soup.body.decode_contents() if soup.body else str(soup)
-
-
 def validate_and_fix_figures(html: str, ensure_figcaption: bool = True) -> str:
     """
     Valida e corrige estruturas de <figure> no HTML.
-    
+
     Problemas corrigidos:
     - Figuras com src contendo HTML (ex: src="<figure><img src=...>")
     - Figuras sem <figcaption>
     - <img> fora de <figure>
     - URLs inválidas em src
-    
+
     NOTA: BeautifulSoup desescapa automaticamente ao fazer parsing,
     então procuramos por '<' no src, não '&lt;'.
     """
     if not html:
         return html
-    
+
     # PASSO 0: Detectar e corrigir src malformados ANTES do parsing
     # Se temos src="<figure>... ou src="<img... extrair a URL real
     def fix_malformed_src(text):
@@ -763,7 +730,7 @@ def validate_and_fix_figures(html: str, ensure_figcaption: bool = True) -> str:
         # Procurar por src="...conteúdo com < e >"
         # E extrair a URL https://... dentro
         pattern = r'src="[^"]*<[^"]*https?://[^\s"\'<>]*[^"]*"'
-        
+
         def extract_and_fix(match):
             src_with_html = match.group(0)  # ex: src="<figure><img src="https://..."...>"
             # Extrair apenas a URL
@@ -772,22 +739,22 @@ def validate_and_fix_figures(html: str, ensure_figcaption: bool = True) -> str:
                 url = url_match.group(0)
                 return f'src="{url}"'
             return ''
-        
+
         return re.sub(pattern, extract_and_fix, text)
-    
+
     html = fix_malformed_src(html)
-    
+
     soup = BeautifulSoup(html, "lxml")
-    
+
     # 1. Corrigir figuras com img que tem src contendo HTML estrutural
     # (BeautifulSoup desescapa automaticamente, então procuramos por '<' literal)
     for img in soup.find_all("img"):
         src = (img.get("src") or "").strip()
-        
+
         # Detectar se o src contém estrutura HTML (começa com < ou contém <img)
         if src and (src.startswith("<") or "<img" in src or "<figure" in src):
             logger.warning(f"Encontrada imagem com src contendo HTML estrutural: {src[:100]}...")
-            
+
             # Tentar encontrar uma URL https://... ou http://... dentro do src
             url_match = re.search(r'https?://[^\s"\'<>]+', src)
             if url_match:
@@ -801,7 +768,7 @@ def validate_and_fix_figures(html: str, ensure_figcaption: bool = True) -> str:
                     fig.decompose()
                 else:
                     img.decompose()
-    
+
     # 2. Garantir que toda <img> está dentro de <figure> e tem <figcaption>
     for img in soup.find_all("img"):
         # Se a imagem não está dentro de figure, envolver
@@ -810,18 +777,18 @@ def validate_and_fix_figures(html: str, ensure_figcaption: bool = True) -> str:
             fig = soup.new_tag("figure")
             img.wrap(fig)
             fig_parent = fig
-        
+
         # Garantir que tem figcaption quando o chamador ainda usa fallback legado.
         if ensure_figcaption and not fig_parent.find("figcaption"):
             figcaption = soup.new_tag("figcaption")
             alt_text = img.get("alt", "Imagem")
             figcaption.string = alt_text if alt_text else "Imagem"
             fig_parent.append(figcaption)
-        
+
         # Garantir que img tem alt text
         if not img.get("alt"):
             img["alt"] = "Imagem"
-    
+
     # 3. Remover figuras vazias ou com conteúdo inválido
     for fig in soup.find_all("figure"):
         img = fig.find("img")
@@ -829,16 +796,15 @@ def validate_and_fix_figures(html: str, ensure_figcaption: bool = True) -> str:
             # Figure sem img, remover
             fig.decompose()
             continue
-        
+
         src = (img.get("src") or "").strip()
         if not src or not src.startswith(("http://", "https://")):
             logger.warning(f"Removendo figura com URL inválida: {src}")
             fig.decompose()
-    
+
     return soup.body.decode_contents() if soup.body else str(soup)
 
 # --- Stub para compatibilidade com pipeline: não adiciona crédito nenhum ---
-from typing import Optional
 
 def add_credit_to_figures(html: str, source_url: Optional[str] = None) -> str:
     """
@@ -981,7 +947,7 @@ def remove_broken_image_placeholders(html: str) -> str:
 def downgrade_h1_to_h2(html: str) -> str:
     """
     Replaces any <h1>...</h1> in the article body with <h2>...</h2>.
-    The WordPress title is already injected as H1 by the theme/Yoast.
+    The CMS renders the title as H1; a second H1 in the body hurts SEO.
     A second H1 in the content is a duplicate and hurts SEO.
     """
     if not html or '<h1' not in html.lower():
@@ -1032,19 +998,18 @@ def strip_naked_internal_links(html: str) -> str:
 def remove_source_domain_schemas(html: str) -> str:
     """
     Remove todos os blocos JSON-LD que vieram do conteúdo original da fonte.
-    
-    O WordPress injeta automaticamente os schemas corretos com o domínio 
-    o domínio configurado no WordPress via plugins. Remover os schemas originais 
-    evita conflitos de Schema.org e problemas de SEO/Google News.
-    
+
+    O schema estruturado é responsabilidade do sistema que publica. Remover os
+    schemas da fonte evita conflitos de Schema.org no destino editorial.
+
     Remove:
     - <script type="application/ld+json">...</script> com qualquer conteúdo
-    
+
     Preserva outros scripts (analytics, publicidade, etc.)
     """
     if not html:
         return html
-    
+
     # Remove qualquer bloco de script JSON-LD
     # Usa re.DOTALL para capturar conteúdo multi-linha
     cleaned = re.sub(
@@ -1053,7 +1018,7 @@ def remove_source_domain_schemas(html: str) -> str:
         html,
         flags=re.DOTALL | re.IGNORECASE
     )
-    
+
     # Remove também a variação inversa do atributo type
     cleaned = re.sub(
         r'<script[^>]*type\s*=\s*["\']application/ld\+json["\'][^>]*>.*?</script>',
@@ -1061,7 +1026,7 @@ def remove_source_domain_schemas(html: str) -> str:
         cleaned,
         flags=re.DOTALL | re.IGNORECASE
     )
-    
+
     logger.debug("Removed source domain JSON-LD schemas from content")
     return cleaned
 
@@ -1333,173 +1298,3 @@ def apply_final_field_casing(value: str) -> str:
 # ===========================
 # Gutenberg Blocks Converter
 # ===========================
-
-def html_to_gutenberg_blocks(html_content: str) -> str:
-    """
-    Converte HTML puro para formato de blocos Gutenberg.
-    Gutenberg usa comentários especiais como <!-- wp:paragraph --> para marcar blocos.
-    """
-    if not html_content:
-        return ""
-    
-    # Limpar espaços em branco excessivos
-    html_content = html_content.strip()
-    
-    blocks = []
-    soup = BeautifulSoup(html_content, 'html.parser')
-    
-    for element in soup.children:
-        if isinstance(element, str):
-            # Texto puro
-            text = element.strip()
-            if text:
-                blocks.append(f"<!-- wp:paragraph -->\n<p>{text}</p>\n<!-- /wp:paragraph -->")
-            continue
-        
-        if not hasattr(element, 'name'):
-            continue
-        
-        tag = element.name
-        
-        # Parágrafos
-        if tag == 'p':
-            text = element.get_text(strip=False)
-            if text.strip():
-                blocks.append(f"<!-- wp:paragraph -->\n{str(element)}\n<!-- /wp:paragraph -->")
-        
-        # Headings
-        elif tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
-            level = int(tag[1])
-            text = element.get_text(strip=True)
-            if text:
-                blocks.append(f"<!-- wp:heading {{\"level\":{level}}} -->\n<{tag}>{text}</{tag}>\n<!-- /wp:heading -->")
-        
-        # Imagens
-        elif tag == 'img':
-            img_src = element.get('src', '')
-            img_alt = element.get('alt', '')
-            if img_src:
-                # Imagem com figura (mais comum no Gutenberg)
-                safe_img_src = html.escape(img_src, quote=True)
-                safe_img_alt = html.escape(img_alt, quote=True)
-                dimensions = ""
-                if element.get("width") and element.get("height"):
-                    dimensions = (
-                        f' width="{html.escape(str(element.get("width")), quote=True)}"'
-                        f' height="{html.escape(str(element.get("height")), quote=True)}"'
-                    )
-                responsive = ""
-                if element.get("srcset"):
-                    responsive += f' srcset="{html.escape(str(element.get("srcset")), quote=True)}"'
-                if element.get("sizes"):
-                    responsive += f' sizes="{html.escape(str(element.get("sizes")), quote=True)}"'
-                blocks.append(f"<!-- wp:image -->\n<figure class=\"wp-block-image\"><img src=\"{safe_img_src}\" alt=\"{safe_img_alt}\"{dimensions}{responsive}/></figure>\n<!-- /wp:image -->")
-        
-        # Figura com legenda (para imagens com caption)
-        elif tag == 'figure':
-            img = element.find('img')
-            figcaption = element.find('figcaption')
-            if img:
-                img_src = img.get('src', '')
-                img_alt = img.get('alt', '')
-                caption = figcaption.get_text(" ", strip=True) if figcaption else ''
-                caption_html = ''.join(str(child) for child in figcaption.contents).strip() if figcaption else ''
-                media_id = element.get("data-wp-media-id") or ""
-                if not media_id:
-                    img_classes = img.get("class") or []
-                    if isinstance(img_classes, str):
-                        img_classes = img_classes.split()
-                    for cls in img_classes:
-                        match = re.fullmatch(r"wp-image-(\d+)", str(cls))
-                        if match:
-                            media_id = match.group(1)
-                            break
-                
-                # Construir HTML correto para Gutenberg
-                # Formato: <!-- wp:image {"caption":"..."} -->
-                #          <figure class="wp-block-image">
-                #            <img src="..." alt="..."/>
-                #            <figcaption class="wp-element-caption">...</figcaption>
-                #          </figure>
-                #          <!-- /wp:image -->
-                
-                attrs = {}
-                if media_id:
-                    attrs["id"] = int(media_id)
-                    attrs["sizeSlug"] = "large"
-                if caption_html:
-                    attrs['caption'] = caption_html
-                
-                attrs_str = f" {json.dumps(attrs, ensure_ascii=False)}" if attrs else ""
-                
-                # Reconstruir figura com estrutura correta
-                safe_img_src = html.escape(img_src, quote=True)
-                safe_img_alt = html.escape(img_alt, quote=True)
-                figure_class = "wp-block-image size-large" if media_id else "wp-block-image"
-                img_class = f' class="wp-image-{media_id}"' if media_id else ""
-                dimensions = ""
-                if img.get("width") and img.get("height"):
-                    dimensions = (
-                        f' width="{html.escape(str(img.get("width")), quote=True)}"'
-                        f' height="{html.escape(str(img.get("height")), quote=True)}"'
-                    )
-                responsive = ""
-                if img.get("srcset"):
-                    responsive += f' srcset="{html.escape(str(img.get("srcset")), quote=True)}"'
-                if img.get("sizes"):
-                    responsive += f' sizes="{html.escape(str(img.get("sizes")), quote=True)}"'
-                fig_html = f'<figure class="{figure_class}"><img src="{safe_img_src}" alt="{safe_img_alt}"{img_class}{dimensions}{responsive}/>'
-                if caption_html:
-                    fig_html += f'<figcaption class="wp-element-caption">{caption_html}</figcaption>'
-                fig_html += '</figure>'
-                
-                blocks.append(f"<!-- wp:image{attrs_str} -->\n{fig_html}\n<!-- /wp:image -->")
-        
-        # Listas
-        elif tag == 'ul':
-            items = []
-            for li in element.find_all('li', recursive=False):
-                items.append(f"<li>{li.get_text(strip=True)}</li>")
-            if items:
-                list_html = '<ul>' + ''.join(items) + '</ul>'
-                blocks.append(f"<!-- wp:list -->\n{list_html}\n<!-- /wp:list -->")
-        
-        elif tag == 'ol':
-            items = []
-            for li in element.find_all('li', recursive=False):
-                items.append(f"<li>{li.get_text(strip=True)}</li>")
-            if items:
-                list_html = '<ol>' + ''.join(items) + '</ol>'
-                blocks.append(f"<!-- wp:list {{\"ordered\":true}} -->\n{list_html}\n<!-- /wp:list -->")
-        
-        # Blockquotes
-        elif tag == 'blockquote':
-            text = element.get_text(strip=True)
-            if text:
-                blocks.append(f"<!-- wp:quote -->\n<blockquote class=\"wp-block-quote\"><p>{text}</p></blockquote>\n<!-- /wp:quote -->")
-        
-        # Videos (iframe)
-        elif tag == 'iframe':
-            src = element.get('src', '')
-            if 'youtube' in src or 'vimeo' in src:
-                blocks.append(f"<!-- wp:embed -->\n<figure class=\"wp-block-embed\">{str(element)}</figure>\n<!-- /wp:embed -->")
-        
-        # Divs e outros containers - processar filhos
-        elif tag in ['div', 'article', 'section']:
-            for child in element.children:
-                if isinstance(child, str):
-                    text = child.strip()
-                    if text:
-                        blocks.append(f"<!-- wp:paragraph -->\n<p>{text}</p>\n<!-- /wp:paragraph -->")
-        
-        # Outros elementos
-        else:
-            html_str = str(element)
-            if html_str.strip() and not html_str.startswith('<'):
-                blocks.append(f"<!-- wp:paragraph -->\n<p>{html_str}</p>\n<!-- /wp:paragraph -->")
-    
-    # Juntar blocos com quebras de linha
-    gutenberg_content = '\n\n'.join(blocks)
-    
-    logger.debug(f"Converted HTML ({len(html_content)} chars) to Gutenberg blocks ({len(gutenberg_content)} chars)")
-    return gutenberg_content

@@ -1,15 +1,16 @@
-import feedparser
-import logging
-import requests
-import re
-import xml.etree.ElementTree as ET
-from typing import List, Dict, Any, Optional
 import gzip
-import time
 import hashlib
-from difflib import SequenceMatcher
+import logging
+import re
+import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from urllib.parse import urlparse, unquote
+from difflib import SequenceMatcher
+from typing import Any, Dict, List, Optional
+from urllib.parse import unquote, urlparse
+
+import feedparser
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -259,10 +260,10 @@ class FeedReader:
         try:
             response = self.session.get(url, timeout=20)
             response.raise_for_status()
-            
+
             content = response.content
             ctype = response.headers.get("Content-Type", "").lower()
-            
+
             # Decompress if it's a gzipped file
             if "gzip" in ctype or url.endswith(".gz"):
                 try:
@@ -275,7 +276,7 @@ class FeedReader:
                 except Exception as e:
                     logger.error(f"An unexpected error occurred during gzip decompression for {url}: {e}")
                     return None
-            
+
             return content
         except requests.RequestException as e:
             logger.error(f"Failed to fetch feed/sitemap from {url}: {e}")
@@ -322,12 +323,12 @@ class FeedReader:
                         child_bytes, limit=limit, allow_regex=allow_regex, deny_regex=deny_regex
                     ))
                     time.sleep(0.2)  # Be polite
-            
+
             # Sort and limit at the very end of processing the index
             items.sort(key=_sort_key, reverse=True)
             logger.info(f"Parsed {len(items)} total items from sitemap index.")
             return items[:limit]
-        
+
         # Handle regular sitemap (urlset)
         for url_element in root.findall(".//ns:url", NS):
             loc_el = url_element.find("ns:loc", NS)
@@ -340,7 +341,7 @@ class FeedReader:
                 continue
 
             lastmod = url_element.findtext("ns:lastmod", NS)
-            
+
             title = None
             news_block = url_element.find("news:news", NS)
             if news_block is not None:
@@ -387,11 +388,11 @@ class FeedReader:
                 if feed.bozo:
                     logger.warning(f"Feed from {url} is not well-formed: {feed.bozo_exception}")
                     # Even with bozo flag, try to extract what we can
-                    logger.info(f"Attempting to extract articles from malformed feed despite bozo flag...")
-                
+                    logger.info("Attempting to extract articles from malformed feed despite bozo flag...")
+
                 entries = feed.entries
                 if len(entries) == 0 and feed.bozo:
-                    logger.warning(f"Feed returned 0 entries due to malformation. Trying with relaxed parsing...")
+                    logger.warning("Feed returned 0 entries due to malformation. Trying with relaxed parsing...")
                     # Try with feedparser's built-in error recovery
                     import time
                     time.sleep(2)  # Small delay before retry
@@ -399,12 +400,12 @@ class FeedReader:
                     entries = feed.entries
                     if entries:
                         logger.info(f"Recovered {len(entries)} entries with relaxed parsing")
-                
+
                 if deny:
                     entries = [e for e in entries if not deny.search(e.get('title', ''))]
-                
+
                 raw_items.extend(entries)
-        
+
         all_items = [
             enrich_feed_item(normalize_item(item), feed_config, source_id)
             for item in raw_items

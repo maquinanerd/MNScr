@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Check database status of recent articles"""
 
-import sqlite3
 import os
-from datetime import datetime
+import sqlite3
 
 db_path = 'data/app.db'
 

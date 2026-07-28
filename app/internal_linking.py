@@ -1,7 +1,9 @@
 import logging
 import re
-from typing import Dict, List, Set, Any
+from typing import Any, Dict, List, Set
+
 from bs4 import BeautifulSoup
+
 from app.config import PILAR_POSTS
 
 logger = logging.getLogger(__name__)
@@ -56,7 +58,7 @@ def _append_fallback_link(soup: BeautifulSoup, link_option: Dict[str, Any], reas
     return True
 
 def add_internal_links(
-    html_content: str, 
+    html_content: str,
     link_map_data: Dict[str, List[Dict[str, Any]]],
     current_post_categories: List[int] = None,
     max_links: int = 6
@@ -71,7 +73,7 @@ def add_internal_links(
     soup = BeautifulSoup(html_content, 'html.parser')
     links_inserted = 0
     used_urls: Set[str] = set()
-    
+
     all_link_options = link_map_data['posts']
 
     # --- Prioritization Logic ---
@@ -127,17 +129,17 @@ def add_internal_links(
             # Iterate through all keywords for this link option (title, tags)
             for keyword in link_option['keywords']:
                 pattern = re.compile(r'\b(' + re.escape(keyword) + r')\b', re.IGNORECASE)
-                
+
                 if pattern.search(original_text):
                     link_tag_str = f'<a href="{url}">{keyword}</a>'
                     new_html = pattern.sub(link_tag_str, original_text, count=1)
-                    
+
                     node.replace_with(BeautifulSoup(new_html, 'html.parser'))
-                    
+
                     links_inserted += 1
                     used_urls.add(url)
                     modified_in_node = True # Mark that we modified this node
-                    
+
                     priority = "PILAR" if link_option in pilar_options else "CATEGORY" if link_option in category_options else "OTHER"
                     logger.info(f"Inserted link for keyword: '{keyword}' (Priority: {priority})")
                     break # Stop searching keywords for this link_option

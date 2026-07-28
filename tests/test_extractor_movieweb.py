@@ -1,7 +1,6 @@
 from app.extractor import ContentExtractor
 from app.multi_source_builder import detect_extraction_status
 
-
 VALID_BODY = " ".join(
     [
         "MovieWeb reports that the Marvel story includes enough article body text for extraction validation.",

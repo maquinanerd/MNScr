@@ -5,6 +5,7 @@ Valida que "Thank you for reading" e similares serão removidos.
 """
 import re
 
+
 # Simular o código da pipeline que Remove CTAs
 def remove_ctas(content_html):
     """Remove CTAs e junk content."""
@@ -24,7 +25,7 @@ def remove_ctas(content_html):
         r'<p[^>]*>.*?newsletter.*?</p>',
         r'<p[^>]*>.*?author box.*?</p>',
     ]
-    
+
     removed_count = 0
     for pattern in dangerous_patterns:
         original_length = len(content_html)
@@ -32,7 +33,7 @@ def remove_ctas(content_html):
         if len(content_html) < original_length:
             removed_count += 1
             print(f"✅ Removido: {pattern[:50]}...")
-    
+
     return content_html, removed_count
 
 # Testes
@@ -79,23 +80,23 @@ failed = 0
 for test in test_cases:
     print(f"\n{test['name']}")
     print(f"Input: {test['input'][:60]}...")
-    
+
     result, removed = remove_ctas(test['input'])
     was_removed = len(result) < len(test['input'])
-    
+
     if test['should_remove']:
         if was_removed:
-            print(f"✅ PASS - CTA removido (esperado)")
+            print("✅ PASS - CTA removido (esperado)")
             passed += 1
         else:
-            print(f"❌ FAIL - CTA não foi removido (inesperado!)")
+            print("❌ FAIL - CTA não foi removido (inesperado!)")
             failed += 1
     else:
         if not was_removed:
-            print(f"✅ PASS - Conteúdo preservado (esperado)")
+            print("✅ PASS - Conteúdo preservado (esperado)")
             passed += 1
         else:
-            print(f"❌ FAIL - Conteúdo removido por engano!")
+            print("❌ FAIL - Conteúdo removido por engano!")
             print(f"   Original: {test['input'][:60]}...")
             print(f"   Resultado: {result[:60]}...")
             failed += 1

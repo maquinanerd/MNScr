@@ -13,8 +13,8 @@ Regras implementadas:
 - Com números, datas ou contexto temporal quando possível
 """
 
-import re
 import logging
+import re
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -60,15 +60,15 @@ def clean_html_characters(title: str) -> str:
     """Remove HTML character entities and replace with ASCII equivalents."""
     if not title:
         return title
-    
+
     cleaned = title
     for html_char, replacement in HTML_CHAR_REPLACEMENTS.items():
         cleaned = cleaned.replace(html_char, replacement)
-    
+
     # Remove any remaining HTML entities
     cleaned = re.sub(r'&#\d+;', '', cleaned)
     cleaned = re.sub(r'&[a-z]+;', '', cleaned)
-    
+
     return cleaned
 
 
@@ -93,18 +93,18 @@ def remove_clickbait(title: str) -> str:
         r'^O que aconteceu foi',
         r'^Prepare-se para',
     ]
-    
+
     result = title
     for pattern in clickbait_patterns:
         result = re.sub(pattern, '', result, flags=re.IGNORECASE)
-    
+
     return result.strip()
 
 
 def extract_keyword(title: str, content: Optional[str] = None) -> Optional[str]:
     """
     Extract the main keyword from title or content.
-    
+
     Returns the first significant word (noun or proper noun).
     """
     # Remove common stop words
@@ -112,27 +112,27 @@ def extract_keyword(title: str, content: Optional[str] = None) -> Optional[str]:
         'o', 'a', 'um', 'uma', 'de', 'do', 'da', 'em', 'e', 'é', 'por', 'para',
         'com', 'sem', 'se', 'não', 'mas', 'ou', 'quando', 'onde', 'como', 'que'
     }
-    
+
     words = title.lower().split()
-    
+
     for word in words:
         # Remove punctuation
         clean_word = re.sub(r'[^\w]', '', word)
-        
+
         # Skip if too short or is stop word
         if len(clean_word) < 3 or clean_word in stop_words:
             continue
-        
+
         # This is likely our keyword
         return clean_word
-    
+
     return None
 
 
 def analyze_title_quality(title: str) -> Tuple[float, list]:
     """
     Analyze title quality and return score (0-100) and list of issues.
-    
+
     Checks:
     - Length (50-70 optimal, 40-100 acceptable)
     - Keyword position (should be in first 5 words)
@@ -143,17 +143,17 @@ def analyze_title_quality(title: str) -> Tuple[float, list]:
     """
     issues = []
     score = 100.0
-    
+
     # Stop words
     stop_words = {
         'o', 'a', 'um', 'uma', 'de', 'do', 'da', 'em', 'e', 'é', 'por', 'para',
         'com', 'sem', 'se', 'não', 'mas', 'ou', 'quando', 'onde', 'como', 'que'
     }
-    
+
     title_clean = title.strip()
     char_count = len(title_clean)
     word_count = len(title_clean.split())
-    
+
     # Check length
     if char_count < 40:
         issues.append("Título muito curto (menos de 40 caracteres)")
@@ -167,7 +167,7 @@ def analyze_title_quality(title: str) -> Tuple[float, list]:
     elif char_count > 70:
         issues.append(f"Título um pouco longo ({char_count} caracteres, ideal é 50-70)")
         score -= 3
-    
+
     # Check for keyword position
     words = title_clean.lower().split()
     has_keyword_early = False
@@ -175,49 +175,49 @@ def analyze_title_quality(title: str) -> Tuple[float, list]:
         if len(word) > 3 and word not in stop_words:
             has_keyword_early = True
             break
-    
+
     if not has_keyword_early and word_count > 5:
         issues.append("Palavra-chave não está nos primeiros 5 palavras")
         score -= 10
-    
+
     # Check for action verbs
     has_action_verb = any(verb in title.lower() for verb in ACTION_VERBS)
     if not has_action_verb:
         issues.append("Ausência de verbo de ação (recomenda-se usar: anunciou, lançou, etc)")
         score -= 5
-    
+
     # Check for vague words
     vague_found = [word for word in VAGUE_WORDS if word in title.lower()]
     if vague_found:
         issues.append(f"Contém palavras vagas: {', '.join(vague_found)}")
         score -= 10
-    
+
     # Check for HTML characters
     if any(char in title for char in HTML_CHAR_REPLACEMENTS.keys()):
         issues.append("Contém caracteres HTML especiais")
         score -= 10
-    
+
     # Check for clickbait
     if re.search(r'Você (não|precisa|não vai acreditar)', title, re.IGNORECASE):
         issues.append("Contém padrão de clickbait")
         score -= 15
-    
+
     # Check for ALL CAPS
     if title.isupper() and len(title) > 5:
         issues.append("Título em MAIÚSCULA (evitar)")
         score -= 5
-    
+
     # Bonus for numbers/dates
     if re.search(r'\d{4}|2025|2024|\d+%|US\$', title):
         score += 5
-    
+
     # Bonus for proper structure
     if has_action_verb and has_keyword_early:
         score += 5
-    
+
     # Ensure score is between 0-100
     score = max(0, min(100, score))
-    
+
     return score, issues
 
 
@@ -230,14 +230,14 @@ def optimize_title(
 ) -> Tuple[str, dict]:
     """
     Optimize a news title for Google News & Discovery.
-    
+
     Args:
         original_title: The original title to optimize
         content: Optional content to extract keywords/context
         min_length: Minimum character length
         max_length: Maximum character length for optimal range
         target_length: Target length for optimization
-    
+
     Returns:
         Tuple of (optimized_title, optimization_report)
     """
@@ -252,34 +252,34 @@ def optimize_title(
         'optimized_issues': [],
         'changes_made': []
     }
-    
+
     # Start with the original
     optimized = original_title.strip()
-    
+
     # 1. Clean HTML characters
     if any(char in optimized for char in HTML_CHAR_REPLACEMENTS.keys()):
         optimized = clean_html_characters(optimized)
         report['changes_made'].append('Removidos caracteres HTML especiais')
-    
+
     # 2. Remove clickbait
     original_for_clickbait = optimized
     optimized = remove_clickbait(optimized)
     if optimized != original_for_clickbait:
         report['changes_made'].append('Removido padrão de clickbait')
-    
+
     # 3. Remove vague words
     words = optimized.split()
     cleaned_words = [w for w in words if w.lower() not in VAGUE_WORDS]
     if len(cleaned_words) < len(words):
         optimized = ' '.join(cleaned_words)
         report['changes_made'].append('Removidas palavras vagas')
-    
+
     # 4. Ensure action verb (if not present, add one if possible)
     has_action = any(verb in optimized.lower() for verb in ACTION_VERBS)
     if not has_action and content:
         # Try to infer an action verb from context
         optimized = _infer_action_verb(optimized, content)
-    
+
     # 5. Length optimization
     current_length = len(optimized)
     if current_length > 100:
@@ -291,7 +291,7 @@ def optimize_title(
         if content:
             optimized = _expand_title(optimized, target_length, content)
             report['changes_made'].append(f'Expandido de {current_length} para {len(optimized)} caracteres')
-    
+
     # 6. Fix quote marks (ensure they're straight quotes, not typographic)
     optimized = optimized.replace(''', "'").replace(''', "'")
     optimized = optimized.replace('"', '"').replace('"', '"')
@@ -306,11 +306,11 @@ def optimize_title(
         report['changes_made'].append(
             f"Transformação rejeitada por remover verbo/auxiliar: {', '.join(sorted(removed_protected))}"
         )
-    
+
     # Analyze before and after
     original_score, original_issues = analyze_title_quality(original_title)
     optimized_score, optimized_issues = analyze_title_quality(optimized)
-    
+
     report['original_length'] = len(original_title)
     report['optimized_length'] = len(optimized)
     report['original_score'] = original_score
@@ -319,16 +319,16 @@ def optimize_title(
     report['optimized_issues'] = optimized_issues
     report['optimized'] = optimized
     report['score_improvement'] = optimized_score - original_score
-    
+
     logger.info(f"Título otimizado: '{original_title}' → '{optimized}'")
     logger.info(f"Score: {original_score:.1f} → {optimized_score:.1f} (melhoria: {report['score_improvement']:+.1f})")
-    
+
     return optimized, report
 
 
 def _infer_action_verb(title: str, content: str) -> str:
     """Infer appropriate action verb based on content.
-    
+
     IMPORTANTE: Esta função está DESABILITADA porque estava adicionando
     "lança" incorretamente a títulos. A detecção de action verbs deve
     ser mais conservadora. Retorna o título original.
@@ -343,17 +343,17 @@ def _truncate_title(title: str, max_length: int) -> str:
     """Intelligently truncate title to max length."""
     if len(title) <= max_length:
         return title
-    
+
     # Try to cut at word boundary
     truncated = title[:max_length]
     last_space = truncated.rfind(' ')
-    
+
     if last_space > max_length * 0.7:  # Only cut at space if reasonable
         truncated = truncated[:last_space]
-    
+
     # Remove trailing punctuation
     truncated = re.sub(r'[,;:.]$', '', truncated)
-    
+
     return truncated.strip()
 
 
@@ -361,26 +361,26 @@ def _expand_title(title: str, target_length: int, content: str) -> str:
     """Try to expand title to target length using content."""
     if len(title) >= target_length:
         return title
-    
+
     # Extract keywords or context from content
     words = content.split()
     nouns = [w for w in words if len(w) > 4 and w not in VAGUE_WORDS]
-    
+
     if nouns:
         # Add relevant context
         additional_context = ' '.join(nouns[:2])
         expanded = f"{title} em {additional_context}"[:target_length]
         return expanded
-    
+
     return title
 
 
 def batch_optimize_titles(titles: list, content_list: list = None) -> list:
     """Optimize multiple titles at once."""
     results = []
-    
+
     content_list = content_list or [None] * len(titles)
-    
+
     for title, content in zip(titles, content_list):
         optimized, report = optimize_title(title, content)
         results.append({
@@ -388,7 +388,7 @@ def batch_optimize_titles(titles: list, content_list: list = None) -> list:
             'optimized': optimized,
             'report': report
         })
-    
+
     return results
 
 
@@ -399,7 +399,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format='%(name)s - %(levelname)s - %(message)s'
     )
-    
+
     # Test examples
     test_titles = [
         "Você não vai acreditar no que a Marvel anunciou para 2025",
@@ -407,28 +407,28 @@ if __name__ == "__main__":
         "Disney+ possível cancelamento de série popular segundo fontes",
         "2024: Ano de recordes para indústria de streaming",
     ]
-    
+
     print("=" * 70)
     print("SEO TITLE OPTIMIZER - TEST RESULTS")
     print("=" * 70)
     print()
-    
+
     for title in test_titles:
         optimized, report = optimize_title(title)
-        
+
         print(f"Original:  {title}")
         print(f"Otimizado: {optimized}")
         print(f"Score:     {report['original_score']:.1f} → {report['optimized_score']:.1f}")
         print(f"Tamanho:   {report['original_length']} → {report['optimized_length']} caracteres")
-        
+
         if report['changes_made']:
             print("Mudanças:")
             for change in report['changes_made']:
                 print(f"  - {change}")
-        
+
         if report['optimized_issues']:
             print("Questões restantes:")
             for issue in report['optimized_issues']:
                 print(f"  - {issue}")
-        
+
         print()

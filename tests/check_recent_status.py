@@ -2,8 +2,6 @@
 """Check recent article status and posts"""
 
 import sqlite3
-import os
-from datetime import datetime, timedelta
 
 db_path = 'data/app.db'
 conn = sqlite3.connect(db_path)

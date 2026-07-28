@@ -1,8 +1,9 @@
+import logging
 import os
 import re
-import logging
+from typing import Any, Dict, List
+
 from dotenv import load_dotenv
-from typing import Dict, List, Any
 
 # Carrega variáveis de ambiente de um arquivo .env
 load_dotenv(override=True)  # override=True garante que .env sobrescreve variaveis do sistema
@@ -65,11 +66,26 @@ RSS_FEEDS: Dict[str, Dict[str, Any]] = {
 }
 
 # --- HTTP ---
-USER_AGENT = (
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-    'AppleWebKit/537.36 (KHTML, like Gecko) '
-    'Chrome/91.0.4472.124 Safari/537.36'
+USER_AGENT = os.getenv(
+    'MNSCR_USER_AGENT',
+    'MNScr/1.0 (+editorial draft pipeline; contact: editorial@cinerie)',
 )
+
+# --- Saída editorial (MS-1) ---
+# MNScr produz drafts. WordPress foi removido do caminho canônico.
+OUTPUT_MODE = os.getenv('MNSCR_OUTPUT_MODE', 'local').strip().lower()
+LOCAL_DRAFT_DIR = os.getenv('MNSCR_LOCAL_DRAFT_DIR', 'artifacts/local-drafts')
+
+PAYLOAD_CONFIG: Dict[str, Any] = {
+    'enabled': os.getenv('PAYLOAD_ENABLED', 'false').strip().lower() == 'true',
+    'base_url': (os.getenv('PAYLOAD_BASE_URL') or '').strip(),
+    'api_token': (os.getenv('PAYLOAD_API_TOKEN') or '').strip(),
+    'drafts_collection': (os.getenv('PAYLOAD_DRAFTS_COLLECTION') or 'editorial-drafts').strip(),
+}
+
+# Domínio editorial usado para sugerir links internos no prompt. Não é destino
+# de publicação.
+PUBLISHER_DOMAIN = (os.getenv('PUBLISHER_DOMAIN') or '').strip().lower()
 
 # --- Configuração da IA ---
 def _is_gemini_api_key_var_name(env_name: str) -> bool:
@@ -88,7 +104,7 @@ def _load_ai_keys() -> List[str]:
     Procura por padrões: GEMINI_*, GEMINI_KEY*, GEMINI_API*
     """
     keys = {}
-    
+
     # Procurar por todas as variáveis que contenham GEMINI e sejam chaves de API
     for key, value in os.environ.items():
         if not value or not _is_gemini_api_key_var_name(key):
@@ -100,18 +116,19 @@ def _load_ai_keys() -> List[str]:
             logger.info(f"API KEY: {key}")
         else:
             logger.warning(f"VARIAVEL: {key} encontrada mas nao eh chave de API (nao comeca com AIza)")
-    
+
     if not keys:
         logger.error("ERRO: NENHUMA CHAVE DE API GEMINI ENCONTRADA! Verificar .env")
-    
+
     # Sort by key name for predictable order
     sorted_key_names = sorted(keys.keys())
     result = [keys[k] for k in sorted_key_names]
-    
+
     logger.info(f"CARREGADAS {len(result)} chaves de API")
     for idx, key in enumerate(result, 1):
-        logger.info(f"  [{idx}] {key[:15]}...{key[-4:]}")
-    
+        # Nunca registrar o prefixo da chave: apenas os 4 últimos caracteres.
+        logger.info(f"  [{idx}] ****{key[-4:]}")
+
     return result
 
 AI_API_KEYS = _load_ai_keys()
@@ -134,41 +151,18 @@ AI_GENERATION_CONFIG = {
 AI_POST_WRITER_BUDGET_TOKENS = int(os.getenv('AI_POST_WRITER_BUDGET_TOKENS', '16000'))
 AI_POST_WRITER_BUDGET_PER_1K_SOURCE = int(os.getenv('AI_POST_WRITER_BUDGET_PER_1K_SOURCE', '6000'))
 
-INDEX_GATE_ENABLED = os.getenv('INDEX_GATE_ENABLED', 'true').lower() == 'true'
-INDEX_GATE_MIN_SCORE = int(os.getenv('INDEX_GATE_MIN_SCORE', '45'))
-INDEX_GATE_MIN_INTERNAL_LINKS = int(os.getenv('INDEX_GATE_MIN_INTERNAL_LINKS', '1'))
-INDEX_GATE_REQUIRE_WORDCOUNT_MIN = os.getenv('INDEX_GATE_REQUIRE_WORDCOUNT_MIN', 'true').lower() == 'true'
-
-# --- QA-LLM de originalidade ---
-# QA_LLM_ENABLED=true   → roda o check para todos os artigos; resultado alimenta gate de indexação
-# QA_LLM_ENABLED=false  → comportamento idêntico ao anterior (nenhuma chamada extra)
-# QA_LLM_MIN_ORIGINALITY → score mínimo 0-100 para receber index,follow (régua inicial frouxa)
-QA_LLM_ENABLED: bool = os.getenv('QA_LLM_ENABLED', 'true').lower() == 'true'
-QA_LLM_MIN_ORIGINALITY: int = int(os.getenv('QA_LLM_MIN_ORIGINALITY', '50'))
-
-# --- WordPress ---
-WORDPRESS_CONFIG = {
-    'url': os.getenv('WORDPRESS_URL'),
-    'user': os.getenv('WORDPRESS_USER'),
-    'password': os.getenv('WORDPRESS_PASSWORD'),
-}
+# Gates de indexação foram removidos na MS-1: MNScr não indexa e não publica.
+# A decisão de indexação pertence ao sistema do Cinerie.
 
 # --- Posts Pilares para Linkagem Interna ---
-# Adicione aqui as URLs completas dos seus posts mais importantes.
-# A lógica de linkagem interna dará prioridade máxima a links que apontam para estes artigos.
-PILAR_POSTS: List[str] = [
-    # Ex: "https://seusite.com/guia-completo-de-futebol",
-    # Ex: "https://seusite.com/historia-das-copas-do-mundo",
-]
+# URLs internas prioritárias para sugestão de links no corpo do draft.
+PILAR_POSTS: List[str] = []
 
-# IDs das categorias no WordPress (ajuste os IDs conforme o seu WP)
-WORDPRESS_CATEGORIES: Dict[str, int] = {
-    'Notícias': 20,
-    'Filmes': 24,
-    'Séries': 21,  # ID correto de Séries (era 24 antes, mesmo ID de Filmes!)
-}
+# Categorias sugeridas ao editor humano. São NOMES, nunca IDs de CMS.
+# A taxonomia definitiva do Cinerie ainda não foi decidida (bloqueio externo).
+EDITORIAL_CATEGORIES: List[str] = ['Notícias', 'Filmes', 'Séries']
 
-# Mapeia o source_id para uma lista de nomes de categorias
+# Mapeia o source_id para uma lista de nomes de categorias sugeridas
 SOURCE_CATEGORY_MAP: Dict[str, List[str]] = {
     'rssprime_tv': ['Séries'],
     'rssprime_movies': ['Filmes'],
@@ -179,7 +173,7 @@ SOURCE_CATEGORY_MAP: Dict[str, List[str]] = {
 
 
 # --- Sinônimos de Categorias ---
-# Mapeia nomes alternativos (em minúsculas) para o slug canônico em WORDPRESS_CATEGORIES
+# Mapeia nomes alternativos (em minúsculas) para o nome canônico sugerido
 CATEGORY_ALIASES: Dict[str, str] = {}
 
 # Editorial blocks: keep games out of ingestion and publishing.
@@ -206,13 +200,8 @@ SCHEDULE_CONFIG = {
 }
 
 PIPELINE_CONFIG = {
-    'images_mode': os.getenv('IMAGES_MODE', 'hotlink'),  # 'hotlink' ou 'download_upload'
     'attribution_policy': 'Fonte: {domain}',
-    'publisher_name': os.getenv('PUBLISHER_NAME', 'The Screen / Cinerie'),
-    'publisher_logo_url': os.getenv(
-        'PUBLISHER_LOGO_URL',
-        'https://exemplo.com/logo.png'  # TODO: atualizar para a URL real do logo
-    ),
+    'publisher_name': os.getenv('PUBLISHER_NAME', 'Cinerie'),
 }
 
 # --- Configuração TMDb (The Movie Database) ---
@@ -224,20 +213,6 @@ TMDB_CONFIG = {
     'extract_upcoming': os.getenv('TMDB_EXTRACT_UPCOMING', 'false').lower() == 'true',
 }
 
-
-# --- Forçar indexação de todos os posts ---
-# Quando True, todos os posts publicados recebem index/follow independente do score editorial.
-# Para forçar mesmo abaixo do score, use FORCE_INDEX_ALL_POSTS=true + ALLOW_MANUAL_INDEX_OVERRIDE=true
-FORCE_INDEX_ALL_POSTS: bool = True
-
-# --- Policy Engine ---
-# Limiar mínimo de score para indexação (padrão 30)
-# (não precisam de linha aqui, mas documentamos para referência):
-#   PUBLISH_ALL_PROCESSABLE=true → publicar tudo que for processável
-#   ALLOW_LOW_SCORE_PUBLISH=true → permite publicar com score baixo
-#   ALLOW_MANUAL_INDEX_OVERRIDE=false → proteção extra contra force_index
-#   QA_LLM_ENABLED=true             → QA-LLM de originalidade habilitado (resultado alimenta gate de indexação, nunca bloqueia publicação)
-#   QA_LLM_MIN_ORIGINALITY=50       → score mínimo 0-100 para index,follow (régua frouxa inicial)
 
 # --- AI Validator (segunda camada de IA) ---
 AI_VALIDATOR_CONFIG = {
@@ -252,17 +227,19 @@ def get_runtime_config_issues() -> List[str]:
     """
     Return a list of blocking configuration issues for the main pipeline runtime.
 
-    This is intentionally focused on the current production-critical path:
-    WordPress publishing and Gemini processing.
+    The critical path is now: ingest feeds -> generate an editorial draft ->
+    hand it to a submitter. WordPress credentials are no longer required and
+    ``MNSCR_OUTPUT_MODE=wordpress`` is rejected outright.
     """
     issues: List[str] = []
 
-    if not WORDPRESS_CONFIG.get('url'):
-        issues.append("WORDPRESS_URL não configurada")
-    if not WORDPRESS_CONFIG.get('user'):
-        issues.append("WORDPRESS_USER não configurado")
-    if not WORDPRESS_CONFIG.get('password'):
-        issues.append("WORDPRESS_PASSWORD não configurada")
+    from app.submitters import OutputModeError, resolve_output_mode
+
+    try:
+        resolve_output_mode(OUTPUT_MODE)
+    except OutputModeError as exc:
+        issues.append(str(exc))
+
     if not AI_API_KEYS:
         issues.append("Nenhuma chave GEMINI válida foi encontrada")
 

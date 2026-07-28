@@ -1,85 +1,82 @@
 # app/pipeline.py
-import logging
-import time
 import json
-import re
+import logging
 import os
+import re
 import threading
+import time
 import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
-from typing import Dict, Any, Optional, List
 
+from bs4 import BeautifulSoup
+
+from .ai_processor import AIProcessor
+from .ai_validator import expand_article_if_too_short, validate_and_fix_ai_json
+from .cleaners import clean_html_for_globo_esporte
+from .cluster_extractor import build_cluster_prompt_payload, collect_cluster_images, collect_cluster_videos
+from .cluster_feed_adapter import is_superfeed_item, normalize_cluster_item
 from .config import (
-    PIPELINE_ORDER,
-    RSS_FEEDS,
-    WORDPRESS_CONFIG,
-    WORDPRESS_CATEGORIES,
-    CATEGORY_ALIASES,
     BLOCKED_CATEGORY_NAMES,
     BLOCKED_SOURCE_IDS,
     BLOCKED_TOPICS,
+    CATEGORY_ALIASES,
+    LOCAL_DRAFT_DIR,
+    OUTPUT_MODE,
     PIPELINE_CONFIG,
+    PIPELINE_ORDER,
+    PUBLISHER_DOMAIN,
+    RSS_FEEDS,
     SOURCE_CATEGORY_MAP,
-    AI_API_KEYS,
-    FORCE_INDEX_ALL_POSTS,
-    QA_LLM_ENABLED,
-    QA_LLM_MIN_ORIGINALITY,
 )
-from .policy_engine import (
-    calculate_dynamic_word_policy,
-    should_run_ai_validator,
-    should_run_qa_llm,
-    decide_publish_status,
-    decide_index_status,
-    classify_article_type,
-    ArticleBudget,
-)
-from .store import Database
-from .feeds import FeedReader, canonicalize_url, normalize_title_for_match, titles_are_similar
+from .editorial import DRAFT_FAILED, DRAFT_GENERATED, validate_draft
+from .editorial.builder import build_editorial_draft
+from .editorial_validator import validate_editorial_quality
+from .entity_validator import validate_and_fix_entities
 from .extractor import ContentExtractor
-from .ai_processor import AIProcessor
-from .wordpress import WordPressClient
-from .seo_title_optimizer import optimize_title
-from .title_validator import TitleValidator
+from .feeds import FeedReader, canonicalize_url, normalize_title_for_match, titles_are_similar
 from .html_utils import (
+    append_source_credit_block,
+    apply_final_field_casing,
+    detect_forbidden_cta,
+    downgrade_h1_to_h2,
+    final_pre_publish_cleanup,
+    hard_filter_forbidden_html,
+    merge_videos_into_content,
+    normalize_meta_description,
+    normalize_subtitle,
+    remove_broken_image_placeholders,
+    remove_source_domain_schemas,
+    sanitize_final_title,
+    strip_ai_tag_links,
+    strip_credits_and_normalize_youtube,
+    strip_forbidden_cta_sentences,
+    strip_naked_internal_links,
     unescape_html_content,
     validate_and_fix_figures,
-    merge_videos_into_content,
-    rewrite_img_srcs_with_wp,
-    append_source_credit_block,
-    strip_credits_and_normalize_youtube,
-    remove_broken_image_placeholders,
-    strip_naked_internal_links,
-    strip_ai_tag_links,
-    downgrade_h1_to_h2,
-    remove_source_domain_schemas,
-    strip_forbidden_cta_sentences,
-    detect_forbidden_cta,
-    html_to_gutenberg_blocks,
-    final_pre_publish_cleanup,
-    apply_final_field_casing,
-    normalize_subtitle,
-    normalize_meta_description,
-    sanitize_final_title,
 )
 from .internal_linking import add_internal_links
-from .link_store import save_article as ls_save_article, get_related as ls_get_related, format_for_prompt as ls_format_links, get_link_map as ls_get_link_map
-from .cluster_feed_adapter import is_superfeed_item, normalize_cluster_item
-from .cluster_extractor import build_cluster_prompt_payload, collect_cluster_images, collect_cluster_videos
+from .link_store import format_for_prompt as ls_format_links
+from .link_store import get_link_map as ls_get_link_map
+from .link_store import get_related as ls_get_related
+from .link_store import save_article as ls_save_article
 from .multi_source_builder import build_multi_source_payload
+from .policy_engine import (
+    ArticleBudget,
+    calculate_dynamic_word_policy,
+    classify_article_type,
+    decide_draft_status,
+    should_run_ai_validator,
+)
+from .seo_title_optimizer import optimize_title
+from .store import Database
+from .submitters import build_submitter
 from .superfeed_policy import check_superfeed_policy
-from .editorial_validator import validate_editorial_quality, build_editorial_audit_report
-from .ai_validator import validate_and_fix_ai_json, expand_article_if_too_short
-from .entity_validator import validate_and_fix_entities
-from .image_localizer import localize_and_place_body_images, finalize_content_images
 from .task_queue import ArticleQueue
-from bs4 import BeautifulSoup
-from .cleaners import clean_html_for_globo_esporte
-from .tmdb import enrich_article_with_tmdb  # pacote dedicado tmdb/
-
+from .title_validator import TitleValidator
 
 logger = logging.getLogger(__name__)
 
@@ -102,19 +99,9 @@ BETWEEN_BATCH_DELAY_S = int(os.getenv('BETWEEN_BATCH_DELAY_S', 30))  # 30s entre
 BETWEEN_PUBLISH_DELAY_S = int(os.getenv('BETWEEN_PUBLISH_DELAY_S', 30))  # 30s entre publicaÃ§Ãµes
 ARTICLE_WATCHDOG_TIMEOUT_S = int(os.getenv('ARTICLE_WATCHDOG_TIMEOUT_S', 300))
 CLAIM_STALE_TIMEOUT_S = int(os.getenv('CLAIM_STALE_TIMEOUT_S', ARTICLE_WATCHDOG_TIMEOUT_S * 2))
-DEFAULT_FEATURED_MEDIA_ID = int(os.getenv('DEFAULT_FEATURED_MEDIA_ID', '0') or 0)
-DEFAULT_FEATURED_IMAGE_SEARCH = os.getenv('DEFAULT_FEATURED_IMAGE_SEARCH', '')
-PUBLISHER_DOMAIN = os.getenv('PUBLISHER_DOMAIN', '').lower().strip()
-BLOCKED_FEATURED_IMAGE_DOMAINS = {
-    'valor.globo.com',
-    'estadao.com.br',
-    'www.estadao.com.br',
-}
-BLOCKED_FEATURED_IMAGE_SOURCES = {
-    'valor',
-    'estadão',
-    'estadao',
-}
+
+# Versao do prompt canonico, registrada na proveniencia de cada draft.
+PROMPT_VERSION = os.getenv('MNSCR_PROMPT_VERSION', 'universal_prompt-ms1')
 
 CLEANER_FUNCTIONS = {
     'globo.com': clean_html_for_globo_esporte,
@@ -312,56 +299,6 @@ def _handle_ai_processing_failure(db: Database, article_id: int, reason: str) ->
     return 'QUEUED'
 
 
-def _domain_from_url(url: str) -> str:
-    try:
-        return urlparse(url or '').netloc.lower()
-    except Exception:
-        return ''
-
-
-def _is_blocked_featured_source(*, url: str = '', source_name: str = '') -> bool:
-    domain = _domain_from_url(url)
-    if domain in BLOCKED_FEATURED_IMAGE_DOMAINS:
-        return True
-    normalized_source = (source_name or '').strip().lower()
-    return normalized_source in BLOCKED_FEATURED_IMAGE_SOURCES
-
-
-def _pick_allowed_cluster_featured_image(art_data: Dict[str, Any]) -> Optional[str]:
-    for doc in art_data.get('cluster_docs', []):
-        candidate_url = doc.get('featured_image_url')
-        if not candidate_url or not is_valid_upload_candidate(candidate_url):
-            continue
-        if _is_blocked_featured_source(url=doc.get('url', ''), source_name=doc.get('source', '')):
-            continue
-        return candidate_url
-    return None
-
-
-def _resolve_featured_image_strategy(art_data: Dict[str, Any], extracted: Dict[str, Any]) -> tuple[Optional[str], bool]:
-    featured_image_url = extracted.get('featured_image_url')
-    if art_data.get('is_cluster'):
-        if allowed_cluster_url := _pick_allowed_cluster_featured_image(art_data):
-            if allowed_cluster_url != featured_image_url:
-                logger.info("[FEATURED_POLICY] Cluster trocou imagem bloqueada por imagem de outra fonte")
-            return allowed_cluster_url, False
-        if _is_blocked_featured_source(
-            url=art_data.get('url', ''),
-            source_name=art_data.get('feed_config', {}).get('source_name', ''),
-        ):
-            logger.info("[FEATURED_POLICY] Cluster sem imagem permitida. Usando imagem padrao.")
-            return None, True
-
-    if _is_blocked_featured_source(
-        url=art_data.get('url', ''),
-        source_name=art_data.get('feed_config', {}).get('source_name', ''),
-    ):
-        logger.info("[FEATURED_POLICY] Fonte bloqueada para imagem de destaque. Usando imagem padrao.")
-        return None, True
-
-    return featured_image_url, False
-
-
 def _image_candidate_url(candidate: Any) -> str:
     if isinstance(candidate, str):
         return candidate
@@ -486,27 +423,6 @@ def _filter_body_images_against_featured(images: List[Any], featured_image_url: 
             continue
         filtered.append(image)
     return filtered
-
-
-def _resolve_default_featured_media_id(wp_client: WordPressClient) -> Optional[int]:
-    if DEFAULT_FEATURED_MEDIA_ID > 0:
-        return DEFAULT_FEATURED_MEDIA_ID
-    if DEFAULT_FEATURED_IMAGE_SEARCH:
-        return wp_client.find_media_by_search(DEFAULT_FEATURED_IMAGE_SEARCH)
-    return None
-
-
-def _target_words_from_source(source_word_count: int, *, is_cluster: bool = False) -> int:
-    """Mantido para compatibilidade com modo cluster. Usar calculate_dynamic_word_policy para modo simples."""
-    if source_word_count >= 2500:
-        return 1200 if is_cluster else 1100
-    if source_word_count >= 1800:
-        return 1000 if is_cluster else 900
-    if source_word_count >= 1200:
-        return 850 if is_cluster else 700
-    if source_word_count >= 800:
-        return 750 if is_cluster else 600
-    return 750 if is_cluster else 500
 
 
 def get_ai_processor() -> AIProcessor:
@@ -757,7 +673,7 @@ def assess_content_quality(content_html: str, word_policy: Optional[Dict[str, An
     """
     Score multifatorial de qualidade para diagnostico editorial.
     Fatores: palavras, estrutura H2/H3, links internos, bloco editorial.
-    A decisao de robots fica centralizada em policy_engine.decide_index_status().
+    Score puramente diagnostico: alimenta warnings do draft, nunca aprova nada.
     """
     soup  = BeautifulSoup(content_html, "html.parser")
     text  = soup.get_text(separator=" ", strip=True)
@@ -771,8 +687,10 @@ def assess_content_quality(content_html: str, word_policy: Optional[Dict[str, An
 
     # 2. Estrutura hierÃ¡rquica (H3 dentro de H2 = profundidade real)
     structure_score = 0
-    if soup.find("h3"): structure_score += 20
-    if soup.find("h2"): structure_score += 10
+    if soup.find("h3"):
+        structure_score += 20
+    if soup.find("h2"):
+        structure_score += 10
     score += structure_score
     breakdown["structure"] = {
         "points": structure_score,
@@ -786,92 +704,22 @@ def assess_content_quality(content_html: str, word_policy: Optional[Dict[str, An
         if PUBLISHER_DOMAIN and PUBLISHER_DOMAIN in a["href"].lower()
     ]
     link_score = 0
-    if   len(int_links) >= 2: link_score = 20
-    elif len(int_links) >= 1: link_score = 10
+    if len(int_links) >= 2:
+        link_score = 20
+    elif len(int_links) >= 1:
+        link_score = 10
     score += link_score
     breakdown["internal_links"] = {"points": link_score, "count": len(int_links)}
 
-    # should_index é mantido apenas por compatibilidade com scripts legados.
-    # A decisão oficial de indexação deve vir de policy_engine.decide_index_status().
-    should_index = True
     reason = (
         f"score={score} | {words}w | length={length_score}({length_reason})"
         f" | structure={structure_score} | links={link_score}/{len(int_links)}"
-        f" | h3={'sim' if soup.find('h3') else 'nao'} -> {'INDEX' if should_index else 'NOINDEX'}"
+        f" | h3={'sim' if soup.find('h3') else 'nao'}"
     )
-    return {"should_index": should_index, "word_count": words,
+    return {"word_count": words,
             "score": score, "reason": reason, "internal_links": len(int_links),
             "has_h2": bool(soup.find("h2")), "has_h3": bool(soup.find("h3")),
             "score_breakdown": breakdown}
-
-
-def semantic_qa_flash(title: str, content_html: str) -> dict:
-    """
-    AvaliaÃ§Ã£o semÃ¢ntica via Gemini 2.5 Flash Lite â€” Camada 2 do QA.
-    Custo: ~$0.24/mÃªs. LatÃªncia: +0.5-1.5s por artigo.
-    Ativada APENAS para artigos com score borderline (35-50).
-    Detecta: CTA residual, valor informacional, tipo de conteÃºdo.
-    """
-    import json as _json
-    import requests as _requests
-
-    soup = BeautifulSoup(content_html, "html.parser")
-    text = soup.get_text(separator=" ", strip=True)[:2000]
-
-    prompt = f"""Avalie em 5 critÃ©rios. Responda APENAS em JSON, sem explicaÃ§Ã£o.
-TÃ­tulo: {title}
-Texto: {text}
-Retorne exatamente:
-{{
-  "has_original_value": true,
-  "originality_score": 72,
-  "has_cta_residual": false,
-  "content_type": "news",
-  "quality_note": "observaÃ§Ã£o em uma linha"
-}}
-has_original_value: true se o texto tem informaÃ§Ã£o factual Ãºnica (nÃ£o Ã© sÃ³ repasse genÃ©rico)
-originality_score: inteiro 0-100 medindo unicidade/originalidade (100=totalmente original, 0=cÃ³pia genÃ©rica sem valor)
-has_cta_residual: true se houver qualquer frase promoÃ§Ã£o/CTA do texto original (subscribe, clique, etc)
-content_type: "news" (notÃ­cia quente), "analysis" (anÃ¡lise/opiniÃ£o), ou "evergreen" (guia atemporal)
-quality_note: observaÃ§Ã£o editorial em uma linha"""
-
-    try:
-        if not AI_API_KEYS:
-            raise ValueError("Nenhuma chave de API disponÃ­vel")
-        api_key = AI_API_KEYS[0]
-        model_id = os.getenv("GEMINI_MODEL_ID", os.getenv("AI_MODEL", "gemini-3.1-flash-lite"))
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model_id}:generateContent?key={api_key}"
-        )
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": 256,
-                "responseMimeType": "application/json",
-            },
-        }
-        timeout_s = int(os.getenv("QA_LLM_TIMEOUT_S", "25"))
-        resp = None
-        for attempt in range(1, 3):
-            resp = _requests.post(url, json=payload, timeout=timeout_s)
-            if resp.status_code in {500, 502, 503, 504} and attempt == 1:
-                time.sleep(2)
-                continue
-            resp.raise_for_status()
-            break
-        if resp is None:
-            raise RuntimeError("Resposta vazia do QA semantico")
-        raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        # remover marcadores de bloco de cÃ³digo se presentes
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        return _json.loads(raw)
-    except Exception as exc:
-        logger.warning(f"[QA-LLM] Falha na avaliaÃ§Ã£o semÃ¢ntica: {exc}")
-        return {"has_original_value": True, "originality_score": 100, "has_cta_residual": False,
-                "content_type": "news", "quality_note": "erro_avaliaÃ§Ã£o"}
 
 
 def _get_article_url(article_data: Dict[str, Any]) -> Optional[str]:
@@ -905,17 +753,6 @@ def _is_blocked_category_name(name: Any) -> bool:
         return False
     aliased = CATEGORY_ALIASES.get(raw_name.lower(), raw_name)
     return _normalize_block_key(aliased) in _blocked_category_keys()
-
-
-def _filter_blocked_category_names(category_names: List[str]) -> tuple[List[str], List[str]]:
-    allowed: List[str] = []
-    blocked: List[str] = []
-    for name in category_names:
-        if _is_blocked_category_name(name):
-            blocked.append(name)
-        else:
-            allowed.append(name)
-    return allowed, blocked
 
 
 def _article_is_blocked_for_publication(article_data: Dict[str, Any]) -> tuple[bool, str]:
@@ -959,33 +796,6 @@ def _first_paragraph_text(content_html: str) -> str:
 BAD_HOSTS = {"sb.scorecardresearch.com", "securepubads.g.doubleclick.net"}
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
 
-def is_valid_upload_candidate(url: str) -> bool:
-    """Check if a URL points to a valid image for upload."""
-    if not url:
-        return False
-    try:
-        lower_url = url.lower()
-        p = urlparse(lower_url)
-        
-        if not p.scheme.startswith("http"):
-            return False
-        if p.netloc in BAD_HOSTS:
-            return False
-        if not p.path.endswith(IMG_EXTS):
-            return False
-        
-        if "author" in lower_url or "avatar" in lower_url:
-            return False
-            
-        dims = re.findall(r'[?&](?:w|width|h|height)=(\d+)', lower_url)
-        if any(int(d) <= 100 for d in dims):
-            return False
-            
-        return True
-    except Exception:
-        return False
-
-
 def _run_3phase_batch(
     batch_data: List[Dict[str, Any]],
     processor: "AIProcessor",
@@ -999,8 +809,8 @@ def _run_3phase_batch(
     Returns a list of (rewritten_data | None, error_msg | None) tuples,
     one per article, matching the format returned by AIProcessor.rewrite_batch.
     """
-    from .ai_sanitize import sanitize as _sanitize
     from .ai_rewrite import rewrite as _rewrite
+    from .ai_sanitize import sanitize as _sanitize
     from .ai_seo_pack import seo_pack as _seo_pack
 
     client = processor._ai_client
@@ -1049,7 +859,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
     processor = get_ai_processor()
     db = Database()
     extractor = ContentExtractor()
-    wp_client = WordPressClient(config=WORDPRESS_CONFIG, categories_map=WORDPRESS_CATEGORIES)
+    submitter = build_submitter(OUTPUT_MODE, local_dir=LOCAL_DRAFT_DIR)
 
     try:
         # Extract content for all articles first
@@ -1261,7 +1071,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
             if batch_count > 0:
                 logger.info(f"Aguardando {BETWEEN_BATCH_DELAY_S}s entre batches (garantindo processamento de qualidade)...")
                 time.sleep(BETWEEN_BATCH_DELAY_S)
-            
+
             batch_data = []
             for art in batch:
                 # â”€â”€ MODO CLUSTER: payload jÃ¡ montado â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1273,7 +1083,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                     ai_payload['word_policy'] = art.get('word_policy', {})
                     ai_payload['images'] = art['extracted'].get('images', [])
                     ai_payload['videos'] = art['extracted'].get('videos', [])
-                    ai_payload['domain'] = wp_client.get_domain()
+                    ai_payload['domain'] = PUBLISHER_DOMAIN
                     link_candidates = select_internal_links(
                         link_map=link_map,
                         article_title=ai_payload.get('title') or art.get('title', ''),
@@ -1300,13 +1110,13 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
 
                 # Calcular tamanho alvo proporcional à fonte
                 _source_word_count = len(main_text.split())
-                
+
                 _article_type_pre = classify_article_type(
                     title=extracted.get('title', ''),
                     source_words=_source_word_count,
                     db_id=art.get('db_id', '?')
                 )
-                
+
                 _word_policy = calculate_dynamic_word_policy(
                     source_words=_source_word_count,
                     article_type=_article_type_pre,
@@ -1369,7 +1179,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                     'videos': extracted.get('videos', []),
                     'images': extracted.get('images', []),
                     'source_name': art['feed_config'].get('source_name', ''),
-                    'domain': wp_client.get_domain(),
+                    'domain': PUBLISHER_DOMAIN,
                     'schema_original': extracted.get('schema_original'),
                     'link_block': _link_block,
                     'source_word_count': _source_word_count,
@@ -1388,6 +1198,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                 batch_count += 1
 
                 for art_data, (rewritten_data, failure_reason) in zip(batch, batch_results):
+                    _article_started_at = time.perf_counter()
                     try:
                         if not rewritten_data:
                             reason = failure_reason or 'AI processing failed'
@@ -1418,12 +1229,12 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             db_id=art_data['db_id'],
                             source_words=_source_words_for_policy,
                         )
-                        
+
                         # Main Writer Tokens
                         _main_in = rewritten_data.get('_input_tokens', 0)
                         _main_out = rewritten_data.get('_output_tokens', 0)
                         _main_tot = rewritten_data.get('_total_tokens', 0)
-                        
+
                         _budget.input_tokens = _main_in
                         _budget.output_tokens = _main_out
                         _budget.consume(tokens=_main_tot, stage='main_writer')
@@ -1519,7 +1330,6 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                                 reason='AI output missing required fields')
                             continue
 
-                        cta_removal_log = []
                         content_html, _ = strip_forbidden_cta_sentences(raw_content_html)
                         for _phrase in [
                             "Thank you for reading this post, don't forget to subscribe!",
@@ -1548,83 +1358,42 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         content_html = unescape_html_content(content_html)
                         content_html = validate_and_fix_figures(content_html)
                         extracted = art_data.get('extracted', {})
-                        featured_image_url, use_default_featured = _resolve_featured_image_strategy(
-                            art_data, extracted)
-                        body_images = _filter_body_images_against_featured(
-                            extracted.get('images', []),
-                            featured_image_url,
-                        )
                         content_html = remove_broken_image_placeholders(content_html)
                         content_html = downgrade_h1_to_h2(content_html)
                         content_html = strip_ai_tag_links(content_html)
                         content_html = strip_naked_internal_links(content_html)
-                        image_source_name = (
-                            (art_data.get('cluster_item') or {}).get('primary_source')
-                            or art_data.get('feed_config', {}).get('source_name', '')
-                        )
-                        content_html, localized_images = localize_and_place_body_images(
-                            content_html=content_html,
-                            images=body_images,
-                            image_captions=extracted.get('image_captions', {}),
-                            wp_client=wp_client,
-                            article_title=title,
-                            source_name=image_source_name,
-                            api_client=processor._ai_client if processor else None,
-                        )
-                        if localized_images:
-                            rewritten_data['_localized_body_images'] = localized_images
                         content_html = merge_videos_into_content(content_html, extracted.get('videos', []))
                         content_html = validate_and_fix_figures(content_html, ensure_figcaption=False)
-
-                        featured_media_id = None
-                        if featured_image_url and is_valid_upload_candidate(featured_image_url):
-                            media = wp_client.upload_media_from_url(featured_image_url, title)
-                            if media and media.get('id'):
-                                featured_media_id = media['id']
-                                logger.info(
-                                    "[FEATURED_LOCALIZED] post=%s origem=%s media_id=%s url_local=%s",
-                                    art_data["db_id"],
-                                    featured_image_url,
-                                    featured_media_id,
-                                    media.get("source_url", ""),
-                                )
-                        if use_default_featured and not featured_media_id:
-                            featured_media_id = _resolve_default_featured_media_id(wp_client)
-
                         content_html = strip_credits_and_normalize_youtube(content_html)
                         content_html = remove_source_domain_schemas(content_html)
+                        # Sanitizacao defensiva: remove script/style/form/handlers e
+                        # iframes nao-YouTube antes de o HTML sair do MNScr.
+                        content_html = hard_filter_forbidden_html(content_html)
 
-                        _t_step = time.perf_counter()
-                        final_category_ids = {WORDPRESS_CATEGORIES['Notícias']}
-                        if source_specific_names := SOURCE_CATEGORY_MAP.get(art_data['source_id']):
-                            for name in source_specific_names:
-                                if _is_blocked_category_name(name):
-                                    logger.warning(
-                                        "[CATEGORY_BLOCK] source category ignored db_id=%s name=%s",
-                                        art_data["db_id"],
-                                        name,
-                                    )
-                                    continue
-                                if cat_id := WORDPRESS_CATEGORIES.get(name):
-                                    final_category_ids.add(cat_id)
-                        if suggested_categories := rewritten_data.get('categorias', []):
-                            suggested_names = [c['nome'] for c in suggested_categories if isinstance(c, dict) and 'nome' in c]
-                            normalized_names = [CATEGORY_ALIASES.get(n.lower(), n) for n in suggested_names]
-                            allowed_names, blocked_names = _filter_blocked_category_names(normalized_names)
-                            if blocked_names:
-                                logger.warning(
-                                    "[CATEGORY_BLOCK] suggested categories ignored db_id=%s names=%s",
-                                    art_data["db_id"],
-                                    blocked_names,
-                                )
-                            if dynamic_ids := wp_client.resolve_category_names_to_ids(allowed_names):
-                                final_category_ids.update(dynamic_ids)
-                        logger.info(f'[POST_FEATURED_TIMING] done step=resolve_categories db_id={art_data["db_id"]} elapsed={time.perf_counter()-_t_step:.2f}s')
+                        # --- CATEGORIAS: apenas sugestoes (nomes), nunca IDs de CMS ---
+                        category_suggestions: List[str] = []
+
+                        def _suggest_category(name: Any) -> None:
+                            clean_name = str(name or '').strip()
+                            if not clean_name or _is_blocked_category_name(clean_name):
+                                return
+                            if clean_name not in category_suggestions:
+                                category_suggestions.append(clean_name)
+
+                        for _name in SOURCE_CATEGORY_MAP.get(art_data['source_id'], []):
+                            _suggest_category(_name)
+                        for _suggested in rewritten_data.get('categorias', []) or []:
+                            if isinstance(_suggested, dict) and _suggested.get('nome'):
+                                _raw_name = str(_suggested['nome'])
+                                _suggest_category(CATEGORY_ALIASES.get(_raw_name.lower(), _raw_name))
+                        rewritten_data['categorias'] = [
+                            {'nome': name} for name in category_suggestions
+                        ]
 
                         if link_map:
                             content_html = add_internal_links(
                                 html_content=content_html, link_map_data=link_map,
-                                current_post_categories=list(final_category_ids))
+                                current_post_categories=[])
 
                         credit_primary_url = art_data.get('url')
                         credit_additional_urls = []
@@ -1640,46 +1409,19 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         content_html = append_source_credit_block(content_html,
                             primary_url=credit_primary_url, additional_urls=credit_additional_urls)
 
-                        yoast_meta = rewritten_data.get('yoast_meta', {})
-                        if related_kws := rewritten_data.get('related_keyphrases'):
-                            yoast_meta['_yoast_wpseo_keyphrases'] = json.dumps([{'keyword': kw} for kw in related_kws])
-
-                        # --- QA Score ---
+                        # --- QA (diagnostico; warnings nunca viram aprovacao) ---
                         quality = assess_content_quality(content_html, word_policy=_word_policy)
-                        logger.info(f'[QA] {title[:50]} | {quality["reason"]}')
+                        logger.info('[QA] %s | %s', title[:50], quality["reason"])
                         logger.info(
                             "[QA_SCORE_BREAKDOWN] db_id=%s breakdown=%s",
                             art_data["db_id"],
                             quality.get("score_breakdown"),
                         )
 
-                        # --- QA-LLM: condicional ---
-                        qa2 = None
-                        _final_cta_found = False
-                        _qa_llm_decision = should_run_qa_llm(
-                            structural_score=quality['score'], publish_allowed=True,
-                            index_allowed=True,
-                            article_type=_article_type, db_id=art_data['db_id'],
-                        )
-                        if _qa_llm_decision['run'] and _budget.has_budget('qa_llm', 2000):
-                            logger.info('[GEMINI_CALL] stage=qa_llm db_id=%s score=%s',
-                                art_data['db_id'], quality['score'])
-                            qa2 = semantic_qa_flash(title, content_html)
-                            _budget.consume(tokens=1500, stage='qa_llm')
-                            if qa2:
-                                _orig = qa2.get('originality_score')
-                                _verdict = (
-                                    'pass' if (_orig is None or _orig >= QA_LLM_MIN_ORIGINALITY)
-                                    else 'low_originality'
-                                )
-                                logger.info(
-                                    '[QA_LLM_DECISION] run=true originality=%s min=%s verdict=%s db_id=%s',
-                                    _orig, QA_LLM_MIN_ORIGINALITY, _verdict, art_data['db_id'],
-                                )
-
+                        draft_warnings: List[str] = []
                         final_cta_match = detect_forbidden_cta(content_html)
-                        _final_cta_found = bool(final_cta_match)
-                        if _final_cta_found:
+                        if final_cta_match:
+                            draft_warnings.append('CTA_RESIDUAL: ' + str(final_cta_match))
                             logger.warning('[CTA_CHECK] CTA residual: %s db_id=%s',
                                 final_cta_match, art_data['db_id'])
 
@@ -1711,324 +1453,157 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             _editorial_result['ok'], _editorial_result['status'],
                             _editorial_result['content_type'], _editorial_result['word_count'],
                             _editorial_result['issues'] or 'none')
+                        draft_warnings.extend(_editorial_result.get('issues') or [])
+
                         if not _editorial_result['ok']:
-                            db.update_article_status(art_data['db_id'], 'FAILED',
-                                reason='EDITORIAL_QA: ' + '; '.join(_editorial_result['issues']))
+                            db.record_draft_failure(
+                                art_data['db_id'],
+                                reason='EDITORIAL_QA: ' + '; '.join(_editorial_result['issues']),
+                            )
                             continue
 
-                        # --- PUBLISH DECISION ---
-                        _publish_decision = decide_publish_status(
+                        # --- DECISAO DE DRAFT (nunca publicacao, nunca aprovacao) ---
+                        _draft_decision = decide_draft_status(
                             content_html=content_html, title=title,
                             db_id=art_data['db_id'], structural_score=quality['score'],
                         )
-                        if not _publish_decision['allowed']:
-                            db.update_article_status(art_data['db_id'], 'FAILED',
-                                reason=f'PUBLISH_BLOCKED: {_publish_decision["reason"]}')
-                            continue
-                        logger.info('[PUBLISH_DECISION] allowed=true reason=%s db_id=%s',
-                            _publish_decision['reason'], art_data['db_id'])
-
-                        # --- INDEX DECISION ---
-                        _index_decision = decide_index_status(
-                            structural_score=quality['score'], publish_allowed=True,
-                            db_id=art_data['db_id'],
-                            editorial_issues=_editorial_result.get('issues') or [],
-                            content_type=_editorial_result.get('content_type') or _article_type,
-                            word_count=int(_editorial_result.get('word_count') or 0),
-                            internal_links=int(quality.get('internal_links') or 0),
-                            min_acceptable_words=int(_word_policy.get('min_acceptable_words') or 0),
-                            editorial_status=_editorial_result.get('status') or '',
-                            qa_llm_result=qa2,
-                        )
-                        _index_allowed = _index_decision['allowed']
-                        noindex_value = _index_decision['noindex_value']
-                        logger.info(
-                            '[INDEX_DECISION_CONFIRM] allowed=%s reason=%s robots=%s score=%s links_int=%s words=%s db_id=%s',
-                            _index_allowed,
-                            _index_decision['reason'],
-                            _index_decision['robots'],
-                            quality['score'],
-                            quality.get('internal_links'),
-                            int(_editorial_result.get('word_count') or 0),
-                            art_data['db_id'],
-                        )
-
-                        _budget.report(publish=True, index=_index_allowed,
-                            robots=_index_decision['robots'], score=quality['score'])
-
-                        # --- TMDB ENRICHMENT: injeta bloco informativo para artigos de filmes/séries ---
-                        try:
-                            _article_category = art_data.get("category", "")
-                            content_html, _tmdb_titles = enrich_article_with_tmdb(
-                                content_html=content_html,
-                                title=title,
-                                category=_article_category,
+                        if not _draft_decision['allowed']:
+                            db.record_draft_failure(
+                                art_data['db_id'],
+                                reason='DRAFT_BLOCKED: ' + str(_draft_decision["reason"]),
                             )
-                            if _tmdb_titles:
-                                logger.info(
-                                    "[TMDB_ENRICHER] Bloco(s) injetado(s) para: %s | db_id=%s",
-                                    ", ".join(_tmdb_titles),
-                                    art_data["db_id"],
-                                )
-                        except Exception as _tmdb_exc:
-                            logger.warning("[TMDB_ENRICHER] Falha não-fatal: %s db_id=%s", _tmdb_exc, art_data.get("db_id"))
+                            continue
 
-                        content_html, localized_images = finalize_content_images(
-                            content_html=content_html,
-                            wp_client=wp_client,
-                            article_title=title,
-                            post_ref=art_data["db_id"],
-                            localized_images=localized_images,
-                        )
-                        rewritten_data['_localized_body_images'] = localized_images
-
-                        # Converter conteudo para formato de blocos Gutenberg (WordPress padrao)
-                        _t_step = time.perf_counter()
-                        gutenberg_content = html_to_gutenberg_blocks(content_html)
-                        logger.info(f"[POST_FEATURED_TIMING] done step=gutenberg_blocks db_id={art_data['db_id']} elapsed={time.perf_counter()-_t_step:.2f}s")
-
-                        # --- FINAL PRE-PUBLISH CLEANUP: casing, captions, dedup ---
-                        gutenberg_content = final_pre_publish_cleanup(
-                            gutenberg_content,
+                        # --- NORMALIZACAO FINAL DE TEXTO ---
+                        content_html = final_pre_publish_cleanup(
+                            content_html,
                             title=title,
                             db_id=art_data["db_id"],
                         )
-                        # Apply casing to scalar fields before post_payload
                         title = apply_final_field_casing(title)
                         subtitle_final = apply_final_field_casing(subtitle_final)
                         meta_description_final = apply_final_field_casing(meta_description_final)
-                        excerpt_final = subtitle_final or meta_description_final
-                        if not subtitle_final and excerpt_final:
-                            logger.info(
-                                "[EXCERPT] subtitle missing; using meta_description as WordPress excerpt db_id=%s chars=%s",
-                                art_data["db_id"],
-                                len(excerpt_final),
-                            )
 
-                        
-                        # Log qual chave de API foi usada para processar este artigo
-                        api_key_used = processor._ai_client.get_last_used_key() if processor and processor._ai_client else "UNKNOWN"
-                        final_slug = str(rewritten_data.get('slug') or 'sem-slug').strip().lower()
+                        final_slug = str(rewritten_data.get('slug') or '').strip().lower() or None
                         rewritten_data['slug'] = final_slug
-                        logger.info("[SLUG_NORMALIZED] slug=%s db_id=%s", final_slug, art_data["db_id"])
-                        
-                        # Publish to WordPress immediately (but processing was done in batch of 3)
-                        post_payload = {
-                            'title': title,
-                            'slug': final_slug,
-                            'content': gutenberg_content,  # â† Usando formato Gutenberg
-                            'excerpt': excerpt_final,
-                            'categories': list(final_category_ids),
-                            'tags': rewritten_data.get('tags_sugeridas', []),
-                            'featured_media': featured_media_id,
-                            'meta': yoast_meta,
-                        }
+                        logger.info("[SLUG_SUGGESTION] slug=%s db_id=%s", final_slug, art_data["db_id"])
 
-                        logger.info(f"[POST_FEATURED_TIMING] start step=create_post db_id={art_data['db_id']} source={art_data['source_id']} featured_media_id={featured_media_id}")
+                        # --- CONSTRUCAO DO DRAFT EDITORIAL ---
+                        draft = build_editorial_draft(
+                            art_data=art_data,
+                            rewritten=rewritten_data,
+                            body_html=content_html,
+                            title=title,
+                            subtitle=subtitle_final,
+                            meta_description=meta_description_final,
+                            warnings=draft_warnings,
+                            model_provider='google',
+                            model_name=(
+                                processor._ai_client.get_last_used_model()
+                                if processor and processor._ai_client else None
+                            ),
+                            prompt_version=PROMPT_VERSION,
+                            duration_ms=int((time.perf_counter() - _article_started_at) * 1000),
+                        )
+
+                        blocking_errors = validate_draft(draft)
+                        if blocking_errors:
+                            draft.blocking_errors = blocking_errors
+                            draft.status = DRAFT_FAILED
+                            logger.error(
+                                '[DRAFT_INVALID] db_id=%s draft_id=%s errors=%s',
+                                art_data['db_id'], draft.draft_id, blocking_errors,
+                            )
+                            db.record_draft_failure(
+                                art_data['db_id'],
+                                reason='DRAFT_VALIDATION: ' + '; '.join(blocking_errors),
+                                draft_id=draft.draft_id,
+                                draft_output_hash=draft.provenance.output_hash,
+                                draft_revision=draft.revision,
+                            )
+                            continue
+
+                        _budget.report(
+                            draft_id=draft.draft_id,
+                            draft_generated=True,
+                            score=quality['score'],
+                        )
+
+                        # --- SUBMISSAO (nunca publicacao) ---
                         claim_owner = art_data.get("_claim_owner")
                         if claim_owner and not db.article_claim_is_current(art_data["db_id"], claim_owner):
                             logger.warning(
-                                "[CLAIM_LOST] artigo %s nao pertence mais a este worker; abortando antes do WordPress",
+                                "[CLAIM_LOST] artigo %s nao pertence mais a este worker; abortando antes da submissao",
                                 art_data["db_id"],
                             )
                             continue
-                        wp_post_id = wp_client.create_post(post_payload)
-                        logger.info(f"[POST_FEATURED_TIMING] done step=create_post db_id={art_data['db_id']} wp_post_id={wp_post_id}")
-                        published_recorded = False
-                        if wp_post_id and wp_post_id > 0:  # Verificar que Ã© ID vÃ¡lido
-                            published_recorded = db.save_processed_post(
+
+                        result = submitter.submit(draft)
+                        logger.info(
+                            '[DRAFT_SUBMIT] draft_id=%s destino=%s status=%s ok=%s path=%s',
+                            draft.draft_id, result.destination, result.status,
+                            result.success, result.artifact_path,
+                        )
+
+                        if not result.success:
+                            db.record_draft_failure(
                                 art_data['db_id'],
-                                wp_post_id,
-                                claimed_by=claim_owner,
+                                reason='SUBMISSION_' + str(result.status) + ': ' + str(result.error or ''),
+                                draft_id=draft.draft_id,
+                                draft_output_hash=draft.provenance.output_hash,
+                                draft_revision=draft.revision,
+                                submission_destination=result.destination,
+                                submission_status=result.status,
+                                submission_error=result.error,
+                                artifact_path=result.artifact_path,
                             )
-                            if not published_recorded:
-                                logger.error(
-                                    "[CLAIM_LOST] artigo %s perdeu o claim antes de registrar o post %s",
-                                    art_data["db_id"],
-                                    wp_post_id,
-                                )
-                                continue
-                            wp_post_details = wp_client.get_last_created_post_details()
-                            if featured_media_id:
-                                observed_featured_media = wp_post_details.get('featured_media')
-                                if int(observed_featured_media or 0) != int(featured_media_id):
-                                    logger.warning(
-                                        "[POST_FEATURED_TIMING] retry step=ensure_featured_media db_id=%s wp_post_id=%s requested=%s observed=%s",
-                                        art_data["db_id"],
-                                        wp_post_id,
-                                        featured_media_id,
-                                        observed_featured_media,
-                                    )
-                                    featured_ok = wp_client.set_post_featured_media(
-                                        wp_post_id,
-                                        featured_media_id,
-                                        max_attempts=10,
-                                    )
-                                    if featured_ok:
-                                        wp_post_details = wp_client.get_last_created_post_details()
-                                        logger.info(
-                                            "[POST_FEATURED_TIMING] done step=ensure_featured_media db_id=%s wp_post_id=%s featured_media_id=%s",
-                                            art_data["db_id"],
-                                            wp_post_id,
-                                            featured_media_id,
-                                        )
-                                    else:
-                                        logger.error(
-                                            "[POST_FEATURED_TIMING] failed step=ensure_featured_media db_id=%s wp_post_id=%s featured_media_id=%s",
-                                            art_data["db_id"],
-                                            wp_post_id,
-                                            featured_media_id,
-                                        )
-                            wp_post_url = (
-                                wp_post_details.get('link')
-                                or f"{(WORDPRESS_CONFIG.get('url') or '').rstrip('/')}/?p={wp_post_id}"
-                            ).strip()
-                            wp_post_published_at = wp_post_details.get('date_gmt') or wp_post_details.get('date')
-                            actual_wp_categories = set(wp_post_details.get('categories') or list(final_category_ids))
-                            actual_wp_tags = wp_post_details.get('tags') or post_payload.get('tags', [])
-                            publish_ready_for_indexing = False
-                            try:
-                                # âœ… UPDATE YOAST SEO METADATA (forÃ§a OG:Image para imagem do site + metadados)
-                                seo_meta = {
-                                    'title': rewritten_data.get('seo_title', title)[:70],
-                                    'description': rewritten_data.get('meta_description', '')[:160],
-                                    'focuskw': rewritten_data.get('focus_keyword', rewritten_data.get('tags_sugeridas', [''])[0])[:30],
-                                    'title_pt': title[:70],
-                                    'description_pt': rewritten_data.get('meta_description', '')[:160],
-                                    'noindex': noindex_value,
-                                    'nofollow': '0',
-                                }
-                                yoast_ok = wp_client.update_post_yoast_seo(wp_post_id, featured_media_id, seo_meta)
-                                if not yoast_ok:
-                                    logger.warning(f"âš ï¸  Falha ao atualizar Yoast SEO para post {wp_post_id}, continuando anyway...")
-                                logger.info(
-                                    "[WP_ROBOTS] post_id=%s robots=%s db_id=%s",
-                                    wp_post_id,
-                                    "index,follow" if noindex_value == "0" else "noindex,follow",
-                                    art_data["db_id"],
-                                )
-                                
-                                # âœ… ADD GOOGLE NEWS META TAGS (otimizaÃ§Ã£o para Google News)
-                                news_meta = {
-                                    'keywords': rewritten_data.get('tags_sugeridas', []),
-                                    'genres': 'Blog, News',
-                                    'standout': False,
-                                    'access': 'Free',
-                                }
-                                news_ok = wp_client.add_google_news_meta(wp_post_id, news_meta)
-                                if not news_ok:
-                                    logger.debug(f"Google News meta tags nÃ£o foram adicionados (nÃ£o crÃ­tico)")
-                                
-                                sanitized_ok = wp_client.sanitize_published_post(wp_post_id)
-                                if sanitized_ok:
-                                    logger.info(f"PUBLICADO: Post {wp_post_id} | {title[:70]}")
-                                    logger.info(f"  URL no WordPress: {wp_post_url}")
-                                    logger.info(f"  Categorias: {actual_wp_categories}")
-                                    logger.info(f"  Tags: {rewritten_data.get('tags_sugeridas', [])}")
-                                    logger.debug(f"  API Key: {api_key_used}")
-                                    
-                                    # âœ… SALVAR JSON COM SLUG (para fÃ¡cil localizaÃ§Ã£o)
-                                    slug = final_slug
-                                    timestamp = time.strftime("%Y%m%d-%H%M%S")
-                                    json_filename = f"debug/ai_response_batch_{slug}_{timestamp}.json"
-                                    json_path = Path(json_filename)
-                                    
-                                    # Salvar o rewritten_data como JSON
-                                    with open(json_path, 'w', encoding='utf-8') as f:
-                                        json.dump(rewritten_data, f, indent=2, ensure_ascii=False)
-                                    logger.info(f"  JSON salvo em: {json_filename}")
-                                    
-                                    # âœ… REGISTRAR wp_post_id NOS TOKENS
-                                    from .token_tracker import log_tokens
-                                    log_tokens(
-                                        prompt_tokens=0,
-                                        completion_tokens=0,
-                                        api_type="publishing",
-                                        model="wordpress",
-                                        metadata={"operation": "published", "original_url": art_data.get('url', 'N/A'), "slug": slug},
-                                        source_url=art_data.get('url', 'N/A'),
-                                        wp_post_id=wp_post_id,
-                                        article_title=title
-                                    )
+                            continue
 
-                                    # âœ… EVENT SCORING â€” desabilitado temporariamente (evergreen pausado)
-                                    from .cluster_engine import score_event
-                                    event = score_event({
-                                        "title":   title,
-                                        "content": content_html,
-                                        "tags":    rewritten_data.get("tags_sugeridas", []),
-                                    })
-                                    # schedule_cluster_pages desabilitado â€” evergreen pausado
+                        recorded = db.record_draft_generated(
+                            art_data['db_id'],
+                            draft_id=draft.draft_id,
+                            draft_output_hash=draft.provenance.output_hash,
+                            draft_revision=draft.revision,
+                            artifact_path=result.artifact_path,
+                            submission_destination=result.destination,
+                            submission_status=result.status,
+                            claimed_by=claim_owner,
+                        )
+                        if not recorded:
+                            logger.error(
+                                "[CLAIM_LOST] artigo %s perdeu o claim antes de registrar o draft %s",
+                                art_data["db_id"], draft.draft_id,
+                            )
+                            continue
 
-                                    # âœ… LINK STORE â€” salvar artigo publicado para links internos futuros
-                                    ls_save_article(
-                                        title=title,
-                                        url=wp_post_url,
-                                        category=art_data['category'],
-                                        entity=event.get("entity", ""),
-                                    )
-                                    logger.debug(f"[LINKS] Salvo no link_store: {title[:50]}")
-                                    publish_ready_for_indexing = _index_allowed
-                                    if not _index_allowed:
-                                        logger.info(
-                                            "[INDEX_NOTIFY] Pulando indexacao instantanea: post %s e noindex. db_id=%s",
-                                            wp_post_id,
-                                            art_data['db_id'],
-                                        )
-                                else:
-                                    logger.warning(f"Post {wp_post_id} criado mas sanitation falhou")
-                            except Exception as e:
-                                logger.error(f"Erro sanitizando post {wp_post_id}: {e}")
+                        logger.info("DRAFT GERADO: %s | %s", draft.draft_id, title[:70])
 
-                            if not published_recorded:
-                                published_recorded = db.save_processed_post(
-                                    art_data['db_id'],
-                                    wp_post_id,
-                                    claimed_by=claim_owner,
-                                )
-                                if not published_recorded:
-                                    continue
-                            if art_data.get('is_cluster'):
-                                event_key = (art_data.get('cluster_item') or {}).get('event_key', '')
-                                cluster_urls = (art_data.get('cluster_item') or {}).get('urls') or [art_data.get('url')]
-                                db.register_covered_urls(event_key, cluster_urls, art_data['db_id'])
-                                logger.info(
-                                    "[SUPERFEED_COVERAGE] URLs registradas apos sucesso editorial/publicacao "
-                                    "event_key=%s seen_article_id=%s wp_post_id=%s",
-                                    event_key,
-                                    art_data['db_id'],
-                                    wp_post_id,
-                                )
+                        # Link store: alimenta sugestoes de links internos futuros.
+                        from .cluster_engine import score_event
+                        event = score_event({
+                            "title":   title,
+                            "content": content_html,
+                            "tags":    rewritten_data.get("tags_sugeridas", []),
+                        })
+                        ls_save_article(
+                            title=title,
+                            url=result.artifact_path or draft.draft_id,
+                            category=art_data['category'],
+                            entity=event.get("entity", ""),
+                        )
 
-                            if publish_ready_for_indexing:
-                                try:
-                                    from .indexing_service import notify_post_published
+                        if art_data.get('is_cluster'):
+                            event_key = (art_data.get('cluster_item') or {}).get('event_key', '')
+                            cluster_urls = (art_data.get('cluster_item') or {}).get('urls') or [art_data.get('url')]
+                            db.register_covered_urls(event_key, cluster_urls, art_data['db_id'])
+                            logger.info(
+                                "[SUPERFEED_COVERAGE] URLs registradas apos draft "
+                                "event_key=%s seen_article_id=%s draft_id=%s",
+                                event_key, art_data['db_id'], draft.draft_id,
+                            )
 
-                                    notify_result = notify_post_published(
-                                        url=wp_post_url,
-                                        post_id=wp_post_id,
-                                        title=title,
-                                        date_published=wp_post_published_at,
-                                        slug=final_slug,
-                                        categories=list(actual_wp_categories),
-                                        tags=actual_wp_tags,
-                                    )
-                                    logger.info(
-                                        "[INDEX_NOTIFY] ok=%s | queued=%s | processed=%s | url=%s",
-                                        notify_result.get('ok'),
-                                        notify_result.get('queued'),
-                                        notify_result.get('processed'),
-                                        wp_post_url,
-                                    )
-                                except Exception as index_exc:
-                                    logger.error(f"Falha ao notificar indexador para post {wp_post_id}: {index_exc}")
-                            
-                            # Small delay between posts
-                            logger.info(f"Aguardando {BETWEEN_PUBLISH_DELAY_S}s para proximo...")
-                            time.sleep(BETWEEN_PUBLISH_DELAY_S)
-                        else:
-                            logger.error(f"FALHA PUBLICACAO: {title[:70]}")
-                            db.update_article_status(art_data['db_id'], 'FAILED', reason="WordPress publishing failed")
+                        logger.info("Aguardando %ss para o proximo artigo...", BETWEEN_PUBLISH_DELAY_S)
+                        time.sleep(BETWEEN_PUBLISH_DELAY_S)
 
                     except Exception as e:
                         logger.error(f"Error processing article result {art_data['title']}: {e}", exc_info=True)
@@ -2037,33 +1612,19 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
             except Exception as e:
                 logger.error(f"Error processing batch: {e}", exc_info=True)
                 # Se o lote falhar (ex: JSON malformado da IA), tente processar individualmente
-                logger.warning("Batch processing failed. Attempting to process articles individually.")
                 for art in batch:
-                    try:
-                        logger.info(f"Retrying article individually: {art['title']}")
-                        # Recriar o payload para um Ãºnico artigo
-                        single_batch_data = [{
-                            'title': art['extracted'].get('title'),
-                            'content_html': art['extracted'].get('content', ''),
-                            'source_url': art['url'], 'category': art['category'], 'videos': art['extracted'].get('videos', []),
-                            'images': art['extracted'].get('images', []), 'source_name': art['feed_config'].get('source_name', ''),
-                            'domain': wp_client.get_domain(), 'schema_original': art['extracted'].get('schema_original')
-                        }]
-                        # Chame o processador de IA com um Ãºnico item
-                        single_results = processor.rewrite_batch(single_batch_data)
-                        # A lÃ³gica de processamento do resultado jÃ¡ estÃ¡ dentro do loop, entÃ£o podemos reusÃ¡-la
-                        # (Esta Ã© uma simplificaÃ§Ã£o; uma refatoraÃ§Ã£o maior poderia extrair a lÃ³gica de publicaÃ§Ã£o)
-                    except Exception as individual_e:
-                        logger.error(f"Individual retry for article {art['title']} also failed: {individual_e}", exc_info=True)
-                        db.update_article_status(art['db_id'], 'FAILED', reason=f"Individual retry failed: {individual_e}")
+                    db.record_draft_failure(
+                        art['db_id'],
+                        reason='BATCH_FAILURE: ' + str(e),
+                    )
 
     finally:
         db.close()
-        wp_client.close()
+
 
 def worker_loop():
     """Continuously process articles from the queue in batches.
-    
+
     Respects:
     - Max 10 AI requests per cycle (to avoid RPM violations)
     - 5-minute pause after hitting request limit
@@ -2117,7 +1678,7 @@ def worker_loop():
         # Get articles from queue (batch size 1)
         articles = []
         start_wait = time.time()
-        
+
         # Wait up to QUEUE_TIMEOUT_S for an article to appear in queue
         while time.time() - start_wait < QUEUE_TIMEOUT_S:
             if _worker_pause_requested.is_set():
@@ -2146,13 +1707,13 @@ def worker_loop():
         if not articles:
             # Still no articles after timeout, reset cycle counter and continue
             logger.debug("[WORKER] Nenhum artigo na fila apÃ³s timeout de 30s")
-            
+
             # Reset cycle counter after quiet period (2 minutos sem processar)
             if time.time() - last_pause_time > 120:
                 logger.info("[RPM PROTECTION] PerÃ­odo de inatividade detectado. Resetando contador de requisiÃ§Ãµes.")
                 requests_in_cycle = 0
                 last_pause_time = time.time()
-            
+
             time.sleep(5)  # Esperar 5s antes de tentar novamente
             continue
         # Refresh link_map before processing to pick up articles published this session
@@ -2180,7 +1741,7 @@ def worker_loop():
         requests_in_cycle += len(articles)
         last_pause_time = time.time()  # Atualizar timestamp de Ãºltima atividade
         _worker_idle.set()
-        
+
         logger.info(
             f"Worker: {len(articles)} artigos processados. "
             f"Total requisiÃ§Ãµes neste ciclo: {requests_in_cycle}/{MAX_REQUESTS_PER_CYCLE}. "
@@ -2194,7 +1755,7 @@ def _handle_watchdog_timeout(article: Dict[str, Any]) -> bool:
 
     ThreadPoolExecutor cannot kill a running thread. Releasing its claim here
     would let another worker publish the same article while the original
-    thread can still reach WordPress and the posts table.
+    thread can still be writing the draft artifact and the database.
     """
     article_id = article.get("db_id") or article.get("id")
     if article_id is None:
@@ -2210,9 +1771,9 @@ def _handle_watchdog_timeout(article: Dict[str, Any]) -> bool:
     db = Database()
     try:
         status = db.get_article_status(int(article_id))
-        if status == "PUBLISHED" or db.has_processed_post(int(article_id)):
+        if status in (DRAFT_GENERATED, DRAFT_FAILED):
             logger.warning(
-                "[WATCHDOG] artigo %s ja possui publicacao registrada; nao re-enfileirando",
+                "[WATCHDOG] artigo %s ja possui draft registrado; nao re-enfileirando",
                 article_id,
             )
             return False
@@ -2243,13 +1804,6 @@ def run_pipeline_cycle():
 
     logger.info("Starting new pipeline ingestion cycle.")
 
-    # EVERGREEN: pausado temporariamente
-    # from .evergreen_publisher import process_evergreen_queue
-    # ev_count = process_evergreen_queue(max_per_cycle=2)
-    # if ev_count:
-    #     logger.info(f"[CYCLE] {ev_count} evergreen(s) publicado(s) neste ciclo")
-    logger.debug("[CYCLE] Evergreen pausado.")
-
     db = Database()
     stale_result = db.recover_stale_processing_claims(
         stale_seconds=CLAIM_STALE_TIMEOUT_S,
@@ -2259,7 +1813,7 @@ def run_pipeline_cycle():
         logger.info("[CLAIM_STALE] recovery=%s", stale_result)
 
     feed_reader = FeedReader(user_agent=PIPELINE_CONFIG.get('publisher_name', 'Bot'))
-    
+
     processed_total_in_cycle = 0
     superfeed_coverage: Dict[str, Dict[str, Any]] = {}
 
@@ -2392,7 +1946,7 @@ def run_pipeline_cycle():
                             superseded_count,
                             removed_queue_count,
                         )
-            
+
             processed_total_in_cycle += len(new_articles)
             logger.info(f"Enqueued {len(new_articles)} articles from {source_id}. Total in cycle: {processed_total_in_cycle}.")
 
@@ -2401,7 +1955,7 @@ def run_pipeline_cycle():
         except Exception as e:
             logger.error(f"Error processing feed {source_id}: {e}", exc_info=True)
             db.increment_consecutive_failures(source_id)
-        
+
         # Stagger feed processing
         time.sleep(int(os.getenv('FEED_STAGGER_S', 45)))
 

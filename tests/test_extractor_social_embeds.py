@@ -6,7 +6,6 @@ from app.extractor import (
     _collect_x_embeds,
 )
 
-
 TWEET = """
 <figure class="wp-block-embed is-provider-x">
   <div class="wp-block-embed__wrapper">

@@ -6,13 +6,15 @@ Demonstra funcionamento do TitleValidator.
 """
 
 import sys
+
 from app.title_validator import TitleValidator
+
 
 def test_titles():
     """Testa uma bateria de títulos bons e ruins."""
-    
+
     validator = TitleValidator()
-    
+
     test_cases = [
         # ✅ TÍTULOS BONS (devem passar)
         {
@@ -35,7 +37,7 @@ def test_titles():
             "expected": "VÁLIDO",
             "category": "✅ BOM"
         },
-        
+
         # ❌ TÍTULOS COM ERROS (devem ser rejeitados)
         {
             "title": "O que causou a queda surpreendente de Batman?",
@@ -62,7 +64,7 @@ def test_titles():
             "expected": "ERRO",
             "category": "❌ RUIM (termo vazio)"
         },
-        
+
         # ⚠️ TÍTULOS COM AVISOS (corrigível automaticamente)
         {
             "title": "Série de Batman é nerfada por DC Studios",
@@ -80,55 +82,55 @@ def test_titles():
             "category": "⚠️ AVISO (regência)"
         },
     ]
-    
+
     print("=" * 80)
     print("🎯 TESTE DE VALIDAÇÃO DE TÍTULOS (REGRAS EDITORIAIS)")
     print("=" * 80)
     print()
-    
+
     passed = 0
     failed = 0
-    
+
     for i, test in enumerate(test_cases, 1):
         title = test["title"]
         expected = test["expected"]
         category = test["category"]
-        
+
         result = validator.validate(title)
         status = result['status']
-        
+
         # Verificar resultado
         match = "✅ PASS" if status == expected else "❌ FAIL"
         if status == expected:
             passed += 1
         else:
             failed += 1
-        
+
         print(f"{i}. {category}")
         print(f"   Título: \"{title}\"")
         print(f"   Status esperado: {expected} | Obtido: {status} | {match}")
-        
+
         if result['erros']:
-            print(f"   ❌ Erros:")
+            print("   ❌ Erros:")
             for err in result['erros']:
                 print(f"      {err}")
-        
+
         if result['avisos']:
-            print(f"   ⚠️  Avisos:")
+            print("   ⚠️  Avisos:")
             for warn in result['avisos']:
                 print(f"      {warn}")
-            
+
             # Se há avisos, mostrar correção sugerida
             corrected = validator.suggest_correction(title)
             if corrected != title:
                 print(f"   ✅ Sugestão de correção: \"{corrected}\"")
-        
+
         print()
-    
+
     print("=" * 80)
     print(f"📊 RESULTADOS: {passed} passou ✅ | {failed} falhou ❌")
     print("=" * 80)
-    
+
     return failed == 0
 
 if __name__ == "__main__":

@@ -7,8 +7,8 @@ restarts and avoids losing queued articles on crashes.
 import json
 import logging
 import sqlite3
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 from .config import RSS_FEEDS

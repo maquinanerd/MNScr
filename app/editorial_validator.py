@@ -8,9 +8,9 @@ meta, subtitle, schema, CTAs residuais e fontes.
 Retorna um dict padrao com 'ok', 'status' e 'issues'.
 Nao faz chamadas externas. Nao publica. Nao altera banco.
 """
-import re
 import logging
-from typing import Dict, Any, List, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup
 
@@ -87,12 +87,16 @@ _RAW_URL = re.compile(r"(?<![\"'=])(https?://\S{10,})", re.IGNORECASE)
 # Deteccao de tipo editorial
 # ---------------------------------------------------------------------------
 
-def detect_content_type(title: str, content_text: str) -> str:
+def detect_content_type(title: str, content_text: str, content_html: str = "") -> str:
     """Identifica o tipo editorial da materia com base em sinais no titulo e texto.
 
-    Regra de proteção: notícia factual curta (<= 600 palavras) nunca é
-    classificada como guide ou listicle apenas por palavras no título.
-    Isso evita CONTENT_TOO_THIN indevido em notícias simples.
+    Regra de protecao: noticia factual curta (<= 600 palavras) nao e classificada
+    como guide ou listicle apenas por palavras no titulo. Isso evita
+    CONTENT_TOO_THIN indevido em noticias simples.
+
+    A protecao so se aplica quando existe corpo suficiente para julgar. Sem corpo,
+    o sinal do titulo decide. E ela nunca sobrepoe o sinal estrutural: um corpo com
+    varios H2 numerados e uma lista real, independentemente do tamanho.
     """
     combined = f"{title} {content_text[:2000]}"
     word_count = len(content_text.split())
@@ -102,13 +106,18 @@ def detect_content_type(title: str, content_text: str) -> str:
     if _REVIEW_PATTERNS.search(combined):
         return "review"
 
-    # Proteção: conteúdo curto não é guide/listicle por padrão
-    is_short_factual = word_count <= 600
+    # A heuristica estrutural precisa de HTML; content_text ja vem sem tags.
+    structural_list = _listicle_by_h2_count(content_html or content_text)
 
-    if _LISTICLE_PATTERNS.search(combined) or _listicle_by_h2_count(content_text):
-        if is_short_factual:
-            # Fonte curta com sinal de lista = provavelmente notícia sobre lista,
-            # não uma lista real de itens extensos
+    # Protecao: conteudo curto nao e guide/listicle por padrao.
+    # Sem corpo (word_count == 0) nao ha o que proteger.
+    has_body = word_count > 0
+    is_short_factual = has_body and word_count <= 600
+
+    if _LISTICLE_PATTERNS.search(combined) or structural_list:
+        if is_short_factual and not structural_list:
+            # Fonte curta com sinal de lista = provavelmente noticia sobre lista,
+            # nao uma lista real de itens extensos
             logger.debug(
                 "[CONTENT_TYPE] short_source_with_list_signal -> news (word_count=%s)",
                 word_count,
@@ -317,7 +326,9 @@ def validate_editorial_quality(
     soup = BeautifulSoup(content_html, "html.parser")
     content_text = soup.get_text(separator=" ", strip=True)
 
-    content_type = article_payload.get("article_type") or detect_content_type(title, content_text)
+    content_type = article_payload.get("article_type") or detect_content_type(
+        title, content_text, content_html=content_html
+    )
     word_count = _count_words(content_html)
     h2_count = _count_h2(content_html)
     image_count = _count_images(content_html)
@@ -438,53 +449,6 @@ def validate_editorial_quality(
         title[:60] if title else "",
     )
     return result
-
-
-# ---------------------------------------------------------------------------
-# Decisao de indexacao (separada da decisao de publicacao)
-# ---------------------------------------------------------------------------
-
-def decide_index_allowed(
-    structural_score: int,
-    editorial_issues: List[str],
-    content_type: str,
-    word_count: int,
-    qa_llm_result: Optional[Dict[str, Any]] = None,
-    index_min_score: int = 30,
-) -> Dict[str, Any]:
-    """
-    Decide se o post pode ser indexado no Google.
-
-    Publicacao e sempre liberada; indexacao e seletiva.
-    Esta funcao nao bloqueia publicacao — apenas decide index/noindex.
-
-    Retorna dict com 'allowed' (bool) e 'reason' (str).
-    """
-    reasons_noindex: List[str] = []
-
-    # Regra central: score < index_min_score → NOINDEX
-    # (CONTENT_TOO_THIN com mínimos relativos não bloqueia mais a indexação per se;
-    #  o score estrutural é o árbitro principal)
-    if structural_score < index_min_score:
-        reasons_noindex.append(f"SCORE_TOO_LOW:{structural_score}")
-
-    if word_count < 200:
-        reasons_noindex.append(f"WORD_COUNT_TOO_LOW:{word_count}")
-
-    if qa_llm_result and qa_llm_result.get("has_original_value") is False:
-        reasons_noindex.append("QA_LLM_NOT_ORIGINAL")
-
-    if reasons_noindex:
-        return {
-            "allowed": False,
-            "reason": " ".join(reasons_noindex),
-        }
-
-    # Passou por todos os filtros sem blockers → INDEX
-    return {
-        "allowed": True,
-        "reason": f"passed_all_checks score={structural_score} word_count={word_count}",
-    }
 
 
 # ---------------------------------------------------------------------------

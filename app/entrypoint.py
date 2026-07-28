@@ -14,11 +14,13 @@ for _stream in (sys.stdout, sys.stderr):
         except Exception:
             pass
 
-from apscheduler.schedulers.blocking import BlockingScheduler
+# E402 deliberado: os imports abaixo emitem log no import time e precisam
+# encontrar stdout/stderr ja reconfigurados para UTF-8 (bloco acima).
+from apscheduler.schedulers.blocking import BlockingScheduler  # noqa: E402
 
-from app.config import SCHEDULE_CONFIG, validate_runtime_config
-from app.pipeline import run_pipeline_cycle
-from app.store import Database
+from app.config import SCHEDULE_CONFIG, validate_runtime_config  # noqa: E402
+from app.pipeline import run_pipeline_cycle  # noqa: E402
+from app.store import Database  # noqa: E402
 
 _FILE_HANDLER: logging.Handler | None = None
 _CONSOLE_HANDLER: logging.Handler | None = None
@@ -118,27 +120,6 @@ def initialize_database(logger: logging.Logger) -> None:
         sys.exit(1)
 
 
-def import_sitemap_links(logger: logging.Logger) -> None:
-    """Run sitemap import in a best-effort way."""
-    logger.info("Importando links internos via sitemap...")
-    try:
-        from scripts.import_sitemap_links import main as sitemap_import
-        from app.pipeline import pause_worker_for_maintenance, resume_worker_after_maintenance
-
-        with _RUNTIME_JOB_LOCK:
-            if not pause_worker_for_maintenance(timeout_s=300):
-                logger.warning("Worker nao entrou em estado ocioso a tempo. Importacao de sitemap adiada.")
-                return
-
-            try:
-                sitemap_import()
-                logger.info("Sitemap importado com sucesso.")
-            finally:
-                resume_worker_after_maintenance()
-    except Exception as e:
-        logger.error(f"Erro ao importar sitemap: {e}", exc_info=True)
-
-
 def run_pipeline_cycle_guarded() -> None:
     """Run a pipeline cycle while serializing against maintenance work."""
     with _RUNTIME_JOB_LOCK:
@@ -170,12 +151,8 @@ def run_forever(logger: logging.Logger) -> None:
     except Exception as e:
         logger.error(f"Erro na execução inicial do pipeline: {e}", exc_info=True)
 
-    import_sitemap_links(logger)
-
     scheduler = BlockingScheduler(timezone="America/Sao_Paulo")
     scheduler.add_job(run_pipeline_cycle_guarded, "interval", minutes=interval)
-    scheduler.add_job(lambda: import_sitemap_links(logger), "interval", hours=24, id="sitemap_refresh")
-    logger.info("Sitemap refresh agendado a cada 24h.")
 
     logger.info("Pressione Ctrl+C para sair.")
     try:
@@ -185,7 +162,9 @@ def run_forever(logger: logging.Logger) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Executa o pipeline editorial MNScr.")
+    parser = argparse.ArgumentParser(
+        description="Executa o pipeline editorial do MNScr (gera drafts, nao publica)."
+    )
     parser.add_argument(
         "--once",
         action="store_true",

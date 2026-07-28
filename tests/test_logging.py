@@ -24,6 +24,7 @@ logger.error("TESTE ERROR")
 print("Pronto!")
 
 import time
+
 time.sleep(1)
 
 # Verificar arquivo

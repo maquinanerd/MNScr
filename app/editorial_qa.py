@@ -2,7 +2,6 @@ import re
 from html import unescape
 from typing import Any, Dict, List
 
-
 BAD_AI_PHRASES = [
     "a expectativa é que",
     "promete agradar os fãs",

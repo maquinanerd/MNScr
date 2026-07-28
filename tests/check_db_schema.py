@@ -2,7 +2,6 @@
 """Check database schema and status"""
 
 import sqlite3
-import os
 
 db_path = 'data/app.db'
 
@@ -22,13 +21,13 @@ print(f"\nTables found: {tables}\n")
 for table in tables:
     print(f"\nTABLE: {table}")
     print("-" * 80)
-    
+
     cursor.execute(f"PRAGMA table_info({table})")
     cols = cursor.fetchall()
     for col in cols:
         cid, name, type_, notnull, default, pk = col
         print(f"  {name:30} {type_:15}")
-    
+
     # Show sample data
     cursor.execute(f"SELECT COUNT(*) FROM {table}")
     count = cursor.fetchone()[0]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Custom exception classes for the RSS-to-WordPress automation app.
+Custom exception classes for the MNScr editorial draft pipeline.
 """
 
 class AIProcessorError(Exception):
@@ -31,11 +31,6 @@ class BlockedPromptError(AIProcessorError):
     def __init__(self, message: str, block_reason: str | None = None):
         super().__init__(message)
         self.block_reason = block_reason
-
-
-class WordPressPublisherError(Exception):
-    """Custom exception for errors related to publishing content to WordPress."""
-    pass
 
 
 class ArticleProcessingError(Exception):

@@ -3,11 +3,10 @@
 Test script para verificar trocas de chave quando uma retorna 429 (quota excedida)
 """
 
-import os
-import sys
 import logging
+from unittest.mock import MagicMock, patch
+
 from dotenv import load_dotenv
-from unittest.mock import patch, MagicMock
 from google.api_core import exceptions as google_exceptions
 
 # Carrega .env
@@ -24,8 +23,8 @@ print("\n" + "="*80)
 print("🚫 TEST: Trocade Chaves quando uma retorna 429 (QUOTA EXCEDIDA)")
 print("="*80)
 
-from app.config import AI_API_KEYS
 from app.ai_client_gemini import AIClient
+from app.config import AI_API_KEYS
 
 client = AIClient(
     keys=AI_API_KEYS,
@@ -46,12 +45,12 @@ def mock_generate_content(prompt, **kwargs):
     global call_count
     call_count += 1
     print(f"   [Mock] Chamada #{call_count} para generate_content()")
-    
+
     if call_count == 1:
-        print(f"   🚫 Primeira chave retorna 429 (quota excedida)")
+        print("   🚫 Primeira chave retorna 429 (quota excedida)")
         raise google_exceptions.ResourceExhausted("Quota exceeded")
     else:
-        print(f"   ✅ Segunda chave retorna sucesso")
+        print("   ✅ Segunda chave retorna sucesso")
         return MagicMock(text="Sucesso!")
 
 with patch('google.generativeai.GenerativeModel') as mock_gen_model:
@@ -59,11 +58,11 @@ with patch('google.generativeai.GenerativeModel') as mock_gen_model:
         mock_instance = MagicMock()
         mock_instance.generate_content = mock_generate_content
         mock_gen_model.return_value = mock_instance
-        
+
         try:
             result = client.generate_text("Test prompt")
             print(f"\n✅ RESULTADO FINAL: {result}")
-            print(f"   ✅ Sistema rotacionou para segunda chave após 429!")
+            print("   ✅ Sistema rotacionou para segunda chave após 429!")
         except Exception as e:
             print(f"\n❌ ERRO: {e}")
 

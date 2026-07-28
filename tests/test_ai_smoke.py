@@ -4,7 +4,7 @@ Smoke test isolado para AIClient.
 - Chama a IA com payload minimo.
 - Imprime o modelo real usado.
 - Valida JSON basico na resposta.
-- Nao chama WordPress.
+- Nao chama nenhum CMS.
 - Nao altera banco.
 - Nao publica.
 - Nao indexa.
@@ -24,10 +24,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # Carrega .env ANTES de importar ai_client_gemini para que os getenv() de
 # nivel de modulo enxerguem os valores corretos na primeira carga.
 from dotenv import load_dotenv
+
 load_dotenv(override=True)
 
-from app.ai_client_gemini import AIClient, MODEL, MODEL_CHAIN, _gemini_log_prefix
-
+from app.ai_client_gemini import MODEL, MODEL_CHAIN, AIClient, _gemini_log_prefix
 
 # ---------------------------------------------------------------------------
 # Testes unitarios (sem chamada real a API)

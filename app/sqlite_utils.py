@@ -1,7 +1,6 @@
 import sqlite3
 from pathlib import Path
 
-
 DEFAULT_TIMEOUT_S = 30
 DEFAULT_BUSY_TIMEOUT_MS = 30000
 

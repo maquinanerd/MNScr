@@ -9,22 +9,16 @@ Execucao direta:
 Execucao via pytest:
     .venv\\Scripts\\python.exe -m pytest tests/test_editorial_quality_validator.py -v
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.editorial_validator import (
-    validate_editorial_quality,
-    detect_content_type,
     build_editorial_audit_report,
-    _image_stack_detected,
-    _cta_residual_in_content,
-    _title_has_html,
-    _excerpt_equals_meta,
-    _has_h1_inside,
-    _sources_skipped_in_credit,
+    detect_content_type,
+    validate_editorial_quality,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -35,6 +29,25 @@ def _make_html(words: int = 600, h2_count: int = 2, extra: str = "") -> str:
     h2s = "".join(f"<h2>Secao {i + 1} do artigo editorial aqui</h2><p>{'Texto da secao. ' * 40}</p>" for i in range(h2_count))
     filler = " ".join(["palavra"] * max(0, words - h2_count * 50))
     return f"<p>{filler}</p>{h2s}{extra}"
+
+
+def _make_thin_html(words: int = 120) -> str:
+    """Corpo curto e neutro: sem termos que disparem deteccao de opiniao/lista."""
+    filler = " ".join(["palavra"] * words)
+    return f"<p>{filler}</p><h2>Secao unica do texto</h2><p>{filler}</p>"
+
+
+def _make_thin_list_html(items: int = 5, words_per_item: int = 12) -> str:
+    """Lista estrutural real (H2 numerados) porem rasa em texto.
+
+    E o unico caminho legitimo para um listicle disparar CONTENT_TOO_THIN: o
+    sinal estrutural vence a protecao de noticia factual curta.
+    """
+    filler = " ".join(["palavra"] * words_per_item)
+    blocks = "".join(
+        f"<h2>{i + 1}. Item numerado da lista</h2><p>{filler}</p>" for i in range(items)
+    )
+    return f"<p>{filler}</p>{blocks}"
 
 
 def _make_payload(
@@ -61,16 +74,22 @@ def _make_payload(
 # TASK 16.1 — Artigo curto bloqueia quando formato exige profundidade
 # ---------------------------------------------------------------------------
 
-def test_content_too_thin_listicle_blocks():
-    """Lista com 500 palavras e abaixo do minimo de 1100 — deve bloquear."""
-    content = _make_html(words=500, h2_count=4)
+def test_content_too_thin_listicle_warns_without_blocking():
+    """Lista abaixo do minimo do tipo gera warning, mas nao impede o draft.
+
+    Na MS-1 profundidade insuficiente e sinal editorial para o revisor humano,
+    nao erro tecnico: o warning viaja no EditorialDraft.
+    """
+    content = _make_thin_list_html(items=5, words_per_item=12)
     payload = _make_payload(
         title="Os 10 melhores filmes de super-heroi de todos os tempos",
         content_html=content,
     )
     result = validate_editorial_quality(payload)
-    assert not result["ok"], "Lista curta nao bloqueou"
+    assert result["content_type"] == "listicle"
     assert any("CONTENT_TOO_THIN" in i for i in result["issues"])
+    assert result["ok"], "profundidade insuficiente nao pode bloquear o draft"
+    assert result["status"] == "WARNING_ONLY"
 
 
 def test_content_ok_news_500w():
@@ -84,22 +103,39 @@ def test_content_ok_news_500w():
     assert result["ok"] or all("CONTENT_TOO_THIN" not in i for i in result["issues"])
 
 
-def test_guide_thin_blocks():
-    """Guia com 600 palavras bloqueia (minimo 1400)."""
-    content = _make_html(words=600, h2_count=3)
+def test_short_body_with_guide_title_is_protected_as_news():
+    """Protecao deliberada: titulo de guia + corpo curto nao vira guide.
+
+    Evita CONTENT_TOO_THIN indevido em noticia factual que apenas menciona um
+    guia no titulo.
+    """
+    content = _make_thin_html(120)
     payload = _make_payload(
         title="Guia completo para assistir o MCU em ordem cronologica",
         content_html=content,
     )
     result = validate_editorial_quality(payload)
-    assert any("CONTENT_TOO_THIN" in i for i in result["issues"])
+    assert result["content_type"] == "news"
+    assert result["ok"]
+
+
+def test_long_body_with_guide_title_is_typed_as_guide():
+    """Com corpo suficiente, o sinal do titulo vale e o tipo vira guide."""
+    content = _make_thin_html(400)
+    payload = _make_payload(
+        title="Guia completo para assistir o MCU em ordem cronologica",
+        content_html=content,
+    )
+    result = validate_editorial_quality(payload)
+    assert result["content_type"] == "guide"
+    assert not any("CONTENT_TOO_THIN" in i for i in result["issues"])
 
 
 # ---------------------------------------------------------------------------
 # TASK 16.2 — Lista com imagens empilhadas bloqueia
 # ---------------------------------------------------------------------------
 
-def test_image_stack_detected_blocks():
+def test_image_stack_detected_warns():
     img_stack_html = (
         "<p>Introducao editorial com conteudo.</p>"
         "<h2>Item 1</h2><p>Texto do item um.</p>"
@@ -115,7 +151,7 @@ def test_image_stack_detected_blocks():
     result = validate_editorial_quality(payload)
     assert result["image_stack_detected"], "IMAGE_STACK nao detectado"
     assert any("IMAGE_STACK_DETECTED" in i for i in result["issues"])
-    assert not result["ok"]
+    assert result["ok"], "imagens empilhadas sao warning editorial, nao erro tecnico"
 
 
 def test_no_image_stack_single_images():
@@ -158,12 +194,12 @@ def test_listicle_with_h2_per_item_passes_structure():
 # TASK 16.4 — CTA residual bloqueia
 # ---------------------------------------------------------------------------
 
-def test_cta_residual_blocks():
+def test_cta_residual_warns():
     content = _make_html(600) + "<p>Subscribe to our newsletter for more updates!</p>"
     payload = _make_payload(content_html=content)
     result = validate_editorial_quality(payload)
     assert any("CTA_RESIDUAL_DETECTED" in i for i in result["issues"])
-    assert not result["ok"]
+    assert result["ok"], "CTA residual e warning; a remocao dura acontece no pipeline"
 
 
 def test_cta_residual_sign_up_blocks():
@@ -223,20 +259,20 @@ def test_meta_ok_range():
 # TASK 16.7 — Excerpt igual a meta bloqueia/regenera
 # ---------------------------------------------------------------------------
 
-def test_subtitle_equals_meta_blocks():
+def test_subtitle_equals_meta_warns():
     meta = "Esta e a meta description exata do artigo para validacao."
     payload = _make_payload(meta=meta, subtitle=meta)
     result = validate_editorial_quality(payload)
     assert any("SUBTITLE_EQUALS_META" in i for i in result["issues"])
-    assert not result["ok"]
+    assert result["ok"], "subtitle duplicado e warning editorial"
 
 
-def test_subtitle_equals_title_blocks():
+def test_subtitle_equals_title_warns():
     title = "Titulo que e igual ao subtitle"
     payload = _make_payload(title=title, subtitle=title)
     result = validate_editorial_quality(payload)
     assert any("SUBTITLE_EQUALS_TITLE" in i for i in result["issues"])
-    assert not result["ok"]
+    assert result["ok"], "subtitle duplicado e warning editorial"
 
 
 def test_subtitle_distinct_from_meta_and_title_passes():
@@ -283,12 +319,12 @@ def test_schema_newsarticle_for_news():
 # TASK 16.9 — H1 dentro do corpo bloqueia
 # ---------------------------------------------------------------------------
 
-def test_h1_inside_content_blocks():
+def test_h1_inside_content_warns():
     content = "<h1>Titulo dentro do corpo — proibido</h1>" + _make_html(600, h2_count=2)
     payload = _make_payload(content_html=content)
     result = validate_editorial_quality(payload)
     assert any("H1_INSIDE_CONTENT" in i for i in result["issues"])
-    assert not result["ok"]
+    assert result["ok"], "H1 no corpo e warning; o pipeline rebaixa para H2"
 
 
 def test_no_h1_inside_content_ok():
@@ -356,50 +392,68 @@ def test_audit_report_contains_required_sections():
 
 
 # ---------------------------------------------------------------------------
-# Runner direto
+# MS-1 — contrato de bloqueio: so erro tecnico ou de politica editorial bloqueia
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    checks = [
-        ("listicle curta bloqueia", test_content_too_thin_listicle_blocks),
-        ("noticia 500w ok", test_content_ok_news_500w),
-        ("guia 600w bloqueia", test_guide_thin_blocks),
-        ("image stack bloqueia", test_image_stack_detected_blocks),
-        ("sem image stack ok", test_no_image_stack_single_images),
-        ("listicle com H2 por item ok", test_listicle_with_h2_per_item_passes_structure),
-        ("CTA subscribe bloqueia", test_cta_residual_blocks),
-        ("CTA sign up bloqueia", test_cta_residual_sign_up_blocks),
-        ("sem CTA ok", test_no_cta_clean_content),
-        ("titulo com HTML bloqueia", test_title_with_html_blocks),
-        ("titulo limpo ok", test_clean_title_passes),
-        ("meta longa registra issue", test_meta_too_long_logged_not_blocking),
-        ("meta ok sem issue", test_meta_ok_range),
-        ("subtitle = meta bloqueia", test_subtitle_equals_meta_blocks),
-        ("subtitle = titulo bloqueia", test_subtitle_equals_title_blocks),
-        ("subtitle diferente ok", test_subtitle_distinct_from_meta_and_title_passes),
-        ("schema ITEMLIST para listicle", test_schema_itemlist_for_listicle),
-        ("schema NEWSARTICLE para news", test_schema_newsarticle_for_news),
-        ("H1 no corpo bloqueia", test_h1_inside_content_blocks),
-        ("sem H1 no corpo ok", test_no_h1_inside_content_ok),
-        ("sources_skipped no credito bloqueia", test_sources_skipped_in_credit_blocks),
-        ("sources_skipped ausente ok", test_sources_skipped_not_in_credit_ok),
-        ("detecta listicle por titulo", test_detect_listicle_by_title),
-        ("detecta guide por titulo", test_detect_guide_by_title),
-        ("detecta news por texto curto", test_detect_news_short_text),
-        ("relatorio tem secoes obrigatorias", test_audit_report_contains_required_sections),
-    ]
+def test_missing_title_is_the_blocking_kind_of_error():
+    payload = _make_payload(title="", content_html=_make_html(600))
+    result = validate_editorial_quality(payload)
+    assert not result["ok"]
+    assert result["status"] == "BLOCKED_FOR_REVIEW"
+    assert "TITLE_MISSING" in result["issues"]
 
-    failed = 0
-    for name, fn in checks:
-        try:
-            fn()
-            print(f"  OK  {name}")
-        except Exception as exc:
-            print(f"  FAIL {name}: {exc}")
-            failed += 1
 
-    if failed == 0:
-        print(f"\ntest_editorial_quality_validator: ALL CHECKS PASSED ({len(checks)}/{len(checks)})")
-    else:
-        print(f"\ntest_editorial_quality_validator: {failed} FAILED")
-        sys.exit(1)
+def test_title_with_html_is_blocking():
+    payload = _make_payload(title="Titulo com <b>tag</b> invalida", content_html=_make_html(600))
+    result = validate_editorial_quality(payload)
+    assert not result["ok"]
+    assert "TITLE_HAS_HTML" in result["issues"]
+
+
+def test_forbidden_competitor_mention_is_blocking():
+    content = _make_html(600) + "<p>Segundo o Omelete.com.br, o filme estreia em 2027.</p>"
+    payload = _make_payload(content_html=content)
+    result = validate_editorial_quality(payload)
+    assert not result["ok"]
+    assert "FORBIDDEN_COMPETITOR_MENTION" in result["issues"]
+
+
+def test_validator_never_emits_publication_or_index_decisions():
+    """O validador editorial nao decide indexacao, robots nem publicacao."""
+    result = validate_editorial_quality(_make_payload(content_html=_make_html(600)))
+    for forbidden in ("robots", "noindex", "noindex_value", "index_allowed", "published", "publish"):
+        assert forbidden not in result, "validador vazou decisao de " + forbidden
+    assert result["status"] in {"OK", "WARNING_ONLY", "BLOCKED_FOR_REVIEW"}
+
+
+def test_warnings_reach_the_draft_and_never_become_approval():
+    """Warnings sao preservados no EditorialDraft sem virar aprovacao."""
+    from app.editorial import (
+        DRAFT_GENERATED,
+        DraftContent,
+        DraftProvenance,
+        EditorialDraft,
+        SourceReference,
+        validate_draft,
+    )
+
+    content = _make_thin_list_html(items=5, words_per_item=12)
+    payload = _make_payload(
+        title="Os 10 melhores filmes de super-heroi de todos os tempos",
+        content_html=content,
+    )
+    result = validate_editorial_quality(payload)
+    assert result["ok"] and result["issues"]
+
+    draft = EditorialDraft(
+        draft_id="draft-warn",
+        article_id=1,
+        content=DraftContent(title=payload["title"], body_html=content),
+        provenance=DraftProvenance(input_hash="a" * 64, output_hash="b" * 64),
+        sources=[SourceReference(url="https://deadline.example/x", is_primary=True)],
+        warnings=list(result["issues"]),
+    )
+
+    assert draft.status == DRAFT_GENERATED
+    assert any("CONTENT_TOO_THIN" in w for w in draft.warnings)
+    assert validate_draft(draft) == [], "warning nao pode virar erro bloqueante"

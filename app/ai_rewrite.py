@@ -2,13 +2,13 @@
 """
 Phase 2 of the 3-phase AI pipeline: editorial rewrite.
 
-Transforms sanitized HTML into an original Máquina Nerd article written
+Transforms sanitized HTML into an original Cinerie article written
 in journalistic Português-Brasil, injecting internal links and videos.
 """
 import logging
 import os
 import re
-from typing import TYPE_CHECKING, Dict, Any, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from bs4 import BeautifulSoup
 
@@ -338,7 +338,7 @@ def _check_editorial_block(html: str) -> bool:
 
 def rewrite(html_clean: str, meta: Dict[str, Any], client: "AIClient") -> str:
     """
-    Phase 2: transform clean HTML into original Máquina Nerd journalism.
+    Phase 2: transform clean HTML into original Cinerie journalism.
 
     Args:
         html_clean: Sanitized HTML from phase 1.

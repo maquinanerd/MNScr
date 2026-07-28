@@ -3,9 +3,9 @@ link_store.py — Banco local de artigos publicados para links internos automát
 Mantém os últimos 200 artigos. O pipeline consulta antes de gerar cada artigo
 para sugerir links contextuais ao Gemini.
 """
-import sqlite3
-import os
 import logging
+import os
+import sqlite3
 
 from .sqlite_utils import connect_sqlite
 

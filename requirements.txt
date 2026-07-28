@@ -1,17 +1,5 @@
-python-dotenv
-requests
-urllib3==2.5.0
-charset-normalizer==3.4.4
-google-auth
-httpx
-beautifulsoup4
-feedparser
-python-dateutil
-lxml
-python-slugify
-google-generativeai
-APScheduler
-tmdbv3api
-trafilatura
-Pillow
-SQLAlchemy
+# Fonte canônica de dependências: pyproject.toml
+# Este arquivo é gerado a partir dele e mantido apenas por compatibilidade.
+#   pip install -e .          (runtime)
+#   pip install -e ".[dev]"   (runtime + testes/lint)
+-e .

@@ -4,7 +4,6 @@ All tests use HTML fixtures — no real HTTP requests.
 Run directly: python tests/test_extractor_hollywood_variety.py
 """
 import sys
-import re
 
 sys.path.insert(0, ".")
 

@@ -1,46 +1,28 @@
 # app/policy_engine.py
 """
-Motor central de políticas do MN26.
+Motor central de políticas do MNScr.
 
 Responsabilidades:
   - calculate_dynamic_word_policy: régua proporcional à fonte original
   - should_expand: expansão somente quando há razão real
   - should_run_ai_validator: AI Validator condicional
-  - should_run_qa_llm: QA-LLM excepcional
-  - decide_publish_status: publicar tudo que for processável
-  - decide_index_status: forca robots index/follow para publicacoes
+  - decide_draft_status: draft aceitável para submissão editorial
   - ArticleBudget: orçamento de tokens por artigo
 
-Não faz chamadas externas. Não publica. Não altera banco.
+Não faz chamadas externas. Não publica. Não indexa. Não altera banco.
 """
 
-import os
 import logging
+import os
+import re as _re
 from typing import Any, Dict, List, Optional
 
 from .config import (
     AI_POST_WRITER_BUDGET_PER_1K_SOURCE,
     AI_POST_WRITER_BUDGET_TOKENS,
-    INDEX_GATE_ENABLED,
-    INDEX_GATE_MIN_INTERNAL_LINKS,
-    INDEX_GATE_MIN_SCORE,
-    INDEX_GATE_REQUIRE_WORDCOUNT_MIN,
-    QA_LLM_ENABLED,
-    QA_LLM_MIN_ORIGINALITY,
 )
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Configurações via .env
-# ---------------------------------------------------------------------------
-
-PUBLISH_ALL_PROCESSABLE: bool = os.getenv("PUBLISH_ALL_PROCESSABLE", "true").lower() == "true"
-BLOCK_PIPELINE_NOINDEX: bool = True
-FORCE_INDEX_ALL_POSTS: bool = True
-ALLOW_LOW_SCORE_PUBLISH: bool = os.getenv("ALLOW_LOW_SCORE_PUBLISH", "true").lower() == "true"
-ALLOW_MANUAL_INDEX_OVERRIDE: bool = os.getenv("ALLOW_MANUAL_INDEX_OVERRIDE", "false").lower() == "true"
-ENABLE_QA_LLM_BORDERLINE: bool = os.getenv("ENABLE_QA_LLM_BORDERLINE", "false").lower() == "true"
 
 # Orçamentos de tokens por article_type/origem
 AI_BUDGET: Dict[str, int] = {
@@ -308,234 +290,58 @@ def should_run_ai_validator(
 
 
 # ---------------------------------------------------------------------------
-# 4. Decisão do QA-LLM
+# 4. Decisão de draft
 # ---------------------------------------------------------------------------
 
-def should_run_qa_llm(
-    structural_score: int,
-    publish_allowed: bool,
-    index_allowed: bool,
-    article_type: str = "news",
-    db_id: Any = "?",
-) -> Dict[str, Any]:
-    """
-    Decide se o QA-LLM de originalidade deve rodar.
-
-    Com QA_LLM_ENABLED=True roda para todos os artigos (resultado vai para o
-    gate de indexação, nunca bloqueia publicação).
-    Com QA_LLM_ENABLED=False o comportamento é idêntico ao anterior.
-    """
-    if not QA_LLM_ENABLED:
-        logger.info(
-            "[QA_LLM_DECISION] run=false reason=feature_disabled_by_config db_id=%s", db_id,
-        )
-        return {"run": False, "reason": "feature_disabled_by_config"}
-
-    logger.info(
-        "[QA_LLM_DECISION] run=true reason=enabled_for_all_articles db_id=%s", db_id,
-    )
-    return {"run": True, "reason": "enabled_for_all_articles"}
-
-
-# ---------------------------------------------------------------------------
-# 5. Decisão de publicação
-# ---------------------------------------------------------------------------
-
-def decide_publish_status(
+def decide_draft_status(
     content_html: str = "",
     title: str = "",
     technical_errors: Optional[List[str]] = None,
-    is_duplicate: bool = False,
     db_id: Any = "?",
     structural_score: int = 0,
 ) -> Dict[str, Any]:
     """
-    PUBLICAÇÃO: tudo que for tecnicamente processável é publicado.
+    DRAFT: tudo que for tecnicamente processável vira draft editorial.
 
-    Score baixo, warnings editoriais, texto curto proporcional
-    NÃO bloqueiam publicação.
+    Score baixo, warnings editoriais e texto curto proporcional NÃO bloqueiam a
+    geração do draft — eles viram warnings para o editor humano decidir.
+    Apenas erros técnicos impedem a submissão.
 
-    Apenas erros técnicos críticos bloqueiam.
+    Esta função nunca aprova e nunca publica.
     """
     _errors = technical_errors or []
 
-    # Erro técnico crítico
     critical = [e for e in _errors if any(k in e for k in (
         "critical", "CRITICAL", "BLOCKED", "FATAL",
     ))]
     if critical:
         logger.info(
-            "[PUBLISH_DECISION] allowed=false reason=critical_technical_failure errors=%s db_id=%s",
+            "[DRAFT_DECISION] allowed=false reason=critical_technical_failure errors=%s db_id=%s",
             critical, db_id,
         )
         return {"allowed": False, "reason": "critical_technical_failure"}
 
-    # Duplicata já publicada
-    if is_duplicate:
-        logger.info(
-            "[PUBLISH_DECISION] allowed=false reason=duplicate_already_published db_id=%s", db_id,
-        )
-        return {"allowed": False, "reason": "duplicate_already_published"}
-
-    # Conteúdo vazio
     if not content_html or not content_html.strip():
         logger.info(
-            "[PUBLISH_DECISION] allowed=false reason=invalid_empty_content db_id=%s", db_id,
+            "[DRAFT_DECISION] allowed=false reason=invalid_empty_content db_id=%s", db_id,
         )
         return {"allowed": False, "reason": "invalid_empty_content"}
 
-    # Título vazio
     if not title or not title.strip():
         logger.info(
-            "[PUBLISH_DECISION] allowed=false reason=invalid_empty_content db_id=%s", db_id,
+            "[DRAFT_DECISION] allowed=false reason=invalid_empty_title db_id=%s", db_id,
         )
-        return {"allowed": False, "reason": "invalid_empty_content"}
+        return {"allowed": False, "reason": "invalid_empty_title"}
 
-    # Tudo OK → publicar
     logger.info(
-        "[PUBLISH_DECISION] allowed=true reason=processable_content score=%s db_id=%s",
+        "[DRAFT_DECISION] allowed=true reason=processable_content score=%s db_id=%s",
         structural_score, db_id,
     )
     return {"allowed": True, "reason": "processable_content"}
 
 
 # ---------------------------------------------------------------------------
-# 6. Decisão de indexação
-# ---------------------------------------------------------------------------
-
-def decide_index_status(
-    structural_score: int,
-    publish_allowed: bool,
-    db_id: str = "?",
-    editorial_issues: Optional[List[str]] = None,
-    content_type: str = "unknown",
-    word_count: int = 0,
-    internal_links: int = 0,
-    min_acceptable_words: int = 0,
-    editorial_status: str = "",
-    qa_llm_result: Optional[Dict[str, Any]] = None,
-    index_min_score: int = 30,
-) -> Dict[str, Any]:
-    """
-    Decide robots.
-
-    Regra operacional atual: todo artigo publicado pelo pipeline recebe
-    index,follow. O gate editorial continua existindo para diagnostico em
-    codigo legado, mas nao pode transformar publicacao em noindex.
-    """
-    if not publish_allowed:
-        logger.info(f"[INDEX_DECISION] allowed=false reason=not_published db_id={db_id}")
-        return {
-            "allowed": False,
-            "indexable": False,
-            "robots": "noindex,follow",
-            "noindex_value": "1",
-            "reason": "not_published",
-        }
-
-    if FORCE_INDEX_ALL_POSTS or BLOCK_PIPELINE_NOINDEX:
-        logger.info("[INDEX_DECISION] robots=index,follow reason=force_index_all_posts")
-        return {
-            "allowed": True,
-            "indexable": True,
-            "robots": "index,follow",
-            "noindex_value": "0",
-            "reason": "force_index_all_posts",
-            "failed": [],
-        }
-
-    if INDEX_GATE_ENABLED:
-        failed: List[str] = []
-        if structural_score < INDEX_GATE_MIN_SCORE:
-            failed.append(f"score<{INDEX_GATE_MIN_SCORE}")
-        if internal_links < INDEX_GATE_MIN_INTERNAL_LINKS:
-            failed.append(f"links_int<{INDEX_GATE_MIN_INTERNAL_LINKS}")
-        if INDEX_GATE_REQUIRE_WORDCOUNT_MIN and min_acceptable_words and word_count < min_acceptable_words:
-            failed.append(f"words<{min_acceptable_words}")
-        if (editorial_status or "").upper() == "FAIL":
-            failed.append("editorial_qa=FAIL")
-
-        # (e) QA-LLM originality gate
-        _originality: Optional[int] = None
-        if QA_LLM_ENABLED and qa_llm_result:
-            _originality = qa_llm_result.get("originality_score")
-            if _originality is not None and _originality < QA_LLM_MIN_ORIGINALITY:
-                failed.append(f"originality<{QA_LLM_MIN_ORIGINALITY}")
-
-        indexable = not failed
-        robots = "index,follow" if indexable else "noindex,follow"
-        if indexable:
-            reason = "passed_index_gate"
-            logger.info(
-                "[INDEX_DECISION] allowed=True robots=%s score=%s links_int=%s words=%s min_words=%s editorial_status=%s originality=%s db_id=%s",
-                robots,
-                structural_score,
-                internal_links,
-                word_count,
-                min_acceptable_words,
-                editorial_status or "UNKNOWN",
-                _originality if _originality is not None else "N/A",
-                db_id,
-            )
-        else:
-            reason = "gate_failed"
-            logger.info(
-                "[INDEX_DECISION] allowed=False robots=%s reason=%s failed=%s score=%s links_int=%s words=%s min_words=%s editorial_status=%s originality=%s db_id=%s",
-                robots,
-                reason,
-                failed,
-                structural_score,
-                internal_links,
-                word_count,
-                min_acceptable_words,
-                editorial_status or "UNKNOWN",
-                _originality if _originality is not None else "N/A",
-                db_id,
-            )
-        return {
-            "allowed": indexable,
-            "indexable": indexable,
-            "robots": robots,
-            "noindex_value": "0" if indexable else "1",
-            "reason": reason,
-            "failed": failed,
-        }
-
-    from .editorial_validator import decide_index_allowed
-
-    verdict = decide_index_allowed(
-        structural_score=structural_score,
-        editorial_issues=editorial_issues or [],
-        content_type=content_type,
-        word_count=word_count,
-        qa_llm_result=qa_llm_result,
-        index_min_score=index_min_score,
-    )
-
-    indexable = bool(verdict.get("allowed"))
-    robots = "index,follow" if indexable else "noindex,follow"
-    reason = verdict.get("reason", "quality_gate")
-    logger.info(
-        "[INDEX_DECISION] allowed=%s reason=%s score=%s words=%s robots=%s db_id=%s",
-        indexable,
-        reason,
-        structural_score,
-        word_count,
-        robots,
-        db_id,
-    )
-    return {
-        "allowed": indexable,
-        "indexable": indexable,
-        "robots": robots,
-        "noindex_value": "0" if indexable else "1",
-        "reason": reason,
-        "failed": [],
-    }
-
-
-# ---------------------------------------------------------------------------
-# 7. Orçamento de tokens por artigo
+# 5. Orçamento de tokens por artigo
 # ---------------------------------------------------------------------------
 
 class ArticleBudget:
@@ -600,38 +406,32 @@ class ArticleBudget:
 
     def report(
         self,
-        wp_post_id: Optional[int] = None,
-        publish: bool = False,
-        index: bool = False,
-        robots: str = "noindex,follow",
+        draft_id: Optional[str] = None,
+        draft_generated: bool = False,
         score: int = 0,
-        estimated_usd: float = 0.0,
-        input_tokens: int = 0,
-        output_tokens: int = 0,
+        cost_model: str = "gemini-3.1-flash-lite",
     ) -> str:
         calls = len(self._stages)
         skipped = ",".join(self._skipped) if self._skipped else "none"
         in_tok = getattr(self, 'input_tokens', 0)
         out_tok = getattr(self, 'output_tokens', 0)
         total = self.used_tokens or (in_tok + out_tok)
-        
+
         prices = {
             "gemini-3.1-flash-lite": (0.25, 1.50),
             "gemini-2.5-flash-lite": (0.10, 0.40),
             "gemini-2.5-flash": (0.30, 2.50),
         }
-        # Tokens are currently aggregated across stages, so use the 3.1 rate as a conservative ceiling.
-        # TODO: track input/output tokens per model for exact mixed-model article costs.
-        cost_model = "gemini-3.1-flash-lite"
+        # Tokens are aggregated across stages; without per-stage model tracking
+        # this stays an estimate. The caller may pass the dominant model.
         input_price, output_price = prices.get(cost_model, prices["gemini-3.1-flash-lite"])
         usd = (in_tok * input_price / 1000000) + (out_tok * output_price / 1000000)
 
         line = (
-            f"[AI_COST_ARTICLE] db_id={self.db_id} wp_post_id={wp_post_id or 'N/A'} "
+            f"[AI_COST_ARTICLE] db_id={self.db_id} draft_id={draft_id or 'N/A'} "
             f"calls={calls} input_tokens={in_tok} output_tokens={out_tok} "
-            f"total_tokens={total} estimated_usd={usd:.4f} "
-            f"skipped={skipped} publish={publish} index={index} "
-            f"robots={robots} score={score}"
+            f"total_tokens={total} estimated_usd={usd:.4f} cost_model={cost_model} "
+            f"skipped={skipped} draft_generated={draft_generated} score={score}"
         )
         logger.info(line)
         return line
@@ -640,8 +440,6 @@ class ArticleBudget:
 # ---------------------------------------------------------------------------
 # 8. Classificação de article_type a partir de sinais do conteúdo
 # ---------------------------------------------------------------------------
-
-import re as _re
 
 _LIST_SIGNALS = _re.compile(
     r"\b(\d{1,2}\s*(melhores?|piores?|filmes?|s[eé]ries?|personagens?|motivos?|"

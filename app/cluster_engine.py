@@ -1,8 +1,8 @@
 """
-cluster_engine.py — Event Scoring + Cluster Decision
+cluster_engine.py — Event Scoring
 
-Decide se uma notícia merece gerar páginas evergreen adicionais.
-Custo adicional: zero (análise local, sem chamada de API).
+Extrai a entidade dominante de um acontecimento para alimentar sugestões de
+links internos. Análise local, sem chamada de API. Não publica nada.
 """
 import logging
 
@@ -39,15 +39,6 @@ HIGH_VALUE_ENTITIES = {
     "chainsaw man", "spy x family",
 }
 
-EVERGREEN_TEMPLATES = {
-    "timeline":         "timeline e ordem cronológica completa",
-    "cast_guide":       "elenco completo e guia de personagens",
-    "villains":         "vilões explicados e ranqueados",
-    "ending_explained": "final explicado",
-    "easter_eggs":      "easter eggs e referências escondidas",
-    "powers":           "poderes e habilidades explicados",
-}
-
 HIGH_DEMAND_TAGS = {
     "trailer", "confirmado", "estreia", "temporada",
     "sequel", "remake", "reboot", "confirmed", "announced",
@@ -58,15 +49,14 @@ HIGH_DEMAND_TAGS = {
 
 def score_event(article_data: dict) -> dict:
     """
-    Calcula score do evento para decisão de cluster evergreen.
+    Calcula score do evento e extrai a entidade dominante.
 
     Args:
         article_data: dict com title, content (str), tags (list[str]),
                       categories (list), source_count (int, opcional)
 
     Returns:
-        dict com: score, should_cluster (bool), entity (str|None),
-                  templates (list[str]), reason (str)
+        dict com: score, entity (str|None), reason (str)
     """
     haystack = (
         article_data.get("title", "") + " " +
@@ -91,12 +81,6 @@ def score_event(article_data: dict) -> dict:
         score += 25
         reasons.append("tag_demanda_alta")
 
-    # Critério 3 — Templates evergreen disponíveis (+20)
-    templates = list(EVERGREEN_TEMPLATES.keys()) if entity else []
-    if templates:
-        score += 20
-        reasons.append(f"{len(templates)}_templates")
-
     # Critério 4 — Profundidade narrativa (+15)
     depth_kw = ["saga", "universe", "universo", "temporada", "season",
                 "franquia", "franchise", "trilogy", "trilogia"]
@@ -109,17 +93,13 @@ def score_event(article_data: dict) -> dict:
         score += 10
         reasons.append("multi_source")
 
-    should_cluster = score >= 60 and entity is not None
-
     logger.info(
         f"[SCORE] {article_data.get('title', '')[:45]} | "
-        f"score={score} entity={entity} cluster={should_cluster}"
+        f"score={score} entity={entity}"
     )
 
     return {
         "score": score,
-        "should_cluster": should_cluster,
         "entity": entity,
-        "templates": templates,
         "reason": " | ".join(reasons) or "sem_entidade",
     }

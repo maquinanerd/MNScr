@@ -166,17 +166,17 @@ def test_is_url_covered_returns_false_if_table_is_missing(tmp_path):
 def test_pipeline_does_not_register_coverage_immediately_after_builder_extraction():
     source = Path("app/pipeline.py").read_text(encoding="utf-8")
     extraction_start = source.index("multi_source_payload = build_multi_source_payload")
-    append_start = source.index("extracted_articles.append({", extraction_start)
+    append_start = source.index("extracted_articles.append(_preserve_claim_metadata(", extraction_start)
     extraction_block = source[extraction_start:append_start]
 
     assert "register_covered_urls" not in extraction_block
     assert "extract_cluster_documents" not in source
 
 
-def test_pipeline_registers_coverage_after_successful_post_persistence():
+def test_pipeline_registers_coverage_after_successful_draft_persistence():
     source = Path("app/pipeline.py").read_text(encoding="utf-8")
-    save_pos = source.index("published_recorded = db.save_processed_post(")
-    register_pos = source.index("db.register_covered_urls", save_pos)
+    record_pos = source.index("recorded = db.record_draft_generated(")
+    register_pos = source.index("db.register_covered_urls", record_pos)
 
-    assert register_pos > save_pos
-    assert "[SUPERFEED_COVERAGE] URLs registradas apos sucesso editorial/publicacao" in source
+    assert register_pos > record_pos
+    assert "[SUPERFEED_COVERAGE] URLs registradas apos draft" in source

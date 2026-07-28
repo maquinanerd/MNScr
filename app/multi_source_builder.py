@@ -5,13 +5,12 @@ Build and qualify multi-source payloads for RSSPRIME Superfeed clusters.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from html import unescape
 from urllib.parse import urlparse
 
-from .feeds import canonicalize_url
 from .content_limiter import truncate_html_by_visible_chars
+from .feeds import canonicalize_url
 from .html_utils import source_label_from_url
 from .superfeed_policy import TRUSTED_SINGLE_SOURCES
 

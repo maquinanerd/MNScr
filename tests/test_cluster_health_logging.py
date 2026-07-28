@@ -5,8 +5,6 @@ Valida o comportamento do trecho [CLUSTER_HEALTH] inserido em app/pipeline.py,
 sem precisar instanciar o pipeline completo.
 """
 import ast
-import textwrap
-
 
 # ---------------------------------------------------------------------------
 # Helpers
