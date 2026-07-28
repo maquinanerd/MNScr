@@ -12,8 +12,9 @@ Responsabilidades:
 Não faz chamadas externas. Não publica. Não indexa. Não altera banco.
 """
 
-import os
 import logging
+import os
+import re as _re
 from typing import Any, Dict, List, Optional
 
 from .config import (
@@ -439,8 +440,6 @@ class ArticleBudget:
 # ---------------------------------------------------------------------------
 # 8. Classificação de article_type a partir de sinais do conteúdo
 # ---------------------------------------------------------------------------
-
-import re as _re
 
 _LIST_SIGNALS = _re.compile(
     r"\b(\d{1,2}\s*(melhores?|piores?|filmes?|s[eé]ries?|personagens?|motivos?|"

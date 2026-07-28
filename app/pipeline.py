@@ -1,80 +1,82 @@
 # app/pipeline.py
-import logging
-import time
 import json
-import re
+import logging
 import os
+import re
 import threading
+import time
 import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
-from typing import Dict, Any, Optional, List
 
+from bs4 import BeautifulSoup
+
+from .ai_processor import AIProcessor
+from .ai_validator import expand_article_if_too_short, validate_and_fix_ai_json
+from .cleaners import clean_html_for_globo_esporte
+from .cluster_extractor import build_cluster_prompt_payload, collect_cluster_images, collect_cluster_videos
+from .cluster_feed_adapter import is_superfeed_item, normalize_cluster_item
 from .config import (
-    PIPELINE_ORDER,
-    RSS_FEEDS,
-    CATEGORY_ALIASES,
     BLOCKED_CATEGORY_NAMES,
     BLOCKED_SOURCE_IDS,
     BLOCKED_TOPICS,
-    PIPELINE_CONFIG,
-    SOURCE_CATEGORY_MAP,
+    CATEGORY_ALIASES,
     LOCAL_DRAFT_DIR,
     OUTPUT_MODE,
+    PIPELINE_CONFIG,
+    PIPELINE_ORDER,
     PUBLISHER_DOMAIN,
+    RSS_FEEDS,
+    SOURCE_CATEGORY_MAP,
 )
-from .policy_engine import (
-    calculate_dynamic_word_policy,
-    should_run_ai_validator,
-    decide_draft_status,
-    classify_article_type,
-    ArticleBudget,
-)
-from .store import Database
-from .feeds import FeedReader, canonicalize_url, normalize_title_for_match, titles_are_similar
-from .extractor import ContentExtractor
-from .ai_processor import AIProcessor
-from .seo_title_optimizer import optimize_title
-from .title_validator import TitleValidator
-from .html_utils import (
-    unescape_html_content,
-    validate_and_fix_figures,
-    merge_videos_into_content,
-    append_source_credit_block,
-    strip_credits_and_normalize_youtube,
-    remove_broken_image_placeholders,
-    strip_naked_internal_links,
-    strip_ai_tag_links,
-    downgrade_h1_to_h2,
-    remove_source_domain_schemas,
-    strip_forbidden_cta_sentences,
-    detect_forbidden_cta,
-    hard_filter_forbidden_html,
-    final_pre_publish_cleanup,
-    apply_final_field_casing,
-    normalize_subtitle,
-    normalize_meta_description,
-    sanitize_final_title,
-)
-from .internal_linking import add_internal_links
-from .link_store import save_article as ls_save_article, get_related as ls_get_related, format_for_prompt as ls_format_links, get_link_map as ls_get_link_map
-from .cluster_feed_adapter import is_superfeed_item, normalize_cluster_item
-from .cluster_extractor import build_cluster_prompt_payload, collect_cluster_images, collect_cluster_videos
-from .multi_source_builder import build_multi_source_payload
-from .superfeed_policy import check_superfeed_policy
-from .editorial_validator import validate_editorial_quality
-from .ai_validator import validate_and_fix_ai_json, expand_article_if_too_short
-from .entity_validator import validate_and_fix_entities
-from .task_queue import ArticleQueue
-from bs4 import BeautifulSoup
-from .cleaners import clean_html_for_globo_esporte
-
 from .editorial import DRAFT_FAILED, DRAFT_GENERATED, validate_draft
 from .editorial.builder import build_editorial_draft
+from .editorial_validator import validate_editorial_quality
+from .entity_validator import validate_and_fix_entities
+from .extractor import ContentExtractor
+from .feeds import FeedReader, canonicalize_url, normalize_title_for_match, titles_are_similar
+from .html_utils import (
+    append_source_credit_block,
+    apply_final_field_casing,
+    detect_forbidden_cta,
+    downgrade_h1_to_h2,
+    final_pre_publish_cleanup,
+    hard_filter_forbidden_html,
+    merge_videos_into_content,
+    normalize_meta_description,
+    normalize_subtitle,
+    remove_broken_image_placeholders,
+    remove_source_domain_schemas,
+    sanitize_final_title,
+    strip_ai_tag_links,
+    strip_credits_and_normalize_youtube,
+    strip_forbidden_cta_sentences,
+    strip_naked_internal_links,
+    unescape_html_content,
+    validate_and_fix_figures,
+)
+from .internal_linking import add_internal_links
+from .link_store import format_for_prompt as ls_format_links
+from .link_store import get_link_map as ls_get_link_map
+from .link_store import get_related as ls_get_related
+from .link_store import save_article as ls_save_article
+from .multi_source_builder import build_multi_source_payload
+from .policy_engine import (
+    ArticleBudget,
+    calculate_dynamic_word_policy,
+    classify_article_type,
+    decide_draft_status,
+    should_run_ai_validator,
+)
+from .seo_title_optimizer import optimize_title
+from .store import Database
 from .submitters import build_submitter
-
+from .superfeed_policy import check_superfeed_policy
+from .task_queue import ArticleQueue
+from .title_validator import TitleValidator
 
 logger = logging.getLogger(__name__)
 
@@ -685,8 +687,10 @@ def assess_content_quality(content_html: str, word_policy: Optional[Dict[str, An
 
     # 2. Estrutura hierÃ¡rquica (H3 dentro de H2 = profundidade real)
     structure_score = 0
-    if soup.find("h3"): structure_score += 20
-    if soup.find("h2"): structure_score += 10
+    if soup.find("h3"):
+        structure_score += 20
+    if soup.find("h2"):
+        structure_score += 10
     score += structure_score
     breakdown["structure"] = {
         "points": structure_score,
@@ -700,8 +704,10 @@ def assess_content_quality(content_html: str, word_policy: Optional[Dict[str, An
         if PUBLISHER_DOMAIN and PUBLISHER_DOMAIN in a["href"].lower()
     ]
     link_score = 0
-    if   len(int_links) >= 2: link_score = 20
-    elif len(int_links) >= 1: link_score = 10
+    if len(int_links) >= 2:
+        link_score = 20
+    elif len(int_links) >= 1:
+        link_score = 10
     score += link_score
     breakdown["internal_links"] = {"points": link_score, "count": len(int_links)}
 
@@ -803,8 +809,8 @@ def _run_3phase_batch(
     Returns a list of (rewritten_data | None, error_msg | None) tuples,
     one per article, matching the format returned by AIProcessor.rewrite_batch.
     """
-    from .ai_sanitize import sanitize as _sanitize
     from .ai_rewrite import rewrite as _rewrite
+    from .ai_sanitize import sanitize as _sanitize
     from .ai_seo_pack import seo_pack as _seo_pack
 
     client = processor._ai_client
@@ -1065,7 +1071,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
             if batch_count > 0:
                 logger.info(f"Aguardando {BETWEEN_BATCH_DELAY_S}s entre batches (garantindo processamento de qualidade)...")
                 time.sleep(BETWEEN_BATCH_DELAY_S)
-            
+
             batch_data = []
             for art in batch:
                 # â”€â”€ MODO CLUSTER: payload jÃ¡ montado â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1104,13 +1110,13 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
 
                 # Calcular tamanho alvo proporcional à fonte
                 _source_word_count = len(main_text.split())
-                
+
                 _article_type_pre = classify_article_type(
                     title=extracted.get('title', ''),
                     source_words=_source_word_count,
                     db_id=art.get('db_id', '?')
                 )
-                
+
                 _word_policy = calculate_dynamic_word_policy(
                     source_words=_source_word_count,
                     article_type=_article_type_pre,
@@ -1223,12 +1229,12 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             db_id=art_data['db_id'],
                             source_words=_source_words_for_policy,
                         )
-                        
+
                         # Main Writer Tokens
                         _main_in = rewritten_data.get('_input_tokens', 0)
                         _main_out = rewritten_data.get('_output_tokens', 0)
                         _main_tot = rewritten_data.get('_total_tokens', 0)
-                        
+
                         _budget.input_tokens = _main_in
                         _budget.output_tokens = _main_out
                         _budget.consume(tokens=_main_tot, stage='main_writer')
@@ -1324,7 +1330,6 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                                 reason='AI output missing required fields')
                             continue
 
-                        cta_removal_log = []
                         content_html, _ = strip_forbidden_cta_sentences(raw_content_html)
                         for _phrase in [
                             "Thank you for reading this post, don't forget to subscribe!",
@@ -1619,7 +1624,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
 
 def worker_loop():
     """Continuously process articles from the queue in batches.
-    
+
     Respects:
     - Max 10 AI requests per cycle (to avoid RPM violations)
     - 5-minute pause after hitting request limit
@@ -1673,7 +1678,7 @@ def worker_loop():
         # Get articles from queue (batch size 1)
         articles = []
         start_wait = time.time()
-        
+
         # Wait up to QUEUE_TIMEOUT_S for an article to appear in queue
         while time.time() - start_wait < QUEUE_TIMEOUT_S:
             if _worker_pause_requested.is_set():
@@ -1702,13 +1707,13 @@ def worker_loop():
         if not articles:
             # Still no articles after timeout, reset cycle counter and continue
             logger.debug("[WORKER] Nenhum artigo na fila apÃ³s timeout de 30s")
-            
+
             # Reset cycle counter after quiet period (2 minutos sem processar)
             if time.time() - last_pause_time > 120:
                 logger.info("[RPM PROTECTION] PerÃ­odo de inatividade detectado. Resetando contador de requisiÃ§Ãµes.")
                 requests_in_cycle = 0
                 last_pause_time = time.time()
-            
+
             time.sleep(5)  # Esperar 5s antes de tentar novamente
             continue
         # Refresh link_map before processing to pick up articles published this session
@@ -1736,7 +1741,7 @@ def worker_loop():
         requests_in_cycle += len(articles)
         last_pause_time = time.time()  # Atualizar timestamp de Ãºltima atividade
         _worker_idle.set()
-        
+
         logger.info(
             f"Worker: {len(articles)} artigos processados. "
             f"Total requisiÃ§Ãµes neste ciclo: {requests_in_cycle}/{MAX_REQUESTS_PER_CYCLE}. "
@@ -1766,7 +1771,7 @@ def _handle_watchdog_timeout(article: Dict[str, Any]) -> bool:
     db = Database()
     try:
         status = db.get_article_status(int(article_id))
-        if status in ("DRAFT_GENERATED", "DRAFT_FAILED"):
+        if status in (DRAFT_GENERATED, DRAFT_FAILED):
             logger.warning(
                 "[WATCHDOG] artigo %s ja possui draft registrado; nao re-enfileirando",
                 article_id,
@@ -1808,7 +1813,7 @@ def run_pipeline_cycle():
         logger.info("[CLAIM_STALE] recovery=%s", stale_result)
 
     feed_reader = FeedReader(user_agent=PIPELINE_CONFIG.get('publisher_name', 'Bot'))
-    
+
     processed_total_in_cycle = 0
     superfeed_coverage: Dict[str, Dict[str, Any]] = {}
 
@@ -1941,7 +1946,7 @@ def run_pipeline_cycle():
                             superseded_count,
                             removed_queue_count,
                         )
-            
+
             processed_total_in_cycle += len(new_articles)
             logger.info(f"Enqueued {len(new_articles)} articles from {source_id}. Total in cycle: {processed_total_in_cycle}.")
 
@@ -1950,7 +1955,7 @@ def run_pipeline_cycle():
         except Exception as e:
             logger.error(f"Error processing feed {source_id}: {e}", exc_info=True)
             db.increment_consecutive_failures(source_id)
-        
+
         # Stagger feed processing
         time.sleep(int(os.getenv('FEED_STAGGER_S', 45)))
 

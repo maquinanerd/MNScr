@@ -9,7 +9,8 @@ from pathlib import Path
 # Add to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from app.token_tracker import log_tokens, get_tracker
+from app.token_tracker import get_tracker, log_tokens
+
 
 def print_header(text):
     """Print formatted header"""
@@ -20,13 +21,13 @@ def print_header(text):
 def test_log_tokens():
     """Test logging individual tokens"""
     print_header("🧪 Teste 1: Registrando Tokens")
-    
+
     valores = [
         (100, 200, "Pequena requisição"),
         (500, 1000, "Requisição média"),
         (1000, 2500, "Requisição grande"),
     ]
-    
+
     for i, (entrada, saida, desc) in enumerate(valores, 1):
         sucesso = log_tokens(
             prompt_tokens=entrada,
@@ -35,7 +36,7 @@ def test_log_tokens():
             model="gemini-2.5-flash",
             success=True
         )
-        
+
         status = "✅" if sucesso else "❌"
         print(f"  {status} Teste {i}: {desc}")
         print(f"     → Entrada: {entrada}, Saída: {saida}, Total: {entrada+saida}")
@@ -43,13 +44,13 @@ def test_log_tokens():
 def test_failures():
     """Test logging failures"""
     print_header("🧪 Teste 2: Registrando Falhas")
-    
+
     failures = [
         ("429", "Quota excedida"),
         ("503", "Serviço indisponível"),
         ("timeout", "Timeout na requisição"),
     ]
-    
+
     for i, (erro, desc) in enumerate(failures, 1):
         sucesso = log_tokens(
             prompt_tokens=0,
@@ -59,14 +60,14 @@ def test_failures():
             success=False,
             error_message=f"{erro}: {desc}"
         )
-        
+
         status = "✅" if sucesso else "❌"
         print(f"  {status} Teste {i}: {desc}")
 
 def test_metadata():
     """Test logging with metadata"""
     print_header("🧪 Teste 3: Registrando com Metadados")
-    
+
     sucesso = log_tokens(
         prompt_tokens=250,
         completion_tokens=500,
@@ -80,20 +81,20 @@ def test_metadata():
             "language": "português"
         }
     )
-    
+
     status = "✅" if sucesso else "❌"
     print(f"  {status} Registro com metadados: {'OK' if sucesso else 'FALHOU'}")
 
 def test_multiple_models():
     """Test logging with different models"""
     print_header("🧪 Teste 4: Múltiplos Modelos")
-    
+
     modelos = [
         ("gemini-2.5-flash", 150, 350),
         ("gemini-2.5-flash-lite", 100, 200),
         ("gemini-2.0-flash", 200, 400),
     ]
-    
+
     for modelo, entrada, saida in modelos:
         sucesso = log_tokens(
             prompt_tokens=entrada,
@@ -102,20 +103,20 @@ def test_multiple_models():
             model=modelo,
             success=True
         )
-        
+
         status = "✅" if sucesso else "❌"
         print(f"  {status} {modelo}: {entrada} entrada, {saida} saída")
 
 def test_multiple_apis():
     """Test logging with different APIs"""
     print_header("🧪 Teste 5: Múltiplas APIs")
-    
+
     apis = [
         ("gemini", "gemini-2.5-flash", 150, 320),
         ("openai", "gpt-4", 200, 450),
         ("anthropic", "claude-3-opus", 180, 380),
     ]
-    
+
     for api_type, modelo, entrada, saida in apis:
         sucesso = log_tokens(
             prompt_tokens=entrada,
@@ -124,18 +125,18 @@ def test_multiple_apis():
             model=modelo,
             success=True
         )
-        
+
         status = "✅" if sucesso else "❌"
         print(f"  {status} {api_type.upper()}: {modelo}")
 
 def test_stats():
     """Test getting statistics"""
     print_header("🧪 Teste 6: Estatísticas")
-    
+
     tracker = get_tracker()
     summary = tracker.get_summary()
-    
-    print(f"  📊 Resumo calculado:")
+
+    print("  📊 Resumo calculado:")
     print(f"     • Total de tokens: {summary['total_tokens']:,}")
     print(f"     • Entrada: {summary['total_prompt_tokens']:,}")
     print(f"     • Saída: {summary['total_completion_tokens']:,}")
@@ -145,41 +146,41 @@ def test_stats():
 def test_print_summary():
     """Test printing summary"""
     print_header("🧪 Teste 7: Resumo Formatado")
-    
+
     tracker = get_tracker()
     tracker.print_summary()
 
 def test_log_files():
     """Test that log files exist"""
     print_header("🧪 Teste 8: Validação de Arquivos")
-    
+
     base_path = Path(__file__).parent / 'logs' / 'tokens'
-    
+
     files = [
         ('token_stats.json', 'Estatísticas consolidadas'),
         ('token_debug.log', 'Log de debug'),
     ]
-    
+
     # Check for JSONL files
     jsonl_files = list(base_path.glob('tokens_*.jsonl'))
-    
+
     print(f"  ✅ Diretório de logs: {base_path}")
-    print(f"\n  Arquivos encontrados:")
-    
+    print("\n  Arquivos encontrados:")
+
     for filename, desc in files:
         filepath = base_path / filename
         exists = "✅" if filepath.exists() else "❌"
         size = f" ({filepath.stat().st_size} bytes)" if filepath.exists() else ""
         print(f"     {exists} {filename} - {desc}{size}")
-    
+
     if jsonl_files:
-        print(f"\n  Arquivos JSONL de logs:")
+        print("\n  Arquivos JSONL de logs:")
         for f in jsonl_files:
             with open(f, 'r') as file:
                 lines = len(file.readlines())
             print(f"     ✅ {f.name} ({lines} registros)")
     else:
-        print(f"\n     ⚠️  Nenhum arquivo JSONL encontrado ainda")
+        print("\n     ⚠️  Nenhum arquivo JSONL encontrado ainda")
 
 def show_menu():
     """Show test menu"""
@@ -197,13 +198,13 @@ def show_menu():
     print("  8. 📂 Validar arquivos")
     print("  0. ❌ Sair")
     print("\n  A. 🚀 Executar todos os testes")
-    
+
     return input("\nEscolha uma opção: ").strip()
 
 def run_all_tests():
     """Run all tests"""
     print_header("🚀 EXECUTANDO TODOS OS TESTES")
-    
+
     tests = [
         ("Registrando tokens", test_log_tokens),
         ("Registrando falhas", test_failures),
@@ -214,10 +215,10 @@ def run_all_tests():
         ("Resumo formatado", test_print_summary),
         ("Validação de arquivos", test_log_files),
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for name, test_func in tests:
         try:
             test_func()
@@ -225,12 +226,12 @@ def run_all_tests():
         except Exception as e:
             print(f"\n❌ ERRO em '{name}': {e}")
             failed += 1
-    
+
     print_header("📊 RESULTADO DOS TESTES")
     print(f"\n  ✅ Testes bem-sucedidos: {passed}")
     print(f"  ❌ Testes falhados: {failed}")
     print(f"  📈 Total: {passed + failed}")
-    
+
     if failed == 0:
         print("\n  🎉 TODOS OS TESTES PASSARAM!")
     else:
@@ -240,7 +241,7 @@ def main():
     """Main menu loop"""
     while True:
         choice = show_menu()
-        
+
         try:
             if choice == '1':
                 test_log_tokens()
@@ -265,9 +266,9 @@ def main():
                 break
             else:
                 print("\n❌ Opção inválida!")
-            
+
             input("\nPressione ENTER para continuar...")
-        
+
         except Exception as e:
             print(f"\n❌ Erro: {e}")
             import traceback

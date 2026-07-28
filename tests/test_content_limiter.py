@@ -1,7 +1,7 @@
 from bs4 import BeautifulSoup
 
-from app.content_limiter import truncate_html_by_visible_chars
 from app.cluster_extractor import _safe_extract
+from app.content_limiter import truncate_html_by_visible_chars
 from app.multi_source_builder import MAX_CONTENT_CHARS, build_multi_source_payload
 
 

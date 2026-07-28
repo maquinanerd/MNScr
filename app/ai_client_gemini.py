@@ -6,6 +6,11 @@ import time
 import warnings
 from http import HTTPStatus
 
+from google.api_core import exceptions as google_exceptions
+
+from .exceptions import BlockedPromptError
+from .limiter import KeyPool, RateLimiter
+
 try:
     from google import genai as modern_genai
 except ImportError:
@@ -16,11 +21,6 @@ if modern_genai is None:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)
         import google.generativeai as legacy_genai
-
-from google.api_core import exceptions as google_exceptions
-
-from .exceptions import BlockedPromptError
-from .limiter import KeyPool, RateLimiter
 
 ARTICLE_RESPONSE_SCHEMA = {
     "type": "object",

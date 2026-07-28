@@ -7,7 +7,6 @@ from app.extractor import (
     youtube_thumbnail_video_id,
 )
 
-
 VIDEO_ID = "Ser0jvljAo8"
 
 

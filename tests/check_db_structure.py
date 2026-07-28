@@ -24,7 +24,7 @@ ORDER BY data DESC
 LIMIT 10
 ''')
 
-print(f'\nPosts por data (mais recentes):')
+print('\nPosts por data (mais recentes):')
 for row in cursor.fetchall():
     print(f'  {row[0]}: {row[1]} posts')
 

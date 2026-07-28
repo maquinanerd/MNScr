@@ -1,5 +1,5 @@
-from app.config import PIPELINE_ORDER, RSS_FEEDS, SOURCE_CATEGORY_MAP
 from app import pipeline
+from app.config import PIPELINE_ORDER, RSS_FEEDS, SOURCE_CATEGORY_MAP
 
 
 def test_games_feed_removed_from_ingestion_config():

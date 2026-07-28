@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-
 POLICY_STATUSES = [
     "OK",
     "LIVEBLOG_BLOCKED",

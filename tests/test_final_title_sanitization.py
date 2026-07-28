@@ -1,6 +1,6 @@
 """Tests for sanitize_final_title() — ensures no HTML or body-text leaks into published titles."""
-import sys
 import os
+import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -82,8 +82,8 @@ class TestPipelineImportsSanitizer(unittest.TestCase):
     """Smoke test: pipeline.py must import and use sanitize_final_title."""
 
     def test_sanitize_imported_in_pipeline(self):
-        import importlib
-        import ast, pathlib
+        import ast
+        import pathlib
         source = pathlib.Path(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         ) / "app" / "pipeline.py"
@@ -100,7 +100,7 @@ class TestPipelineImportsSanitizer(unittest.TestCase):
         )
 
     def test_sanitize_called_in_pipeline(self):
-        import ast, pathlib
+        import pathlib
         source = pathlib.Path(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         ) / "app" / "pipeline.py"

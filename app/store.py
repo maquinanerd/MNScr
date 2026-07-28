@@ -3,14 +3,14 @@
 Database management for the application using SQLite.
 """
 
-import sqlite3
 import hashlib
 import logging
 import os
+import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from .config import PIPELINE_ORDER, RSS_FEEDS
 from .feeds import canonicalize_url, normalize_title_for_match
@@ -37,7 +37,7 @@ def _is_superfeed_like_item(item: Dict[str, Any]) -> bool:
 class Article:
     """Representa um artigo para processamento."""
     wp_id: str
-    title: str 
+    title: str
     excerpt: str
     content: str
     status: str
@@ -57,7 +57,7 @@ class Database:
         """
         db_file = Path(db_path)
         db_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         self.db_path = db_path
         self.conn = None
         try:
@@ -319,12 +319,12 @@ class Database:
         cursor = self._get_cursor()
         cursor.execute("""
             SELECT id, source_id, external_id, url, status
-            FROM seen_articles 
+            FROM seen_articles
             WHERE status = 'PENDING'
             ORDER BY published_at DESC
             LIMIT ?
         """, (limit,))
-        
+
         articles = []
         for row in cursor.fetchall():
             articles.append(Article(

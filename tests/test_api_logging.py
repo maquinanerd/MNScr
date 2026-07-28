@@ -3,8 +3,8 @@
 Test script para verificar que o logging de chaves está funcionando
 """
 
-import os
 import logging
+
 from dotenv import load_dotenv
 
 # Carrega .env
@@ -24,13 +24,15 @@ print("="*80 + "\n")
 # 1. Testar carregamento de config
 print("1️⃣  Carregando config...")
 from app.config import AI_API_KEYS
+
 print(f"   ✅ {len(AI_API_KEYS)} chaves carregadas\n")
 
 # 2. Testar AIProcessor
 print("2️⃣  Inicializando AIProcessor...")
 from app.ai_processor import AIProcessor
+
 ai = AIProcessor()
-print(f"   ✅ AIProcessor inicializado\n")
+print("   ✅ AIProcessor inicializado\n")
 
 # 3. Simular processamento de artigo
 print("3️⃣  Simulando processamento de artigo com batch_data...")
@@ -49,7 +51,7 @@ batch_data = [
 
 try:
     results = ai.rewrite_batch(batch_data)
-    print(f"   ✅ Batch processado")
+    print("   ✅ Batch processado")
     print(f"   Chave usada no AIClient: {ai._ai_client.get_last_used_key()}\n")
 except Exception as e:
     print(f"   ⚠️  Erro ao processar (esperado em test): {e}\n")

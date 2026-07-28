@@ -3,11 +3,10 @@
 Test script para verificar rotação de chaves quando uma é penalizada
 """
 
-import os
-import sys
 import logging
-from dotenv import load_dotenv
 from time import monotonic
+
+from dotenv import load_dotenv
 
 # Carrega .env
 load_dotenv(override=True)
@@ -23,8 +22,8 @@ print("\n" + "="*80)
 print("🔄 TEST: Rotação de Chaves quando uma é Penalizada")
 print("="*80)
 
-from app.config import AI_API_KEYS
 from app.ai_client_gemini import AIClient
+from app.config import AI_API_KEYS
 
 client = AIClient(
     keys=AI_API_KEYS,
@@ -44,7 +43,7 @@ print(f"   Cooldown: {slot1.cooldown_until}")
 # Teste 2: Penalizar primeira chave
 print("\n2️⃣  PENALIZANDO PRIMEIRA CHAVE POR 5 SEGUNDOS:")
 client.pool.penalize(slot1, retry_after=5)
-print(f"   ✅ Penalização aplicada")
+print("   ✅ Penalização aplicada")
 print(f"   Cooldown_until agora é: {slot1.cooldown_until}")
 
 # Teste 3: Obter próxima chave (deve ser a segunda)
@@ -54,18 +53,18 @@ print(f"   Chave obtida: {slot2.key[:20]}...{slot2.key[-4:]}")
 print(f"   Cooldown: {slot2.cooldown_until}")
 
 if slot1.key != slot2.key:
-    print(f"   ✅ SUCESSO! Rotacionou para uma chave diferente!")
+    print("   ✅ SUCESSO! Rotacionou para uma chave diferente!")
 else:
-    print(f"   ❌ ERRO! Retornou a mesma chave!")
+    print("   ❌ ERRO! Retornou a mesma chave!")
 
 # Teste 4: Penalizar segunda chave também
 print("\n4️⃣  PENALIZANDO SEGUNDA CHAVE TAMBÉM:")
 client.pool.penalize(slot2, retry_after=5)
-print(f"   ✅ Ambas as chaves estão em cooldown")
+print("   ✅ Ambas as chaves estão em cooldown")
 
 # Teste 5: Tentar obter chave quando todas estão em cooldown
 print("\n5️⃣  TENTANDO OBTER CHAVE QUANDO TODAS ESTÃO EM COOLDOWN:")
-print(f"   (Isso vai aguardar até sair do cooldown)")
+print("   (Isso vai aguardar até sair do cooldown)")
 start = monotonic()
 slot3 = client.pool.next_ready()
 elapsed = monotonic() - start

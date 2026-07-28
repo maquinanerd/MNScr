@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import re
-from typing import TYPE_CHECKING, Dict, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from .exceptions import BlockedPromptError
 

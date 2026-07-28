@@ -7,23 +7,18 @@ Cobre os cenários A-L definidos na especificação editorial.
 Execução:
     python -m pytest tests/test_policy_engine.py -v
 """
-import pytest
-import sys
 import os
+import sys
 
 # Garantir que o módulo é importável sem .env real
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.policy_engine import (
+    ArticleBudget,
     calculate_dynamic_word_policy,
     should_expand,
     should_run_ai_validator,
-
-    decide_draft_status,
-    classify_article_type,
-    ArticleBudget,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. calculate_dynamic_word_policy

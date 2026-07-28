@@ -6,9 +6,9 @@ from unittest.mock import Mock, patch
 from app import pipeline
 from app.ai_client_gemini import AIClient
 from app.ai_processor import (
-    AIProcessor,
     RUNAWAY_FAILURE_REASON,
     TRUNCATED_BY_TOKEN_CEILING,
+    AIProcessor,
 )
 from app.pipeline import _handle_ai_processing_failure
 

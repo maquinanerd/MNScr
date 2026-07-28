@@ -8,9 +8,9 @@ meta, subtitle, schema, CTAs residuais e fontes.
 Retorna um dict padrao com 'ok', 'status' e 'issues'.
 Nao faz chamadas externas. Nao publica. Nao altera banco.
 """
-import re
 import logging
-from typing import Dict, Any, List, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup
 
@@ -87,12 +87,16 @@ _RAW_URL = re.compile(r"(?<![\"'=])(https?://\S{10,})", re.IGNORECASE)
 # Deteccao de tipo editorial
 # ---------------------------------------------------------------------------
 
-def detect_content_type(title: str, content_text: str) -> str:
+def detect_content_type(title: str, content_text: str, content_html: str = "") -> str:
     """Identifica o tipo editorial da materia com base em sinais no titulo e texto.
 
-    Regra de proteção: notícia factual curta (<= 600 palavras) nunca é
-    classificada como guide ou listicle apenas por palavras no título.
-    Isso evita CONTENT_TOO_THIN indevido em notícias simples.
+    Regra de protecao: noticia factual curta (<= 600 palavras) nao e classificada
+    como guide ou listicle apenas por palavras no titulo. Isso evita
+    CONTENT_TOO_THIN indevido em noticias simples.
+
+    A protecao so se aplica quando existe corpo suficiente para julgar. Sem corpo,
+    o sinal do titulo decide. E ela nunca sobrepoe o sinal estrutural: um corpo com
+    varios H2 numerados e uma lista real, independentemente do tamanho.
     """
     combined = f"{title} {content_text[:2000]}"
     word_count = len(content_text.split())
@@ -102,13 +106,18 @@ def detect_content_type(title: str, content_text: str) -> str:
     if _REVIEW_PATTERNS.search(combined):
         return "review"
 
-    # Proteção: conteúdo curto não é guide/listicle por padrão
-    is_short_factual = word_count <= 600
+    # A heuristica estrutural precisa de HTML; content_text ja vem sem tags.
+    structural_list = _listicle_by_h2_count(content_html or content_text)
 
-    if _LISTICLE_PATTERNS.search(combined) or _listicle_by_h2_count(content_text):
-        if is_short_factual:
-            # Fonte curta com sinal de lista = provavelmente notícia sobre lista,
-            # não uma lista real de itens extensos
+    # Protecao: conteudo curto nao e guide/listicle por padrao.
+    # Sem corpo (word_count == 0) nao ha o que proteger.
+    has_body = word_count > 0
+    is_short_factual = has_body and word_count <= 600
+
+    if _LISTICLE_PATTERNS.search(combined) or structural_list:
+        if is_short_factual and not structural_list:
+            # Fonte curta com sinal de lista = provavelmente noticia sobre lista,
+            # nao uma lista real de itens extensos
             logger.debug(
                 "[CONTENT_TYPE] short_source_with_list_signal -> news (word_count=%s)",
                 word_count,
@@ -317,7 +326,9 @@ def validate_editorial_quality(
     soup = BeautifulSoup(content_html, "html.parser")
     content_text = soup.get_text(separator=" ", strip=True)
 
-    content_type = article_payload.get("article_type") or detect_content_type(title, content_text)
+    content_type = article_payload.get("article_type") or detect_content_type(
+        title, content_text, content_html=content_html
+    )
     word_count = _count_words(content_html)
     h2_count = _count_h2(content_html)
     image_count = _count_images(content_html)

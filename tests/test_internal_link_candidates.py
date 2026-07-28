@@ -1,5 +1,5 @@
-from app.pipeline import select_internal_links
 from app.internal_linking import add_internal_links
+from app.pipeline import select_internal_links
 
 
 def test_select_internal_links_scores_real_link_map_shape_and_excludes_current_url():

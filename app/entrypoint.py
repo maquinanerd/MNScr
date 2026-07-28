@@ -14,11 +14,13 @@ for _stream in (sys.stdout, sys.stderr):
         except Exception:
             pass
 
-from apscheduler.schedulers.blocking import BlockingScheduler
+# E402 deliberado: os imports abaixo emitem log no import time e precisam
+# encontrar stdout/stderr ja reconfigurados para UTF-8 (bloco acima).
+from apscheduler.schedulers.blocking import BlockingScheduler  # noqa: E402
 
-from app.config import SCHEDULE_CONFIG, validate_runtime_config
-from app.pipeline import run_pipeline_cycle
-from app.store import Database
+from app.config import SCHEDULE_CONFIG, validate_runtime_config  # noqa: E402
+from app.pipeline import run_pipeline_cycle  # noqa: E402
+from app.store import Database  # noqa: E402
 
 _FILE_HANDLER: logging.Handler | None = None
 _CONSOLE_HANDLER: logging.Handler | None = None

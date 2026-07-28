@@ -38,11 +38,22 @@ def test_normalize_subtitle_returns_missing_without_safe_fallback():
 
 def test_normalize_subtitle_regenerates_when_equal_to_title():
     title = _text(120)
-    first_paragraph = _text(180)
+    # O primeiro paragrafo precisa ser texto proprio: um fallback que apenas
+    # repete o titulo seria rejeitado, e corretamente, como duplicado.
+    first_paragraph = _text(180).replace("resumo editorial", "primeiro paragrafo")
     final, status = normalize_subtitle(title, title, first_paragraph)
 
     assert final != title
     assert status == "REGENERATED"
+
+
+def test_normalize_subtitle_is_missing_when_no_distinct_fallback_exists():
+    """Sem texto proprio disponivel, o subtitle fica ausente em vez de inventado."""
+    title = _text(120)
+    final, status = normalize_subtitle(title, title, _text(180))
+
+    assert final == ""
+    assert status == "MISSING"
 
 
 def test_normalize_subtitle_regenerates_when_equal_to_meta_description():

@@ -374,14 +374,14 @@ def validate_and_fix_ai_json(
                 model_used = _tokens.get("model", "unknown") if _tokens else "unknown"
                 logger.info("[AI_VALIDATOR] done elapsed=%.2fs model=%s db_id=%s", elapsed, model_used, db_id)
                 _log_diff(result, fixed, db_id=db_id)
-                
+
                 # INJECT TOKENS
                 p_tokens = _tokens.get('prompt_tokens', 0) if _tokens else 0
                 c_tokens = _tokens.get('completion_tokens', 0) if _tokens else 0
                 fixed['_validator_input_tokens'] = p_tokens
                 fixed['_validator_output_tokens'] = c_tokens
                 fixed['_validator_total_tokens'] = p_tokens + c_tokens
-                
+
                 return fixed
             else:
                 logger.warning(
@@ -604,7 +604,7 @@ def expand_article_if_too_short(
     Fail-open: em caso de falha retorna rewritten_data original sem modificação.
     Nunca inventa fatos — usa apenas o material original passado via original_article.
     """
-    from .policy_engine import should_expand, calculate_dynamic_word_policy
+    from .policy_engine import calculate_dynamic_word_policy, should_expand
 
     db_id = original_article.get("db_id", "?")
     article_id = db_id if db_id != "?" else original_article.get("source_url", "?")
@@ -731,11 +731,11 @@ def expand_article_if_too_short(
 
         result = dict(rewritten_data)
         result["conteudo_final"] = expanded_content
-        
+
         result['_expansion_input_tokens'] = p_tokens
         result['_expansion_output_tokens'] = c_tokens
         result['_expansion_total_tokens'] = p_tokens + c_tokens
-        
+
         return result
 
     except Exception as exc:

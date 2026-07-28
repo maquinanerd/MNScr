@@ -1,8 +1,9 @@
+import logging
 import os
 import re
-import logging
+from typing import Any, Dict, List
+
 from dotenv import load_dotenv
-from typing import Dict, List, Any
 
 # Carrega variáveis de ambiente de um arquivo .env
 load_dotenv(override=True)  # override=True garante que .env sobrescreve variaveis do sistema
@@ -103,7 +104,7 @@ def _load_ai_keys() -> List[str]:
     Procura por padrões: GEMINI_*, GEMINI_KEY*, GEMINI_API*
     """
     keys = {}
-    
+
     # Procurar por todas as variáveis que contenham GEMINI e sejam chaves de API
     for key, value in os.environ.items():
         if not value or not _is_gemini_api_key_var_name(key):
@@ -115,14 +116,14 @@ def _load_ai_keys() -> List[str]:
             logger.info(f"API KEY: {key}")
         else:
             logger.warning(f"VARIAVEL: {key} encontrada mas nao eh chave de API (nao comeca com AIza)")
-    
+
     if not keys:
         logger.error("ERRO: NENHUMA CHAVE DE API GEMINI ENCONTRADA! Verificar .env")
-    
+
     # Sort by key name for predictable order
     sorted_key_names = sorted(keys.keys())
     result = [keys[k] for k in sorted_key_names]
-    
+
     logger.info(f"CARREGADAS {len(result)} chaves de API")
     for idx, key in enumerate(result, 1):
         # Nunca registrar o prefixo da chave: apenas os 4 últimos caracteres.

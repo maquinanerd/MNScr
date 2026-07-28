@@ -1,10 +1,7 @@
 """
 Testes para o rate limiting por domínio em app/cluster_extractor.py — Bloco 8.
 """
-import time
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from app.cluster_extractor import (
     DEFAULT_DELAY,
@@ -13,7 +10,6 @@ from app.cluster_extractor import (
     collect_cluster_images,
     extract_cluster_documents,
 )
-
 
 # ---------------------------------------------------------------------------
 # TASK 8.4 — Testes de _get_domain_delay()
@@ -102,6 +98,9 @@ def test_sleep_called_for_each_secondary_url():
 
     with patch("app.cluster_extractor.time.sleep") as mock_sleep:
         docs = extract_cluster_documents(item, extractor)
+
+    # a espera so faz sentido se as tres fontes foram realmente extraidas
+    assert len(docs) == 3
 
     # sleep chamado exatamente 2 vezes — uma por URL secundária
     assert mock_sleep.call_count == 2

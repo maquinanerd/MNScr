@@ -135,8 +135,9 @@ def test_build_multi_source_payload_uses_url_label_for_inconsistent_feed_name():
     assert payload["cluster_docs"][1]["source_name"] == "movieweb"
 
 
-def test_build_multi_source_payload_returns_none_for_one_ok_source():
-    urls = ["https://deadline.com/story", "https://screenrant.com/story"]
+def test_build_multi_source_payload_returns_none_for_one_untrusted_source():
+    """Uma unica fonte fora da allowlist nao sustenta um draft."""
+    urls = ["https://blogaleatorio.example/story", "https://outroblog.example/story"]
     extractor = FakeExtractor(
         {
             urls[0]: {"title": "A", "content": _content("fonte-a")},
@@ -145,6 +146,26 @@ def test_build_multi_source_payload_returns_none_for_one_ok_source():
     )
 
     assert build_multi_source_payload(_cluster(urls), extractor, min_chars=50) is None
+
+
+def test_build_multi_source_payload_allows_single_trusted_source():
+    """Fonte unica confiavel e permitida, mas fica marcada na proveniencia."""
+    urls = ["https://deadline.com/story", "https://screenrant.com/story"]
+    extractor = FakeExtractor(
+        {
+            urls[0]: {"title": "A", "content": _content("fonte-a")},
+            urls[1]: {"title": "B", "content": "curto"},
+        }
+    )
+
+    payload = build_multi_source_payload(_cluster(urls), extractor, min_chars=50)
+
+    assert payload is not None
+    assert payload["publication_basis"] == "single_source_trusted"
+    assert len(payload["sources_used"]) == 1
+    assert payload["sources_used"][0]["domain"] == "deadline.com"
+    assert payload["sources_used"][0]["status"] == "ARTICLE_BODY_OK"
+    assert [s["status"] for s in payload["sources_skipped"]] == ["TOO_SHORT"]
 
 
 def test_build_multi_source_payload_discards_paywalled_source():
@@ -220,7 +241,21 @@ def test_build_multi_source_payload_rejects_unreliable_single_source(monkeypatch
 
 
 def test_build_multi_source_payload_marks_duplicates_as_skipped():
+    """URL duplicada apos canonicalizacao nao conta como segunda fonte."""
     urls = ["https://deadline.com/story", "https://www.deadline.com/story/"]
+    extractor = FakeExtractor({urls[0]: {"title": "A", "content": _content("fonte-a")}})
+
+    payload = build_multi_source_payload(_cluster(urls), extractor, min_chars=50)
+
+    assert payload is not None, "deadline.com e fonte unica confiavel"
+    assert len(payload["sources_used"]) == 1
+    assert [s["status"] for s in payload["sources_skipped"]] == ["DUPLICATE"]
+    assert payload["publication_basis"] == "single_source_trusted"
+
+
+def test_duplicate_untrusted_source_does_not_sustain_a_draft():
+    """Sem allowlist, a duplicata deixa o cluster com uma unica fonte valida."""
+    urls = ["https://blogaleatorio.example/story", "https://www.blogaleatorio.example/story/"]
     extractor = FakeExtractor({urls[0]: {"title": "A", "content": _content("fonte-a")}})
 
     assert build_multi_source_payload(_cluster(urls), extractor, min_chars=50) is None

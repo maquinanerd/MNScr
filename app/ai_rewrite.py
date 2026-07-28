@@ -8,7 +8,7 @@ in journalistic Português-Brasil, injecting internal links and videos.
 import logging
 import os
 import re
-from typing import TYPE_CHECKING, Dict, Any, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from bs4 import BeautifulSoup
 
