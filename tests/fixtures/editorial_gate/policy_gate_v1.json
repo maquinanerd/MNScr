@@ -11,6 +11,8 @@
     "GATE_UNSUPPORTED_TOPIC",
     "GATE_BLOCKING_ERRORS_PRESENT",
     "GATE_INVALID_REVISION_CONTEXT",
+    "GATE_MATERIAL_CLAIM_UNSUPPORTED",
+    "GATE_CRITICAL_FACT_CONFLICT",
     "GATE_LEGACY_INPUT_CONTRACT",
     "GATE_MISSING_PROMPT_VERSION",
     "GATE_SINGLE_UNTRUSTED_SOURCE",
@@ -27,7 +29,11 @@
     "GATE_TRUSTED_SINGLE_SOURCE",
     "GATE_MULTI_SOURCE",
     "GATE_V1_INPUT_CONTRACT",
-    "GATE_LOCAL_OUTPUT_ONLY"
+    "GATE_LOCAL_OUTPUT_ONLY",
+    "GATE_FACTUAL_COVERAGE_LOW",
+    "GATE_PARTIAL_SUPPORT_PRESENT",
+    "GATE_UNVERIFIED_CLAIMS_PRESENT",
+    "GATE_SOURCE_ORIGIN_DIVERSITY_LOW"
   ],
   "trustedSingleSourceDomains": [
     "deadline.com",
@@ -47,6 +53,10 @@
     "min_body_words": 0,
     "min_distinct_source_domains": 2,
     "prompt_injection_min_signals": 1,
-    "block_on_unverified_media": false
+    "block_on_unverified_media": false,
+    "minimumFactualCoverageRatio": 0.75,
+    "minimumIndependentSourceOrigins": 2,
+    "blockUnsupportedMaterialClaimsInCriticalLocations": true,
+    "blockCriticalFactConflicts": true
   }
 }

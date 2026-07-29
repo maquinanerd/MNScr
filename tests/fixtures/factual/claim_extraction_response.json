@@ -1,0 +1,36 @@
+{
+  "claims": [
+    {
+      "display_text": "A serie foi renovada para uma segunda temporada",
+      "claim_type": "STATUS",
+      "subject": "A serie",
+      "predicate": "renewed",
+      "value": "renewed",
+      "location": "body:p:1",
+      "source_sentence": "A serie foi renovada para uma segunda temporada.",
+      "is_material": true,
+      "confidence": 0.92
+    },
+    {
+      "display_text": "Estudio confirma estreia em 29 de julho de 2026",
+      "claim_type": "DATE",
+      "subject": "Estudio",
+      "predicate": "date",
+      "value": "29 de julho de 2026",
+      "location": "title",
+      "source_sentence": "Estudio confirma estreia em 29 de julho de 2026",
+      "is_material": true,
+      "confidence": 0.95
+    },
+    {
+      "display_text": "Este fato nunca apareceu no rascunho",
+      "claim_type": "EVENT",
+      "subject": "Ninguem",
+      "predicate": "invented",
+      "value": "x",
+      "location": "title",
+      "is_material": true,
+      "confidence": 0.99
+    }
+  ]
+}

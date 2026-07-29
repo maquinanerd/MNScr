@@ -462,16 +462,42 @@ def rule_extraction_warnings(draft, policy, context) -> EditorialRuleResult:
     )
 
 
+def _assessment_of(draft, context):
+    """The factual assessment for this draft, from the draft or the context."""
+    return getattr(draft, "factual_assessment", None) or context.get("factual_assessment")
+
+
 def rule_evidence_missing(draft, policy, context) -> EditorialRuleResult:
-    missing = not draft.evidence
+    """Material claims exist but nothing sustains them.
+
+    Since MS-4 this reads the FactualAssessment. Without one it falls back to
+    the older EvidenceRecord list, so a draft produced before the factual layer
+    is still evaluated instead of silently passing.
+    """
+    assessment = _assessment_of(draft, context)
+    if assessment is None:
+        missing = not draft.evidence
+        return _result(
+            "GATE_EVIDENCE_MISSING", SEVERITY_WARNING, missing,
+            "Nenhuma evidencia associada ao draft." if missing else
+            f"{len(draft.evidence)} registro(s) de evidencia.",
+            evidence=["evidence vazio; avaliacao factual ausente"] if missing else [],
+            affected_fields=["evidence"],
+            remediation="Verificar por que a avaliacao factual nao foi produzida.",
+            metrics={"evidence_count": len(draft.evidence), "has_assessment": False},
+        )
+
+    material = assessment.coverage.total_material_claims
+    linked = len([link for link in assessment.links if link.is_supporting])
+    triggered = material > 0 and linked == 0
     return _result(
-        "GATE_EVIDENCE_MISSING", SEVERITY_WARNING, missing,
-        "Nenhum EvidenceRecord associado ao draft." if missing else
-        f"{len(draft.evidence)} registro(s) de evidencia.",
-        evidence=["evidence vazio"] if missing else [],
-        affected_fields=["evidence"],
-        remediation="O modelo definitivo de claims chega na MS-4; nao fabricar evidencia.",
-        metrics={"evidence_count": len(draft.evidence)},
+        "GATE_EVIDENCE_MISSING", SEVERITY_WARNING, triggered,
+        f"{material} afirmacao(oes) material(is) sem nenhuma evidencia associada."
+        if triggered else f"{linked} vinculo(s) de suporte para {material} afirmacao(oes).",
+        evidence=[f"material_claims={material} evidencias_de_suporte=0"] if triggered else [],
+        affected_fields=["factual_assessment"],
+        remediation="Nao fabricar evidencia: verificar a extracao das fontes recebidas.",
+        metrics={"material_claims": material, "supporting_links": linked, "has_assessment": True},
     )
 
 
@@ -481,15 +507,195 @@ _UNCERTAIN_EVIDENCE: Final[frozenset[str]] = frozenset(
 
 
 def rule_evidence_conflict(draft, policy, context) -> EditorialRuleResult:
-    uncertain = [e for e in draft.evidence if str(e.status or "") in _UNCERTAIN_EVIDENCE]
+    """Sources disagree. Recorded here, resolved by a person."""
+    assessment = _assessment_of(draft, context)
+    if assessment is None:
+        uncertain = [e for e in draft.evidence if str(e.status or "") in _UNCERTAIN_EVIDENCE]
+        return _result(
+            "GATE_EVIDENCE_CONFLICT", SEVERITY_WARNING, bool(uncertain),
+            f"{len(uncertain)} evidencia(s) em conflito ou nao verificadas." if uncertain else
+            "Evidencias sem conflito registrado.",
+            evidence=[f"{e.evidence_id}: {e.status}" for e in uncertain],
+            affected_fields=["evidence"],
+            remediation="O gate nao escolhe versao: a divergencia e decisao editorial humana.",
+            metrics={"uncertain_evidence": len(uncertain), "has_assessment": False},
+        )
+
+    conflicting_claims = assessment.claims_with_status("CONFLICTING")
+    conflicts = list(assessment.conflicts)
+    triggered = bool(conflicting_claims or conflicts)
     return _result(
-        "GATE_EVIDENCE_CONFLICT", SEVERITY_WARNING, bool(uncertain),
-        f"{len(uncertain)} evidencia(s) em conflito ou nao verificadas." if uncertain else
-        "Evidencias sem conflito registrado.",
-        evidence=[f"{e.evidence_id}: {e.status}" for e in uncertain],
-        affected_fields=["evidence"],
+        "GATE_EVIDENCE_CONFLICT", SEVERITY_WARNING, triggered,
+        f"{len(conflicts)} conflito(s) factual(is) e {len(conflicting_claims)} "
+        f"afirmacao(oes) contraditada(s)." if triggered else "Sem divergencia entre fontes.",
+        evidence=[
+            f"{c.conflict_type}: {c.subject or '-'} -> {' | '.join(c.values[:2])}"
+            for c in conflicts[:5]
+        ],
+        affected_fields=["factual_assessment"],
         remediation="O gate nao escolhe versao: a divergencia e decisao editorial humana.",
-        metrics={"uncertain_evidence": len(uncertain)},
+        metrics={
+            "conflict_count": len(conflicts),
+            "conflicting_claims": len(conflicting_claims),
+            "has_assessment": True,
+        },
+    )
+
+
+# --- MS-4: regras factuais -------------------------------------------------
+
+
+def rule_material_claim_unsupported(draft, policy, context) -> EditorialRuleResult:
+    """A material assertion in a loud place that no received source sustains.
+
+    Only critical locations block — headline, subtitle, meta, lead. An
+    unsupported aside in the tenth paragraph is a warning elsewhere, not a
+    reason to stop the draft.
+
+    UNSUPPORTED means "no source we received sustains this", never "this is
+    false".
+    """
+    if not bool(policy.threshold("blockUnsupportedMaterialClaimsInCriticalLocations", True)):
+        return _result(
+            "GATE_MATERIAL_CLAIM_UNSUPPORTED", SEVERITY_BLOCKING, False,
+            "Bloqueio de afirmacao sem suporte desabilitado pela politica.",
+        )
+    assessment = _assessment_of(draft, context)
+    if assessment is None:
+        return _result(
+            "GATE_MATERIAL_CLAIM_UNSUPPORTED", SEVERITY_BLOCKING, False,
+            "Sem avaliacao factual para inspecionar.",
+            metrics={"has_assessment": False},
+        )
+
+    offenders = assessment.unsupported_in_critical_locations
+    return _result(
+        "GATE_MATERIAL_CLAIM_UNSUPPORTED", SEVERITY_BLOCKING, bool(offenders),
+        f"{len(offenders)} afirmacao(oes) material(is) sem suporte em posicao critica."
+        if offenders else "Nenhuma afirmacao critica sem suporte.",
+        evidence=[
+            f"{', '.join(c.draft_locations)}: {c.display_text}" for c in offenders[:5]
+        ],
+        affected_fields=["content.title", "content.subtitle", "content.meta_description"],
+        remediation=(
+            "Sem suporte nao significa falso: ou a fonte nao foi recebida, ou a "
+            "afirmacao precisa sair da manchete."
+        ),
+        metrics={"unsupported_critical_claims": len(offenders)},
+    )
+
+
+def rule_critical_fact_conflict(draft, policy, context) -> EditorialRuleResult:
+    """Sources contradict each other on something the reader would act on."""
+    if not bool(policy.threshold("blockCriticalFactConflicts", True)):
+        return _result(
+            "GATE_CRITICAL_FACT_CONFLICT", SEVERITY_BLOCKING, False,
+            "Bloqueio de conflito critico desabilitado pela politica.",
+        )
+    assessment = _assessment_of(draft, context)
+    if assessment is None:
+        return _result(
+            "GATE_CRITICAL_FACT_CONFLICT", SEVERITY_BLOCKING, False,
+            "Sem avaliacao factual para inspecionar.",
+            metrics={"has_assessment": False},
+        )
+
+    critical = assessment.critical_conflicts
+    return _result(
+        "GATE_CRITICAL_FACT_CONFLICT", SEVERITY_BLOCKING, bool(critical),
+        f"{len(critical)} conflito(s) critico(s) entre fontes." if critical else
+        "Nenhum conflito critico.",
+        evidence=[
+            f"{c.conflict_type} {c.subject or '-'}: {' vs '.join(c.values[:2])}"
+            for c in critical[:5]
+        ],
+        affected_fields=["factual_assessment"],
+        remediation="Nao resolver automaticamente: um humano decide qual versao vale.",
+        metrics={
+            "critical_conflicts": len(critical),
+            "total_conflicts": len(assessment.conflicts),
+        },
+    )
+
+
+def rule_factual_coverage_low(draft, policy, context) -> EditorialRuleResult:
+    assessment = _assessment_of(draft, context)
+    if assessment is None:
+        return _result("GATE_FACTUAL_COVERAGE_LOW", SEVERITY_WARNING, False,
+                       "Sem avaliacao factual.", metrics={"has_assessment": False})
+    minimum = float(policy.threshold("minimumFactualCoverageRatio", 0.75))
+    ratio = assessment.coverage.coverage_ratio
+    triggered = ratio < minimum
+    return _result(
+        "GATE_FACTUAL_COVERAGE_LOW", SEVERITY_WARNING, triggered,
+        f"Cobertura factual de {ratio} abaixo do minimo {minimum}." if triggered else
+        f"Cobertura factual de {ratio}.",
+        evidence=[
+            f"suportados={assessment.coverage.supported_material_claims} "
+            f"parciais={assessment.coverage.partially_supported_material_claims} "
+            f"total={assessment.coverage.total_material_claims}"
+        ] if triggered else [],
+        affected_fields=["factual_assessment"],
+        remediation="Cobertura baixa e sinal de revisao, nao prova de erro.",
+        metrics={"coverage_ratio": ratio, "minimum": minimum},
+    )
+
+
+def rule_partial_support_present(draft, policy, context) -> EditorialRuleResult:
+    assessment = _assessment_of(draft, context)
+    if assessment is None:
+        return _result("GATE_PARTIAL_SUPPORT_PRESENT", SEVERITY_WARNING, False,
+                       "Sem avaliacao factual.", metrics={"has_assessment": False})
+    partial = assessment.claims_with_status("PARTIALLY_SUPPORTED")
+    return _result(
+        "GATE_PARTIAL_SUPPORT_PRESENT", SEVERITY_WARNING, bool(partial),
+        f"{len(partial)} afirmacao(oes) com suporte apenas parcial." if partial else
+        "Nenhum suporte parcial.",
+        evidence=[c.display_text for c in partial[:5]],
+        affected_fields=["factual_assessment"],
+        remediation="Conferir se a parte nao confirmada muda o sentido.",
+        metrics={"partially_supported_claims": len(partial)},
+    )
+
+
+def rule_unverified_claims_present(draft, policy, context) -> EditorialRuleResult:
+    assessment = _assessment_of(draft, context)
+    if assessment is None:
+        return _result("GATE_UNVERIFIED_CLAIMS_PRESENT", SEVERITY_WARNING, False,
+                       "Sem avaliacao factual.", metrics={"has_assessment": False})
+    unverified = assessment.claims_with_status("UNVERIFIED")
+    return _result(
+        "GATE_UNVERIFIED_CLAIMS_PRESENT", SEVERITY_WARNING, bool(unverified),
+        f"{len(unverified)} afirmacao(oes) sem dados suficientes para concluir."
+        if unverified else "Nenhuma afirmacao indeterminada.",
+        evidence=[c.display_text for c in unverified[:5]],
+        affected_fields=["factual_assessment"],
+        remediation="As fontes citam o assunto mas nao confirmam a afirmacao.",
+        metrics={"unverified_claims": len(unverified)},
+    )
+
+
+def rule_source_origin_diversity_low(draft, policy, context) -> EditorialRuleResult:
+    """Several URLs, few actual outlets.
+
+    Republications of one wire report are one origin, not three confirmations.
+    """
+    assessment = _assessment_of(draft, context)
+    if assessment is None:
+        return _result("GATE_SOURCE_ORIGIN_DIVERSITY_LOW", SEVERITY_WARNING, False,
+                       "Sem avaliacao factual.", metrics={"has_assessment": False})
+    minimum = int(policy.threshold("minimumIndependentSourceOrigins", 2))
+    origins = assessment.coverage.source_diversity
+    url_count = len({e.source_url for e in assessment.evidence})
+    triggered = url_count >= 2 and origins < minimum
+    return _result(
+        "GATE_SOURCE_ORIGIN_DIVERSITY_LOW", SEVERITY_WARNING, triggered,
+        f"{url_count} URLs mas apenas {origins} origem(ns) editorial(is) distinta(s)."
+        if triggered else f"{origins} origem(ns) editorial(is) distinta(s).",
+        evidence=[f"urls={url_count} origens={origins} minimo={minimum}"] if triggered else [],
+        affected_fields=["factual_assessment"],
+        remediation="Republicacoes da mesma origem nao sao confirmacao independente.",
+        metrics={"editorial_origins": origins, "source_urls": url_count, "minimum": minimum},
     )
 
 
@@ -740,6 +946,8 @@ BLOCKING_RULES: Final[Dict[str, RuleFn]] = {
     "GATE_UNSUPPORTED_TOPIC": rule_unsupported_topic,
     "GATE_BLOCKING_ERRORS_PRESENT": rule_blocking_errors_present,
     "GATE_INVALID_REVISION_CONTEXT": rule_invalid_revision_context,
+    "GATE_MATERIAL_CLAIM_UNSUPPORTED": rule_material_claim_unsupported,
+    "GATE_CRITICAL_FACT_CONFLICT": rule_critical_fact_conflict,
 }
 
 WARNING_RULES: Final[Dict[str, RuleFn]] = {
@@ -756,6 +964,10 @@ WARNING_RULES: Final[Dict[str, RuleFn]] = {
     "GATE_UNVERIFIED_MEDIA": rule_unverified_media,
     "GATE_PROMPT_INJECTION_SIGNAL": rule_prompt_injection_signal,
     "GATE_REVISION_GAP": rule_revision_gap,
+    "GATE_FACTUAL_COVERAGE_LOW": rule_factual_coverage_low,
+    "GATE_PARTIAL_SUPPORT_PRESENT": rule_partial_support_present,
+    "GATE_UNVERIFIED_CLAIMS_PRESENT": rule_unverified_claims_present,
+    "GATE_SOURCE_ORIGIN_DIVERSITY_LOW": rule_source_origin_diversity_low,
 }
 
 INFO_RULES: Final[Dict[str, RuleFn]] = {
