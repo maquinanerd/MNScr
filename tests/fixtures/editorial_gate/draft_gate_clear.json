@@ -1,0 +1,81 @@
+{
+  "article_id": 1,
+  "blocking_errors": [],
+  "cluster_confidence": null,
+  "cluster_signature": null,
+  "content": {
+    "body_html": "<p>palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra palavra</p>",
+    "category_suggestions": [],
+    "focus_keyphrase": null,
+    "meta_description": "Meta description com o fato principal e o contexto do acontecimento.",
+    "related_keyphrases": [],
+    "slug_suggestion": null,
+    "subtitle": "Resumo editorial proprio, distinto do titulo e da meta description.",
+    "summary": null,
+    "tag_suggestions": [],
+    "title": "Estudio confirma a data de estreia da nova fase"
+  },
+  "draft_id": "draft-gate-clear",
+  "editorial_gate": null,
+  "event_key": "evt-gate-001",
+  "evidence": [
+    {
+      "claim": "Estreia confirmada para 2027",
+      "evidence_id": "ev-1",
+      "source_excerpt": null,
+      "source_name": null,
+      "source_url": "https://variety.example/a",
+      "status": "observed"
+    }
+  ],
+  "first_seen": null,
+  "last_seen": null,
+  "media_candidates": [],
+  "provenance": {
+    "commit_sha": null,
+    "created_at": "2026-07-29T01:16:00.392146+00:00",
+    "duration_ms": null,
+    "input_contract_version": "rss-prime-event-v1",
+    "input_cursor": null,
+    "input_event_key": "evt-gate-001",
+    "input_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "input_payload_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "input_revision": 1,
+    "input_tokens": null,
+    "model_name": null,
+    "model_provider": null,
+    "output_contract_version": "mnscr-editorial-draft-v0",
+    "output_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "output_tokens": null,
+    "pipeline_version": "mnscr-ms1",
+    "prompt_version": "universal_prompt-ms1",
+    "total_tokens": null
+  },
+  "revision": 1,
+  "sources": [
+    {
+      "author": "A. Reporter",
+      "domain": "variety.example",
+      "extraction_status": "OK",
+      "is_primary": true,
+      "name": null,
+      "published_at": "2026-07-01T10:00:00Z",
+      "source_id": null,
+      "title": null,
+      "url": "https://variety.example/a"
+    },
+    {
+      "author": null,
+      "domain": "deadline.example",
+      "extraction_status": "OK",
+      "is_primary": false,
+      "name": null,
+      "published_at": null,
+      "source_id": null,
+      "title": null,
+      "url": "https://deadline.example/b"
+    }
+  ],
+  "status": "DRAFT_GENERATED",
+  "warnings": []
+}

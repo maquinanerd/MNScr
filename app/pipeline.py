@@ -24,6 +24,7 @@ from .config import (
     BLOCKED_SOURCE_IDS,
     BLOCKED_TOPICS,
     CATEGORY_ALIASES,
+    EDITORIAL_GATE_ENABLED,
     LOCAL_DRAFT_DIR,
     OUTPUT_MODE,
     PIPELINE_CONFIG,
@@ -34,6 +35,7 @@ from .config import (
 )
 from .editorial import DRAFT_FAILED, DRAFT_GENERATED, validate_draft
 from .editorial.builder import build_editorial_draft
+from .editorial_gate import GATE_BLOCKED, GATE_REVIEW_REQUIRED, disabled_result
 from .editorial_validator import validate_editorial_quality
 from .entity_validator import validate_and_fix_entities
 from .event_store import EventStore
@@ -1532,6 +1534,15 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             score=quality['score'],
                         )
 
+                        # --- EDITORIAL GATE (classifica; nao aprova) ---
+                        gate_result = _run_editorial_gate(
+                            draft,
+                            db=db,
+                            article_db_id=art_data['db_id'],
+                            input_event=_resolve_input_event(art_data),
+                        )
+                        draft.editorial_gate = gate_result
+
                         # --- SUBMISSAO (nunca publicacao) ---
                         claim_owner = art_data.get("_claim_owner")
                         if claim_owner and not db.article_claim_is_current(art_data["db_id"], claim_owner):
@@ -1796,6 +1807,69 @@ def _handle_watchdog_timeout(article: Dict[str, Any]) -> bool:
         return False
     finally:
         db.close()
+
+def _run_editorial_gate(draft, *, db, article_db_id, input_event=None):
+    """Classify the draft and persist the verdict.
+
+    The gate never turns a correctly generated draft into a failure: a blocked
+    draft is still written to disk so an operator can see *why* it was blocked.
+    Blocking stops a future external submission, not local preservation.
+
+    A gate that itself fails is reported and the draft still proceeds to local
+    storage — losing the artifact would destroy the only evidence available.
+    """
+    from .editorial_gate import EditorialGate
+    from .gate_store import GateStore
+
+    if not EDITORIAL_GATE_ENABLED:
+        logger.warning(
+            "[GATE_COMPLETED] draft_id=%s outcome=GATE_DISABLED "
+            "motivo=MNSCR_EDITORIAL_GATE_ENABLED=false",
+            draft.draft_id,
+        )
+        return disabled_result(draft)
+
+    context = {
+        "output_mode": OUTPUT_MODE,
+        "input_event": input_event,
+        "ingestion_warnings": list(draft.warnings or []),
+    }
+
+    gate_store = None
+    try:
+        result = EditorialGate().evaluate(draft, context=context)
+        gate_store = GateStore()
+        gate_store.save_result(result)
+        db.record_gate_result(
+            article_db_id,
+            gate_id=result.gate_id,
+            gate_status=result.outcome,
+            policy_version=result.policy_version,
+            gate_hash=result.gate_hash,
+        )
+        if result.outcome == GATE_BLOCKED:
+            logger.error(
+                "[GATE_BLOCKED] draft_id=%s db_id=%s regras=%s",
+                draft.draft_id, article_db_id,
+                ",".join(r.rule_code for r in result.blocking_rules),
+            )
+        elif result.outcome == GATE_REVIEW_REQUIRED:
+            logger.info(
+                "[GATE_REVIEW_REQUIRED] draft_id=%s db_id=%s regras=%s",
+                draft.draft_id, article_db_id,
+                ",".join(r.rule_code for r in result.warning_rules),
+            )
+        return result
+    except Exception as exc:  # noqa: BLE001 - o draft local nunca pode ser perdido
+        logger.exception(
+            "[GATE_COMPLETED] draft_id=%s db_id=%s erro=%s: o draft segue para gravacao local",
+            draft.draft_id, article_db_id, type(exc).__name__,
+        )
+        return None
+    finally:
+        if gate_store is not None:
+            gate_store.close()
+
 
 def _resolve_input_event(art_data: Dict[str, Any]):
     """The normalized event behind this article, when there is one.

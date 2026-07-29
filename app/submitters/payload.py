@@ -20,6 +20,7 @@ from typing import Any, Optional
 from app.editorial.models import EditorialDraft
 from app.editorial.serialization import to_plain
 from app.editorial.states import SUBMISSION_DISABLED
+from app.editorial_gate.models import GATE_CLEAR
 
 from .base import SubmissionResult, SubmitterNotEnabledError
 
@@ -30,6 +31,11 @@ DESTINATION = "payload"
 NOT_ENABLED_MESSAGE = (
     "Payload submission is not enabled until the Cinerie Editorial "
     "contract is finalized."
+)
+
+GATE_REJECTION_MESSAGE = (
+    "Draft rejected by the Editorial Gate: only GATE_CLEAR drafts may ever be "
+    "submitted, and clearing the gate is still not editorial approval."
 )
 
 
@@ -123,6 +129,26 @@ class PayloadDraftSubmitter:
     # -- submitter ----------------------------------------------------------
 
     def submit(self, draft: EditorialDraft) -> SubmissionResult:
+        # MS-3: the Editorial Gate is checked before anything else, so that even
+        # a fully enabled Payload destination can never receive a draft that a
+        # human has not cleared. A missing verdict counts as not cleared: the
+        # absence of an opinion is not an approval.
+        gate = getattr(draft, "editorial_gate", None)
+        gate_outcome = getattr(gate, "outcome", None) if gate is not None else None
+        if gate_outcome != GATE_CLEAR:
+            reason = gate_outcome or "GATE_NOT_EVALUATED"
+            logger.warning(
+                "[PAYLOAD] submissao recusada pelo Editorial Gate draft_id=%s gate_outcome=%s",
+                draft.draft_id, reason,
+            )
+            return SubmissionResult(
+                success=False,
+                destination=self.destination,
+                status=SUBMISSION_DISABLED,
+                submission_id=draft.draft_id,
+                error=f"{GATE_REJECTION_MESSAGE} (gate={reason})",
+            )
+
         if not self.config.enabled:
             logger.info(
                 "[PAYLOAD] destino desabilitado draft_id=%s motivo=contract_pending",

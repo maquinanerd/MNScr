@@ -88,10 +88,29 @@ class TestLocalDraftSubmitter:
         assert [p.name for p in tmp_path.iterdir() if p.suffix == ".tmp"] == []
 
 
+def _cleared_draft(**kwargs):
+    """Um draft que ja passou pelo Editorial Gate.
+
+    Desde a MS-3 o gate e checado antes de tudo no PayloadDraftSubmitter, entao
+    testar as guardas de configuracao do Payload exige um draft liberado — caso
+    contrario o gate barra primeiro e a guarda seguinte nunca e exercitada.
+    """
+    from app.editorial_gate import GATE_CLEAR, EditorialGateResult
+
+    draft = _draft(**kwargs)
+    draft.editorial_gate = EditorialGateResult(
+        draft_id=draft.draft_id,
+        policy_version="mnscr-editorial-gate-v1",
+        outcome=GATE_CLEAR,
+        rules=[],
+    )
+    return draft
+
+
 class TestPayloadDraftSubmitter:
     def test_disabled_submitter_reports_disabled_and_does_not_transmit(self):
         submitter = PayloadDraftSubmitter(PayloadConfig(enabled=False))
-        result = submitter.submit(_draft())
+        result = submitter.submit(_cleared_draft())
         assert result.success is False
         assert result.status == "DISABLED"
         assert result.error == NOT_ENABLED_MESSAGE
@@ -101,8 +120,19 @@ class TestPayloadDraftSubmitter:
             PayloadConfig(enabled=True, base_url="https://cms.example", api_token="tok")
         )
         with pytest.raises(SubmitterNotEnabledError) as exc:
-            submitter.submit(_draft())
+            submitter.submit(_cleared_draft())
         assert str(exc.value) == NOT_ENABLED_MESSAGE
+
+    def test_gate_is_checked_before_the_payload_configuration(self):
+        """Um draft sem veredito nao chega nem a mensagem de contrato pendente."""
+        from app.submitters.payload import GATE_REJECTION_MESSAGE
+
+        submitter = PayloadDraftSubmitter(
+            PayloadConfig(enabled=True, base_url="https://cms.example", api_token="tok")
+        )
+        result = submitter.submit(_draft())
+        assert result.success is False
+        assert GATE_REJECTION_MESSAGE in result.error
 
     def test_document_is_cms_neutral_and_never_published(self):
         document = PayloadDraftSubmitter(PayloadConfig()).build_document(_draft())
