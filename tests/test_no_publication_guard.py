@@ -50,6 +50,16 @@ CANONICAL_MODULES = [
     "app/contracts/rssprime_event_v1.py",
     "app/contracts/states.py",
     "app/contracts/validation.py",
+    # MS-3: Editorial Gate, persistencia e reavaliacao.
+    "app/gate_service.py",
+    "app/gate_store.py",
+    "app/editorial_gate/__init__.py",
+    "app/editorial_gate/engine.py",
+    "app/editorial_gate/errors.py",
+    "app/editorial_gate/models.py",
+    "app/editorial_gate/policy.py",
+    "app/editorial_gate/rules.py",
+    "app/editorial_gate/serialization.py",
 ]
 
 FORBIDDEN_SYMBOLS = [

@@ -104,6 +104,20 @@ STORE_RAW_EVENT_PAYLOAD = (
 )
 MAX_EVENT_PAYLOAD_BYTES = int(os.getenv('MNSCR_MAX_EVENT_PAYLOAD_BYTES', 1048576))
 
+# --- Editorial Gate (MS-3) ---
+# Classificador técnico e versionado do draft. Não aprova e não publica.
+# Desabilitar é permitido apenas em desenvolvimento: o gate desabilitado
+# registra GATE_DISABLED, que nunca habilita submissão externa.
+EDITORIAL_GATE_ENABLED = (
+    os.getenv('MNSCR_EDITORIAL_GATE_ENABLED', 'true').strip().lower() != 'false'
+)
+EDITORIAL_GATE_POLICY = (
+    os.getenv('MNSCR_EDITORIAL_GATE_POLICY') or 'mnscr-editorial-gate-v1'
+).strip()
+EDITORIAL_GATE_POLICY_DIR = (
+    os.getenv('MNSCR_EDITORIAL_GATE_POLICY_DIR') or 'config/editorial_gate'
+).strip()
+
 # --- Configuração da IA ---
 def _is_gemini_api_key_var_name(env_name: str) -> bool:
     """Return True only for env var names that are intended to store Gemini API keys."""
@@ -259,6 +273,20 @@ def get_runtime_config_issues() -> List[str]:
 
     if not AI_API_KEYS:
         issues.append("Nenhuma chave GEMINI válida foi encontrada")
+
+    # Uma política de gate inexistente precisa falhar no startup: usar um
+    # fallback silencioso tornaria todo veredito armazenado inexplicável.
+    if EDITORIAL_GATE_ENABLED:
+        from app.editorial_gate.errors import EditorialGateError
+        from app.editorial_gate.policy import available_policies, load_policy
+
+        try:
+            load_policy(EDITORIAL_GATE_POLICY, EDITORIAL_GATE_POLICY_DIR)
+        except EditorialGateError as exc:
+            found = available_policies(EDITORIAL_GATE_POLICY_DIR)
+            issues.append(
+                f"{exc} Políticas disponíveis: {', '.join(found) if found else 'nenhuma'}"
+            )
 
     for source_id in PIPELINE_ORDER:
         feed = RSS_FEEDS.get(source_id)

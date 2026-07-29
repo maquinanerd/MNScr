@@ -139,6 +139,13 @@ class Database:
             "submission_destination": "ALTER TABLE seen_articles ADD COLUMN submission_destination TEXT",
             "submission_status": "ALTER TABLE seen_articles ADD COLUMN submission_status TEXT",
             "submission_error": "ALTER TABLE seen_articles ADD COLUMN submission_error TEXT",
+            # MS-3: veredito mais recente do Editorial Gate. O histórico completo
+            # vive em editorial_gate_results; aqui fica só o ponteiro operacional.
+            "latest_gate_id": "ALTER TABLE seen_articles ADD COLUMN latest_gate_id TEXT",
+            "latest_gate_status": "ALTER TABLE seen_articles ADD COLUMN latest_gate_status TEXT",
+            "latest_gate_policy_version":
+                "ALTER TABLE seen_articles ADD COLUMN latest_gate_policy_version TEXT",
+            "latest_gate_hash": "ALTER TABLE seen_articles ADD COLUMN latest_gate_hash TEXT",
             # MS-1: proveniência que a MS-0 apontou como calculada e descartada
             "sources_used_json": "ALTER TABLE seen_articles ADD COLUMN sources_used_json TEXT",
         }
@@ -1173,6 +1180,40 @@ class Database:
         except sqlite3.Error as e:
             logger.error(f"Failed to get status for article id {article_id}: {e}")
             return None
+
+    def record_gate_result(
+        self,
+        article_db_id: int,
+        *,
+        gate_id: str,
+        gate_status: str,
+        policy_version: str,
+        gate_hash: str,
+    ) -> bool:
+        """Point the article row at its latest gate verdict.
+
+        Only a pointer: the verdict itself and its full history live in
+        ``editorial_gate_results``. This never changes ``status`` — a blocked
+        gate does not make a correctly generated draft a failure.
+        """
+        try:
+            cursor = self._get_cursor()
+            cursor.execute(
+                """
+                UPDATE seen_articles
+                SET latest_gate_id = ?,
+                    latest_gate_status = ?,
+                    latest_gate_policy_version = ?,
+                    latest_gate_hash = ?
+                WHERE id = ?
+                """,
+                (gate_id, gate_status, policy_version, gate_hash, article_db_id),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            logger.error(f"Failed to record gate result for article {article_db_id}: {e}")
+            return False
 
     def get_article_by_event_key(self, event_key: str) -> Optional[Dict[str, Any]]:
         """The article row for an acontecimento, most recent first."""

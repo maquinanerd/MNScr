@@ -16,6 +16,7 @@ e vive no CMS.
 - Redige em português brasileiro com Gemini, com política de tamanho proporcional à fonte.
 - Aplica QA determinístico (título, meta, subtitle, CTA, entidades, estrutura).
 - Monta um `EditorialDraft` com fontes, evidências, candidatos de mídia e proveniência.
+- Classifica cada draft no **Editorial Gate** versionado antes da gravação.
 - Entrega o draft a um *submitter*.
 
 ## O que NÃO faz
@@ -44,6 +45,10 @@ Com `PAYLOAD_ENABLED=false` ele não faz rede; com `PAYLOAD_ENABLED=true` ele fa
 ```
 Payload submission is not enabled until the Cinerie Editorial contract is finalized.
 ```
+
+Desde a MS-3 o submitter também recusa, **antes de qualquer outra verificação**,
+qualquer draft cujo gate não seja `GATE_CLEAR` — inclusive um draft sem veredito,
+porque a ausência de opinião não é aprovação.
 
 ## Modo operacional atual
 
@@ -159,6 +164,107 @@ python main.py --replay-event <event_key> --revision 2
 `processing_status`, `draft_id` e `received_at`. O payload completo não é
 exibido por padrão.
 
+## Editorial Gate
+
+O gate avalia cada `EditorialDraft` **depois** da validação técnica e **antes**
+da gravação do artefato local. Ele é determinístico, versionado e explicável.
+
+O gate **não aprova e não publica**. Ele classifica tecnicamente:
+
+| Outcome | Significado |
+|---|---|
+| `GATE_CLEAR` | Nenhum bloqueio determinístico encontrado. **Não é aprovação humana.** |
+| `GATE_REVIEW_REQUIRED` | Há warnings ou incertezas que exigem decisão editorial humana. |
+| `GATE_BLOCKED` | Há falha bloqueante que impede uma futura submissão ao CMS. |
+
+Não existe `APPROVED`, `PUBLISHED` nem `PUBLICATION_READY` — atribuí-los levanta
+`ForbiddenStateError`. A autoridade editorial continua sendo humana e vive no CMS.
+
+### Gate não é aprovação
+
+`GATE_CLEAR` significa apenas que nenhuma regra determinística objetou. Um
+revisor humano continua sendo necessário, e o `PayloadDraftSubmitter` continua
+desabilitado mesmo para drafts liberados.
+
+### Cálculo do resultado
+
+```
+existe regra BLOCKING acionada  → GATE_BLOCKED
+senão, existe WARNING acionada  → GATE_REVIEW_REQUIRED
+senão                           → GATE_CLEAR
+```
+
+Regras `INFO` nunca alteram o resultado. Uma verificação interna impede que o
+gate devolva `GATE_CLEAR` com qualquer bloqueio ou warning acionado.
+
+### Regras bloqueantes
+
+`GATE_MISSING_TITLE` · `GATE_MISSING_BODY` · `GATE_MISSING_SOURCES` ·
+`GATE_NO_SUCCESSFUL_EXTRACTION` · `GATE_MISSING_PROVENANCE` ·
+`GATE_FORBIDDEN_WORDPRESS_MARKUP` · `GATE_UNSAFE_HTML` ·
+`GATE_UNSUPPORTED_TOPIC` · `GATE_BLOCKING_ERRORS_PRESENT` ·
+`GATE_INVALID_REVISION_CONTEXT`
+
+### Warnings (revisão humana)
+
+`GATE_LEGACY_INPUT_CONTRACT` · `GATE_MISSING_PROMPT_VERSION` ·
+`GATE_SINGLE_UNTRUSTED_SOURCE` · `GATE_SOURCE_DIVERSITY_LOW` ·
+`GATE_EXTRACTION_WARNINGS` · `GATE_EVIDENCE_MISSING` ·
+`GATE_EVIDENCE_CONFLICT` · `GATE_CONTENT_TOO_THIN` ·
+`GATE_MISSING_META_DESCRIPTION` · `GATE_SUBTITLE_ISSUE` ·
+`GATE_UNVERIFIED_MEDIA` · `GATE_PROMPT_INJECTION_SIGNAL` · `GATE_REVISION_GAP`
+
+`GATE_PROMPT_INJECTION_SIGNAL` apenas **registra** que existe texto dirigido ao
+modelo. O MNScr não obedece à instrução encontrada, não reescreve o corpo e não
+bloqueia sozinho — uma matéria sobre prompt injection é jornalismo legítimo.
+
+### Informativas
+
+`GATE_TRUSTED_SINGLE_SOURCE` · `GATE_MULTI_SOURCE` · `GATE_V1_INPUT_CONTRACT` ·
+`GATE_LOCAL_OUTPUT_ONLY`
+
+### Política versionada
+
+`config/editorial_gate/mnscr-editorial-gate-v1.json` define quais regras rodam,
+quais domínios são confiáveis para fonte única e os thresholds numéricos.
+
+A allowlist de domínios foi **migrada** de `TRUSTED_SINGLE_SOURCES`; nenhum
+veículo novo foi inventado. Uma política inexistente ou malformada **falha no
+startup**, sem fallback silencioso.
+
+### Draft bloqueado continua salvo
+
+Um draft com `GATE_BLOCKED` **é gravado localmente** e mantém
+`draft_status = DRAFT_GENERATED`: ele foi gerado corretamente. O bloqueio
+impede uma submissão externa futura, nunca a preservação local que o operador
+precisa para entender o que aconteceu. `DRAFT_FAILED` continua reservado a
+falha real de geração ou serialização.
+
+### Persistência e histórico
+
+Os vereditos vivem em `editorial_gate_results` (`UNIQUE(gate_id)`), e o registro
+operacional do draft guarda apenas ponteiros: `latest_gate_id`,
+`latest_gate_status`, `latest_gate_policy_version`, `latest_gate_hash`.
+
+Uma política nova **não sobrescreve** o veredito anterior: cada avaliação
+distinta gera seu próprio registro.
+
+### Reavaliação
+
+```powershell
+python main.py --show-gate <draft_id>
+python main.py --reevaluate-gate <draft_id>
+python main.py --reevaluate-gate <draft_id> --gate-policy mnscr-editorial-gate-v1
+python main.py --list-gate-blocked
+python main.py --list-gate-review-required
+```
+
+A reavaliação lê apenas o artefato local e o SQLite: não consulta o feed, não
+chama IA, não acessa rede, não avança cursor e não altera o `output_hash`. É
+idempotente quando draft e política são idênticos.
+
+`--show-gate` não exibe o corpo da matéria.
+
 ## Configuração
 
 | Variável | Padrão | Papel |
@@ -169,6 +275,9 @@ exibido por padrão.
 | `MNSCR_REQUIRED_INPUT_CONTRACT` | — | Fixe em `rss-prime-event-v1` para rejeitar o legado. |
 | `MNSCR_STORE_RAW_EVENT_PAYLOAD` | `true` | Guarda o payload bruto para replay fiel. |
 | `MNSCR_MAX_EVENT_PAYLOAD_BYTES` | `1048576` | Teto validado antes de persistir. |
+| `MNSCR_EDITORIAL_GATE_ENABLED` | `true` | Desabilitar registra `GATE_DISABLED` e nunca libera submissão. |
+| `MNSCR_EDITORIAL_GATE_POLICY` | `mnscr-editorial-gate-v1` | Política avaliada. Inexistente falha no startup. |
+| `MNSCR_EDITORIAL_GATE_POLICY_DIR` | `config/editorial_gate` | Onde as políticas vivem. |
 | `PAYLOAD_ENABLED` | `false` | Habilita o destino Payload (ainda bloqueado). |
 | `PAYLOAD_BASE_URL` | — | URL do Payload CMS. |
 | `PAYLOAD_API_TOKEN` | — | Token do Payload CMS. |
@@ -184,6 +293,10 @@ O `.env.example` traz a lista completa.
 - `app/ingestion.py` — valida, decide a revisão e persiste o evento recebido
 - `app/event_store.py` — eventos, cursores e histórico de tentativas (SQLite)
 - `app/replay.py` — replay local a partir do payload persistido
+- `app/editorial_gate/` — gate versionado (`models`, `policy`, `rules`, `engine`, `serialization`, `errors`)
+- `app/gate_store.py` — vereditos e histórico do gate (SQLite)
+- `app/gate_service.py` — avaliação, reavaliação e consultas
+- `config/editorial_gate/` — políticas versionadas em JSON
 - `app/editorial/` — modelo de domínio do draft (`models`, `states`, `serialization`, `builder`)
 - `app/submitters/` — contrato de submissão (`base`), `LocalDraftSubmitter`, `PayloadDraftSubmitter`
 - `app/pipeline.py` — orquestração do ciclo
@@ -233,6 +346,12 @@ python -m pytest
 - O envelope de transporte do v1 não está especificado pelo RSS Prime. O MNScr
   reconhece um documento JSON embutido no item, e deliberadamente não inventa um
   XSD nem um namespace XML para representar o domínio.
+- O Editorial Gate usa apenas o que já existe no `EditorialDraft`. O modelo
+  definitivo de fatos, claims, evidências e resolução de conflitos fica para a
+  MS-4 — `GATE_EVIDENCE_MISSING` e `GATE_EVIDENCE_CONFLICT` registram a lacuna
+  em vez de fabricar evidência.
+- Não há aprovação humana, tela de revisão, RBAC nem workflow de CMS. O gate
+  classifica; quem decide é uma pessoa, fora do MNScr.
 - Não há estrutura de conflito factual. Divergência entre fontes ainda é resolvida por
   instrução de prompt, sem registro.
 - Autor e data da fonte não são extraídos no caminho ativo; ficam `null` na proveniência.

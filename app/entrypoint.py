@@ -189,7 +189,100 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="EVENT_KEY",
         help="Lista as revisoes registradas de um acontecimento (sem exibir o payload).",
     )
+    parser.add_argument(
+        "--show-gate",
+        metavar="DRAFT_ID",
+        help="Mostra o veredito do Editorial Gate de um draft (sem exibir o corpo da materia).",
+    )
+    parser.add_argument(
+        "--reevaluate-gate",
+        metavar="DRAFT_ID",
+        help=(
+            "Reavalia o Editorial Gate usando apenas dados locais. "
+            "Nao consulta o feed, nao chama IA e nao avanca o cursor."
+        ),
+    )
+    parser.add_argument(
+        "--gate-policy",
+        metavar="VERSAO",
+        help="Versao da politica a usar em --reevaluate-gate. Sem ela, usa a configurada.",
+    )
+    parser.add_argument(
+        "--list-gate-blocked",
+        action="store_true",
+        help="Lista os drafts cujo ultimo veredito foi GATE_BLOCKED.",
+    )
+    parser.add_argument(
+        "--list-gate-review-required",
+        action="store_true",
+        help="Lista os drafts cujo ultimo veredito foi GATE_REVIEW_REQUIRED.",
+    )
     return parser
+
+
+def _run_show_gate(logger: logging.Logger, draft_id: str) -> int:
+    """``--show-gate``: read-only, no network, no pipeline."""
+    from app.gate_service import GateService, format_gate_result
+
+    service = GateService()
+    try:
+        result = service.get_latest_gate_result(draft_id)
+    finally:
+        service.close()
+
+    if result is None:
+        logger.error("Nenhum veredito de gate registrado para o draft '%s'.", draft_id)
+        return 1
+
+    # Exibir um veredito é sempre uma operação bem-sucedida: o outcome do gate
+    # é o conteúdo do relatório, não o status do comando.
+    print(format_gate_result(result))
+    return 0
+
+
+def _run_reevaluate_gate(
+    logger: logging.Logger, draft_id: str, policy_version: str | None
+) -> int:
+    """``--reevaluate-gate``: local data only."""
+    from app.editorial_gate.errors import EditorialGateError
+    from app.gate_service import GateService, format_gate_result
+
+    service = GateService()
+    try:
+        outcome = service.reevaluate_draft(draft_id, policy_version)
+    except EditorialGateError as exc:
+        logger.error(str(exc))
+        return 1
+    finally:
+        service.close()
+
+    print(format_gate_result(outcome.result))
+    print()
+    print(
+        f"veredito anterior: {outcome.previous_outcome or '-'} | "
+        f"mudou: {'sim' if outcome.changed else 'nao'} | "
+        f"novo registro: {'sim' if outcome.created_new_record else 'nao'}"
+    )
+    return 0
+
+
+def _run_list_gate(logger: logging.Logger, blocked: bool) -> int:
+    """``--list-gate-blocked`` / ``--list-gate-review-required``."""
+    from app.gate_service import GateService, format_gate_listing
+
+    service = GateService()
+    try:
+        rows = service.list_blocked() if blocked else service.list_review_required()
+    finally:
+        service.close()
+
+    title = (
+        "Drafts bloqueados pelo Editorial Gate"
+        if blocked
+        else "Drafts que exigem revisao editorial humana"
+    )
+    print(format_gate_listing(rows, title))
+    return 0
 
 
 def _run_list_event_revisions(logger: logging.Logger, event_key: str) -> int:
@@ -252,8 +345,24 @@ def main(argv: list[str] | None = None) -> None:
     if args.replay_event:
         raise SystemExit(_run_replay(logger, args.replay_event, args.revision))
 
+    if args.show_gate:
+        raise SystemExit(_run_show_gate(logger, args.show_gate))
+
+    if args.reevaluate_gate:
+        raise SystemExit(_run_reevaluate_gate(logger, args.reevaluate_gate, args.gate_policy))
+
+    if args.list_gate_blocked:
+        raise SystemExit(_run_list_gate(logger, blocked=True))
+
+    if args.list_gate_review_required:
+        raise SystemExit(_run_list_gate(logger, blocked=False))
+
     if args.revision is not None:
         logger.error("--revision so pode ser usado junto com --replay-event.")
+        raise SystemExit(2)
+
+    if args.gate_policy is not None:
+        logger.error("--gate-policy so pode ser usado junto com --reevaluate-gate.")
         raise SystemExit(2)
 
     print_startup_banner()
