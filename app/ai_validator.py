@@ -445,17 +445,23 @@ def _apply_local_fixes(data: Dict[str, Any], db_id: Any = "?") -> Dict[str, Any]
                 new_items.append(item)
         result[field] = new_items
 
-    # Corrigir campos dentro de yoast_meta
-    yoast = result.get("yoast_meta")
-    if isinstance(yoast, dict):
-        for key in list(yoast.keys()):
-            val = yoast.get(key)
-            if isinstance(val, str):
-                corrected, fixes = apply_entity_corrections(val)
-                if fixes:
-                    yoast[key] = corrected
-                    all_fixes.extend([f"yoast_meta.{key}:{fix}" for fix in fixes])
-        result["yoast_meta"] = yoast
+    # Corrigir as sugestões sociais neutras.
+    #
+    # Este bloco corrigia `yoast_meta`. A correção de grafia de entidade continua
+    # valendo — o que mudou é o nome do campo: a capacidade editorial foi
+    # preservada, a semântica do CMS de terceiro é que saiu.
+    for field in (
+        "openGraphTitleSuggestion",
+        "openGraphDescriptionSuggestion",
+        "twitterTitleSuggestion",
+        "twitterDescriptionSuggestion",
+    ):
+        value = result.get(field)
+        if isinstance(value, str) and value:
+            corrected, fixes = apply_entity_corrections(value)
+            if fixes:
+                result[field] = corrected
+                all_fixes.extend([f"{field}:{fix}" for fix in fixes])
 
     for fix in all_fixes:
         logger.info("[AI_VALIDATOR] ENTITY_CASE_FIXED %s db_id=%s", fix, db_id)

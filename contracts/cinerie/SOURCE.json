@@ -1,0 +1,25 @@
+{
+  "sourceRepository": "screen-app",
+  "sourceCommit": "f4c49c4dd276c6a362285cd57b39b0b053580561",
+  "sourceCommitShort": "f4c49c4",
+  "sourceCommitSubject": "feat(editorial): add governed MNScr auto-publication and SEO contract",
+  "sourcePackage": "packages/editorial-contracts",
+  "contractName": "editorial-publication-request-v1",
+  "contractVersion": "1.0.0",
+  "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+  "schemaPath": "contracts/cinerie/editorial-publication-request-v1.schema.json",
+  "manifestPath": "contracts/cinerie/contract-manifest.json",
+  "seoPolicyPath": "contracts/cinerie/seo-policy.json",
+  "fixturesPath": "contracts/cinerie/fixtures/publication-fixtures.json",
+  "generation": {
+    "how": "z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' }) executado sobre o proprio Zod do Screen-App, seguido de canonicalJson() do repositorio de origem",
+    "why": "o JSON Schema gerado e a fonte cross-language; traduzir o Zod a mao criaria uma segunda fonte de verdade que diverge no primeiro campo novo",
+    "bytesAreCanonical": true,
+    "hashIsOverFileBytes": true
+  },
+  "notes": [
+    "Os bytes deste schema sao a serializacao CANONICA (chaves ordenadas, sem espacos) usada pelo Screen-App para calcular o hash. Por isso o Python confere o hash sobre os bytes do arquivo, sem reimplementar a canonicalizacao.",
+    "schemaHash NAO e uma constante permanente: e recalculado do arquivo em tempo de execucao e conferido contra o manifesto e contra o preflight. O valor acima registra o que foi copiado, nao o que o codigo assume.",
+    "As regras de superRefine do Zod (tamanho minimo de title/metaDescription, exigencia de fonte externa, update sem alvo, alt para midia ausente, deduplicacao de keyphrases) NAO sao representaveis em JSON Schema e ficam ausentes deste arquivo. Elas sao reimplementadas em app/cinerie/refinements.py e verificadas contra as fixtures invalidas do proprio Cinerie."
+  ]
+}

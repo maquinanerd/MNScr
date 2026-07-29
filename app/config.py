@@ -199,6 +199,92 @@ def get_delivery_config_issues() -> List[str]:
     return issues
 
 
+# --- Cinerie: publicação governada (editorial-publication-request-v1) -------
+#
+# Canal SEPARADO do envio de rascunho acima. Dois caminhos, dois escopos, duas
+# semânticas: transformar o endpoint de rascunho num endpoint de publicação faria
+# um pipeline que só sabia propor passar a publicar sem mudar uma linha.
+
+#: Origem do serviço interno do Cinerie. Apenas a origem — nunca um endpoint,
+#: nunca com credencial embutida.
+PAYLOAD_INTERNAL_SERVICE_URL = (os.getenv('PAYLOAD_INTERNAL_SERVICE_URL') or '').strip()
+MNSCR_PAYLOAD_API_KEY = (os.getenv('MNSCR_PAYLOAD_API_KEY') or '').strip()
+
+#: Autor PÚBLICO que assina a matéria. Não é o ator técnico — esse é derivado da
+#: credencial autenticada, do lado do Cinerie, e nunca sai daqui.
+MNSCR_PUBLIC_AUTHOR_ID = (os.getenv('MNSCR_PUBLIC_AUTHOR_ID') or '').strip()
+MNSCR_ATTRIBUTION_MODE = (os.getenv('MNSCR_ATTRIBUTION_MODE') or 'newsroom').strip()
+
+#: DRAFT ou AUTO_PUBLISH. Sem default silencioso em produção: ver
+#: `app.cinerie_service.resolve_delivery_mode`.
+MNSCR_DELIVERY_MODE = (os.getenv('MNSCR_DELIVERY_MODE') or '').strip().upper()
+
+MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS = float(
+    os.getenv('MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS', 300)
+)
+MNSCR_CINERIE_TIMEOUT_SECONDS = float(os.getenv('MNSCR_CINERIE_TIMEOUT_SECONDS', 20))
+MNSCR_CINERIE_MAX_ATTEMPTS = int(os.getenv('MNSCR_CINERIE_MAX_ATTEMPTS', 3))
+MNSCR_CINERIE_RETRY_BASE_SECONDS = float(os.getenv('MNSCR_CINERIE_RETRY_BASE_SECONDS', 2))
+
+#: `development` | `production`. Decide se um modo de entrega ausente bloqueia.
+MNSCR_ENVIRONMENT = (os.getenv('MNSCR_ENVIRONMENT') or 'development').strip().lower()
+
+
+def cinerie_auto_publish_enabled() -> bool:
+    return MNSCR_DELIVERY_MODE == 'AUTO_PUBLISH'
+
+
+def get_cinerie_config_issues() -> List[str]:
+    """Problemas bloqueantes na configuração de publicação no Cinerie.
+
+    Só valida a fundo quando o modo é `AUTO_PUBLISH`: um MNScr rodando em modo
+    local ou de rascunho não precisa de autor público nem de API key.
+    """
+    issues: List[str] = []
+
+    if MNSCR_DELIVERY_MODE and MNSCR_DELIVERY_MODE not in ('DRAFT', 'AUTO_PUBLISH'):
+        issues.append(
+            f"MNSCR_DELIVERY_MODE desconhecido: '{MNSCR_DELIVERY_MODE}'. Aceitos: DRAFT, AUTO_PUBLISH"
+        )
+    if not MNSCR_DELIVERY_MODE and MNSCR_ENVIRONMENT.startswith('prod'):
+        # Em produção o default do código decidiria sozinho se a matéria sai
+        # publicada ou como rascunho — a decisão mais consequente do arquivo.
+        issues.append(
+            'MNSCR_DELIVERY_MODE é obrigatório em produção (DRAFT ou AUTO_PUBLISH)'
+        )
+
+    if not cinerie_auto_publish_enabled():
+        return issues
+
+    if not PAYLOAD_INTERNAL_SERVICE_URL:
+        issues.append('MNSCR_DELIVERY_MODE=AUTO_PUBLISH exige PAYLOAD_INTERNAL_SERVICE_URL')
+    elif not PAYLOAD_INTERNAL_SERVICE_URL.startswith(('http://', 'https://')):
+        issues.append('PAYLOAD_INTERNAL_SERVICE_URL precisa começar com http:// ou https://')
+    elif '@' in PAYLOAD_INTERNAL_SERVICE_URL.split('//', 1)[-1].split('/', 1)[0]:
+        issues.append('PAYLOAD_INTERNAL_SERVICE_URL não pode conter credencial embutida')
+
+    if not MNSCR_PAYLOAD_API_KEY:
+        issues.append('MNSCR_DELIVERY_MODE=AUTO_PUBLISH exige MNSCR_PAYLOAD_API_KEY')
+    if not MNSCR_PUBLIC_AUTHOR_ID:
+        issues.append(
+            'MNSCR_DELIVERY_MODE=AUTO_PUBLISH exige MNSCR_PUBLIC_AUTHOR_ID '
+            '(a matéria sai assinada por uma entidade Author autorizada)'
+        )
+    if MNSCR_ATTRIBUTION_MODE not in ('byline', 'newsroom', 'assisted'):
+        issues.append(
+            f"MNSCR_ATTRIBUTION_MODE inválido: '{MNSCR_ATTRIBUTION_MODE}'. "
+            'Aceitos: byline, newsroom, assisted'
+        )
+    if MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS < 0:
+        issues.append('MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS não pode ser negativo')
+    if MNSCR_CINERIE_TIMEOUT_SECONDS <= 0:
+        issues.append('MNSCR_CINERIE_TIMEOUT_SECONDS precisa ser positivo')
+    if MNSCR_CINERIE_MAX_ATTEMPTS < 1:
+        issues.append('MNSCR_CINERIE_MAX_ATTEMPTS precisa ser >= 1')
+
+    return issues
+
+
 def get_factual_config_issues() -> List[str]:
     """Blocking problems in the factual settings. Sem fallback silencioso."""
     from app.factual.states import ASSESSMENT_MODES, ASSESSMENT_VERSIONS
@@ -388,6 +474,7 @@ def get_runtime_config_issues() -> List[str]:
         issues.extend(get_factual_config_issues())
 
     issues.extend(get_delivery_config_issues())
+    issues.extend(get_cinerie_config_issues())
 
     # Uma política de gate inexistente precisa falhar no startup: usar um
     # fallback silencioso tornaria todo veredito armazenado inexplicável.

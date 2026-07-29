@@ -1,0 +1,92 @@
+name: CI
+
+# Tudo offline. Nenhum job acessa produção, EasyPanel, screen-db, RSS Prime real
+# ou a internet: a suíte inteira roda contra SQLite temporário e um servidor HTTP
+# de loopback.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Sem modo de entrega configurado: nenhum job deve pedir publicação.
+  MNSCR_ENVIRONMENT: development
+
+jobs:
+  quality:
+    name: lint + lockfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: lockfile reproduzível
+        run: uv lock --check
+      - run: uv run python -m ruff check .
+      - name: diff sem whitespace quebrado
+        run: git diff --check
+
+  tests:
+    name: suíte completa
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - run: uv run python -m pytest -q
+      - name: CLI responde
+        run: uv run python main.py --help
+
+  cinerie-contract:
+    # Gate 1: o pacote contratual copiado do Screen-App confere consigo mesmo e
+    # com as fixtures que o Cinerie publicou. Se alguém reformatar o arquivo de
+    # schema, o hash muda e este gate falha ANTES de o preflight começar a
+    # recusar tudo em produção.
+    name: test:cinerie-contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: identidade do contrato (sem rede)
+        run: uv run python main.py --cinerie-contract
+      - run: uv run python -m pytest tests/test_cinerie_contract.py -q
+
+  cinerie-seo:
+    # Gate 2: SEO neutro, faixas de transporte x autopublicação, slug, keyphrases,
+    # matriz de Schema.org, alt, links internos e blocos.
+    name: test:cinerie-seo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - run: uv run python -m pytest tests/test_cinerie_seo.py -q
+
+  cinerie-delivery:
+    # Gate 3: cliente HTTP contra servidor de loopback, preflight, os quatro
+    # desfechos, retry, persistência e ausência de segredo.
+    name: test:cinerie-delivery
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - run: uv run python -m pytest tests/test_cinerie_delivery.py -q
+      - name: guardas arquiteturais
+        run: uv run python -m pytest tests/test_no_publication_guard.py -q

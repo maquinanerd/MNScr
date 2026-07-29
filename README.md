@@ -4,8 +4,14 @@ Motor editorial do **Cinerie**. O MNScr consome acontecimentos do RSS Prime, ext
 qualifica as fontes, redige com IA e entrega um **draft editorial estruturado** para
 revisão humana.
 
-O MNScr **não publica, não aprova e não indexa**. A autoridade editorial final é humana
-e vive no CMS.
+O MNScr **pede** publicação ao Cinerie; quem decide é o Cinerie. Ele **não aprova e
+não indexa**, e não decide estado público: autor autorizado, QA, fontes, mídia
+licenciada, SEO, tetos diários e kill switch são revalidados no servidor.
+
+> **Mudança de postura (fase atual).** Até a MS-5 o MNScr só propunha rascunhos.
+> Agora existe um caminho automático — e o verbo continua sendo *pedir*. Um pedido
+> inválido não vira matéria publicada: vira `ROUTED_TO_REVIEW` ou `BLOCKED`.
+> Ver [`docs/cinerie-autopublication.md`](docs/cinerie-autopublication.md).
 
 ## O que faz
 
@@ -20,25 +26,47 @@ e vive no CMS.
 - Classifica cada draft no **Editorial Gate** versionado antes da gravação.
 - Entrega o draft a um *submitter* local.
 - Opcionalmente entrega o draft ao **Payload CMS**, sempre como `draft`.
+- Opcionalmente **pede publicação** ao Cinerie sob o contrato versionado
+  `editorial-publication-request-v1`, com preflight de contrato e SEO neutro.
 
 ## O que NÃO faz
 
 Nenhuma destas ações existe no caminho canônico:
 
 publicar em WordPress · criar post · criar categoria · criar tag · enviar imagem ·
-alterar Yoast · disparar Google News · enviar IndexNow · pingar sitemap ·
+produzir campos Yoast · disparar Google News · enviar IndexNow · pingar sitemap ·
 validar News Sitemap · executar URL Inspection · agendar recrawl ·
-marcar conteúdo como publicado · aprovar conteúdo · escrever no banco do Cinerie.
+decidir canonical, robots, JSON-LD ou indexabilidade · aprovar conteúdo ·
+escrever no banco do Cinerie.
+
+O destino final **não é WordPress**, e Yoast **não faz parte** de nenhum contrato:
+o objeto do plugin foi substituído por campos neutros (`openGraphTitleSuggestion` e
+companhia), que é o que o contrato do Cinerie aceita.
 
 O modo de saída `wordpress` é rejeitado no startup com a mensagem
 `WordPress output is disabled in MNScr.`
 
 ## CMS editorial
 
-O CMS definido para o Cinerie é o **Payload CMS**.
+O CMS definido para o Cinerie é o **Payload CMS**, dentro do projeto Screen-App.
 
-A integração efetiva **ainda está bloqueada** pelo contrato editorial: forma da collection,
-campos obrigatórios, fluxo de revisão e política de mídia são decisões do Cinerie Editorial.
+Existem **dois canais**, com contratos, endpoints e escopos diferentes — e a
+separação é deliberada: transformar o endpoint de rascunho num endpoint de
+publicação faria um pipeline que só sabia propor passar a publicar sem mudar uma
+linha.
+
+| Canal | Contrato | Publica? |
+|---|---|---|
+| rascunho (`MNSCR_DELIVERY_MODE=DRAFT`) | `mnscr-editorial-draft-v0` | não |
+| publicação (`MNSCR_DELIVERY_MODE=AUTO_PUBLISH`) | `editorial-publication-request-v1` | pede |
+
+O canal de publicação está **implementado e testado contra servidor local**;
+ele ainda não foi validado contra uma instância real do Cinerie. Detalhes,
+limitações e o que falta do outro lado:
+[`docs/cinerie-autopublication.md`](docs/cinerie-autopublication.md).
+
+O trecho abaixo descreve o `PayloadDraftSubmitter` **legado**, mantido por
+compatibilidade e ainda desligado.
 
 O `PayloadDraftSubmitter` já existe com configuração, validação e transformação de
 `EditorialDraft` para um documento neutro do Payload — mas **não transmite nada**.

@@ -11,6 +11,10 @@ dependencies = [
     # dependencia era transitiva e precisa ser declarada para o lockfile instalar.
     "google-api-core>=2.25.0",
     "google-genai>=1.29.0",
+    # MS-5/Cinerie: o contrato editorial-publication-request-v1 atravessa a
+    # fronteira como JSON Schema draft 2020-12. Validar com um verificador
+    # proprio criaria uma segunda leitura do mesmo schema.
+    "jsonschema>=4.23.0",
     "lxml>=5.4.0",
     "python-dotenv>=1.1.1",
     "python-slugify>=8.0.4",

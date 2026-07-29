@@ -87,6 +87,25 @@ CANONICAL_MODULES = [
     "app/delivery/payload_cms.py",
     "app/delivery/retry.py",
     "app/delivery/states.py",
+    # MS-5/Cinerie: publicacao governada.
+    "app/cinerie_service.py",
+    "app/cinerie_store.py",
+    "app/cinerie/__init__.py",
+    "app/cinerie/blocks.py",
+    "app/cinerie/client.py",
+    "app/cinerie/contract.py",
+    "app/cinerie/errors.py",
+    "app/cinerie/forbidden.py",
+    "app/cinerie/identity.py",
+    "app/cinerie/outcomes.py",
+    "app/cinerie/policy.py",
+    "app/cinerie/preflight.py",
+    "app/cinerie/refinements.py",
+    "app/cinerie/request.py",
+    "app/cinerie/seo.py",
+    "app/cinerie/slug.py",
+    "app/cinerie/text.py",
+    "app/cinerie/validation.py",
 ]
 
 FORBIDDEN_SYMBOLS = [
@@ -203,6 +222,22 @@ TRANSPORT_FREE_MODULES = [
     "app/editorial_gate/rules.py",
     "app/factual_builder.py",
     "app/factual_store.py",
+    # Cinerie: so `client.py` fala HTTP. E isso que permite exercitar contrato,
+    # SEO, blocos, identidade e recusa sem abrir um socket.
+    "app/cinerie/blocks.py",
+    "app/cinerie/contract.py",
+    "app/cinerie/errors.py",
+    "app/cinerie/forbidden.py",
+    "app/cinerie/identity.py",
+    "app/cinerie/outcomes.py",
+    "app/cinerie/policy.py",
+    "app/cinerie/refinements.py",
+    "app/cinerie/request.py",
+    "app/cinerie/seo.py",
+    "app/cinerie/slug.py",
+    "app/cinerie/text.py",
+    "app/cinerie/validation.py",
+    "app/cinerie_store.py",
 ]
 
 HTTP_CLIENT_MARKERS = ("import requests", "import httpx", "from requests", "urlopen")
@@ -278,3 +313,100 @@ def test_delivery_only_ever_creates_drafts():
     source = _source("app/delivery/contract.py")
     assert 'CMS_STATUS_DRAFT: Final[str] = "draft"' in source
     assert "self.cms_status = CMS_STATUS_DRAFT" in source
+
+
+# ===========================================================================
+# Cinerie: publicacao governada
+# ===========================================================================
+
+
+def test_only_the_cinerie_client_imports_requests():
+    """Um unico modulo com transporte. O resto do pacote e dominio puro."""
+    offenders = []
+    for path in (APP_DIR / "cinerie").rglob("*.py"):
+        if path.name == "client.py":
+            continue
+        source = path.read_text(encoding="utf-8")
+        if any(marker in source for marker in HTTP_CLIENT_MARKERS):
+            offenders.append(path.name)
+    assert offenders == [], f"modulos do Cinerie com cliente HTTP: {offenders}"
+
+
+def test_no_cinerie_module_transmits_at_import_time():
+    for path in (APP_DIR / "cinerie").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            assert not isinstance(node, ast.Expr) or not isinstance(
+                getattr(node, "value", None), ast.Call
+            ), f"{path} executa chamada no nivel do modulo"
+
+
+def test_cinerie_never_reaches_into_the_screen_app_side():
+    """O MNScr propoe; o Cinerie decide e renderiza.
+
+    Nenhum modulo daqui pode implementar canonical, robots, JSON-LD, sitemap,
+    redirects, projecao ou banco do Screen-App — sao decisoes do outro lado, e
+    implementa-las aqui criaria duas fontes discordando.
+    """
+    forbidden = (
+        "screen_db",
+        "screendb",
+        "projection_worker",
+        "news-sitemap",
+        "news_sitemap",
+        "build_json_ld",
+        "render_canonical",
+        "SCREEN_DATABASE_URL",
+        "PAYLOAD_DATABASE_URL",
+    )
+    for path in list((APP_DIR / "cinerie").rglob("*.py")) + [
+        APP_DIR / "cinerie_service.py",
+        APP_DIR / "cinerie_store.py",
+    ]:
+        source = path.read_text(encoding="utf-8")
+        for marker in forbidden:
+            assert marker not in source, f"{path.name} invade o Screen-App ({marker})"
+
+
+def test_cinerie_does_not_reach_for_out_of_scope_enrichment():
+    """TMDB, Knowledge Graph, embeddings e busca vetorial estao fora desta fase."""
+    for path in (APP_DIR / "cinerie").rglob("*.py"):
+        source = path.read_text(encoding="utf-8").lower()
+        for marker in ("tmdb", "knowledge_graph", "embedding", "vector_search", "faiss"):
+            assert marker not in source, f"{path.name} referencia {marker}"
+
+
+def test_the_request_never_declares_technical_identity():
+    """A identidade tecnica vem da credencial, nunca do corpo."""
+    source = _source("app/cinerie/request.py")
+    for forbidden in (
+        '"technicalActorId"',
+        '"serviceAccountId"',
+        '"publishedBy"',
+        '"createdBy"',
+        '"scopes"',
+        '"proposedAction"',
+        '"contractHash"',
+        '"schemaVersion"',
+    ):
+        assert forbidden not in source, f"request.py declara {forbidden}"
+
+
+def test_the_ai_output_no_longer_carries_yoast():
+    """O objeto do plugin saiu; as capacidades editorais ficaram."""
+    for module in ("app/ai_seo_pack.py", "app/ai_client_gemini.py", "app/ai_validator.py"):
+        source = _source(module)
+        for forbidden in ('"yoast_meta"', "'yoast_meta'", '"_yoast_wpseo_title"'):
+            assert forbidden not in source, f"{module} ainda produz {forbidden}"
+
+
+def test_the_neutral_social_fields_replaced_them():
+    """Controle POSITIVO: sem ele o teste acima passaria com os campos apagados."""
+    source = _source("app/ai_seo_pack.py")
+    for expected in (
+        "openGraphTitleSuggestion",
+        "openGraphDescriptionSuggestion",
+        "twitterTitleSuggestion",
+        "twitterDescriptionSuggestion",
+    ):
+        assert expected in source, f"ai_seo_pack.py perdeu {expected}"

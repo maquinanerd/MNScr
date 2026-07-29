@@ -245,6 +245,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Em --reevaluate-factual, extrai apenas padroes deterministicos (sem IA).",
     )
+    parser.add_argument(
+        "--cinerie-contract",
+        action="store_true",
+        help=(
+            "Mostra a identidade LOCAL do contrato do Cinerie (nome, versao, hash "
+            "recalculado do arquivo e commit de origem). Nao acessa a rede."
+        ),
+    )
+    parser.add_argument(
+        "--cinerie-preflight",
+        action="store_true",
+        help=(
+            "Executa o preflight contratual contra o Cinerie configurado e compara "
+            "nome, versao e hash. Nao publica nada."
+        ),
+    )
+    parser.add_argument(
+        "--list-cinerie-publications",
+        action="store_true",
+        help="Lista as publicacoes pedidas ao Cinerie e seus desfechos.",
+    )
     return parser
 
 
@@ -309,6 +330,94 @@ def _run_reevaluate_factual(
         f"novo registro: {'sim' if outcome.created_new_record else 'nao'} | "
         f"gate: {outcome.gate_outcome or '-'}"
     )
+    return 0
+
+
+def _run_cinerie_contract(logger: logging.Logger) -> int:
+    """``--cinerie-contract``: identidade local. Sem rede.
+
+    O hash exibido e **recalculado dos bytes do arquivo**, nao lido de uma
+    constante. E o que permite responder "qual contrato este binario fala?" sem
+    depender de o repositorio estar coerente consigo mesmo.
+    """
+    from app.cinerie.contract import local_identity
+    from app.cinerie.errors import ContractArtifactError
+    from app.cinerie.policy import policy_summary
+
+    try:
+        identity = local_identity()
+    except ContractArtifactError as exc:
+        logger.error("Pacote contratual do Cinerie invalido: %s", exc)
+        return 1
+
+    print(f"contractName      {identity.contract_name}")
+    print(f"contractVersion   {identity.contract_version}")
+    print(f"schemaHash        {identity.schema_hash}")
+    print(f"compatibility     {identity.compatibility}")
+    print(f"direction         {identity.direction}")
+    print(f"origem (commit)   {identity.source_commit}")
+    print("politica de SEO:")
+    for line in policy_summary():
+        print(f"  - {line}")
+    return 0
+
+
+def _run_cinerie_preflight(logger: logging.Logger) -> int:
+    """``--cinerie-preflight``: compara com o destino. Nao publica nada."""
+    from app import config
+    from app.cinerie.client import CinerieClient, CinerieConfig
+    from app.cinerie.errors import CinerieError
+    from app.cinerie.preflight import ContractPreflight
+
+    issues = config.get_cinerie_config_issues()
+    if issues:
+        for issue in issues:
+            logger.error("Configuracao do Cinerie: %s", issue)
+        return 2
+
+    try:
+        client = CinerieClient(
+            CinerieConfig(
+                base_url=config.PAYLOAD_INTERNAL_SERVICE_URL,
+                api_key=config.MNSCR_PAYLOAD_API_KEY,
+                timeout_seconds=config.MNSCR_CINERIE_TIMEOUT_SECONDS,
+            )
+        )
+        # `force=True`: um preflight pedido a mao existe justamente para nao
+        # acreditar no que estava guardado.
+        result = ContractPreflight(client).check(force=True)
+    except CinerieError as exc:
+        logger.error("Preflight falhou (%s): %s", exc.code, exc)
+        return 1
+
+    for key, value in result.safe_log_fields().items():
+        print(f"{key:<18} {value}")
+    return 0 if result.compatible else 1
+
+
+def _run_list_cinerie_publications(logger: logging.Logger) -> int:
+    """``--list-cinerie-publications``: leitura local, sem rede."""
+    from app.cinerie_store import CinerieStore
+
+    store = CinerieStore()
+    try:
+        cursor = store.conn.cursor()
+        cursor.execute("SELECT * FROM cinerie_publications ORDER BY id DESC LIMIT 100")
+        rows = [store._row_to_record(row) for row in cursor.fetchall()]
+    finally:
+        store.close()
+
+    if not rows:
+        logger.info("Nenhuma publicacao registrada para o Cinerie.")
+        return 0
+
+    print(f"{'REQUEST':<40} {'REV':>4} {'STATUS':<22} {'OUTCOME':<18} ARTIGO")
+    for record in rows:
+        print(
+            f"{record.request_id:<40} {record.source_revision:>4} "
+            f"{record.delivery_status:<22} {record.payload_outcome or '-':<18} "
+            f"{record.payload_article_id or '-'}"
+        )
     return 0
 
 
@@ -462,6 +571,15 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(
             _run_reevaluate_factual(logger, args.reevaluate_factual, args.deterministic)
         )
+
+    if args.cinerie_contract:
+        raise SystemExit(_run_cinerie_contract(logger))
+
+    if args.cinerie_preflight:
+        raise SystemExit(_run_cinerie_preflight(logger))
+
+    if args.list_cinerie_publications:
+        raise SystemExit(_run_list_cinerie_publications(logger))
 
     if args.revision is not None:
         logger.error("--revision so pode ser usado junto com --replay-event.")

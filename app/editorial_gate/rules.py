@@ -232,6 +232,46 @@ def rule_missing_prompt_version(draft, policy, context) -> EditorialRuleResult:
     )
 
 
+#: Chaves de CMS de terceiro recusadas em QUALQUER profundidade do draft.
+#:
+#: A comparacao ignora underscore, hifen e caixa: `post_status`, `postStatus` e
+#: `POST-STATUS` sao a mesma tentativa.
+_FORBIDDEN_CMS_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "yoastmeta", "yoast", "yoastwpseotitle", "yoastwpseometadesc",
+        "yoastwpseofocuskw", "yoastwpseocanonical", "yoastnewskeywords",
+        "yoastwpseoopengraphtitle", "yoastwpseoopengraphdescription",
+        "yoastwpseotwittertitle", "yoastwpseotwitterdescription",
+        "poststatus", "wppost", "wppostid", "wordpress", "featuredmedia",
+        "rankmath", "aioseo", "canonical", "canonicalurl", "robots", "noindex",
+        "indexstatus", "jsonld", "schemajson", "publisher", "hreflang", "sitemap",
+    }
+)
+
+_KEY_SEPARATORS: Final[re.Pattern[str]] = re.compile(r"[_-]")
+
+
+def _find_cms_keys(payload: Any, depth: int = 0) -> List[str]:
+    """Chaves de CMS de terceiro, em qualquer nivel.
+
+    Varre CHAVES, e nao o `str()` do dicionario inteiro. A diferenca importa: a
+    varredura anterior achava "yoast" tambem dentro de um VALOR, e uma materia
+    que citasse o plugin no proprio texto era bloqueada por falar sobre ele.
+    """
+    if depth > 12 or payload is None:
+        return []
+    found: List[str] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if _KEY_SEPARATORS.sub("", str(key).lower()) in _FORBIDDEN_CMS_KEYS:
+                found.append(str(key))
+            found.extend(_find_cms_keys(value, depth + 1))
+    elif isinstance(payload, (list, tuple)):
+        for item in payload:
+            found.extend(_find_cms_keys(item, depth + 1))
+    return found
+
+
 def rule_forbidden_wordpress_markup(draft, policy, context) -> EditorialRuleResult:
     body = draft.content.body_html or ""
     found: List[str] = []
@@ -241,10 +281,8 @@ def rule_forbidden_wordpress_markup(draft, policy, context) -> EditorialRuleResu
         found.append("classe wp-image-* no corpo")
     if _WP_BLOCK_PATTERN.search(body):
         found.append("comentario de bloco Gutenberg <!-- wp: -->")
-    flat = str(draft.to_dict())
-    for marker in ("wp_post_id", "featured_media", "yoast"):
-        if marker in flat.lower():
-            found.append(f"campo '{marker}' presente no draft")
+    for key in dict.fromkeys(_find_cms_keys(draft.to_dict())):
+        found.append(f"campo de CMS de terceiro no draft: '{key}'")
     return _result(
         "GATE_FORBIDDEN_WORDPRESS_MARKUP", SEVERITY_BLOCKING, bool(found),
         "Markup ou identificador WordPress presente no draft." if found else

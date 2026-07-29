@@ -1,0 +1,2142 @@
+{
+  "valid": {
+    "publicationRequest": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    },
+    "publicationUpdate": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0002",
+      "idempotencyKey": "mnscr:cluster-4711:rev-4",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 4,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "update",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio antecipa a data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio antecipou a estreia em duas semanas, segundo comunicado enviado a imprensa nesta quarta-feira.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07",
+      "targetArticleId": "article-8801"
+    },
+    "routedToReviewRequest": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0003",
+      "idempotencyKey": "mnscr:cluster-4712:rev-1",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": false,
+        "warnings": [
+          "entidade secundaria com baixa confianca"
+        ],
+        "blockingErrors": [
+          "fato central sem segunda fonte"
+        ]
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    },
+    "conflictingUpdateRequest": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0004",
+      "idempotencyKey": "mnscr:cluster-4711:rev-1",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 1,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "update",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio antecipa a data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio antecipou a estreia em duas semanas, segundo comunicado enviado a imprensa nesta quarta-feira.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07",
+      "targetArticleId": "article-8801"
+    }
+  },
+  "invalid": {
+    "yoastField": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ],
+        "_yoast_wpseo_title": "titulo"
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    },
+    "wordpressPostStatus": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07",
+      "post_status": "publish"
+    },
+    "canonicalFromProducer": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ],
+        "canonical": "https://cinerie.com/x"
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    },
+    "bypassReview": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07",
+      "bypassReview": true
+    },
+    "noExternalSources": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    },
+    "qaFailedWithoutErrors": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": false,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    },
+    "updateWithoutTarget": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "update",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    },
+    "altForUnknownMedia": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-inexistente",
+            "alt": "Cartaz oficial"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    },
+    "metaTooShort": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "Curta.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    },
+    "authorAsFreeText": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07",
+      "publicAuthorName": "Fulano"
+    },
+    "clientDeclaredTechnicalActor": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07",
+      "technicalActorId": "service-account-de-outro"
+    },
+    "clientDeclaredServiceAccount": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07",
+      "serviceAccountId": "sa-999"
+    },
+    "clientDeclaredScopes": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07",
+      "scopes": [
+        "editorial_auto_publish",
+        "publication_projection"
+      ]
+    },
+    "nestedTechnicalActor": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "publishedBy": "sa-oculta"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    },
+    "duplicateSeoProposal": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07",
+      "seoProposal": {
+        "metaTitle": "outro titulo",
+        "metaDescription": "outra meta"
+      }
+    },
+    "looseSeoField": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07",
+      "metaDescription": "meta concorrente no nivel superior"
+    },
+    "incompatibleSchemaHash": {
+      "contractName": "editorial-publication-request-v1",
+      "contractVersion": "1.0.0",
+      "schemaHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "requestId": "req-2026-07-29-0001",
+      "idempotencyKey": "mnscr:cluster-4711:rev-3",
+      "sourceClusterId": "cluster-4711",
+      "sourceRevision": 3,
+      "sourcePayloadHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "publicationIntent": "publish",
+      "publicAuthorId": "author-redacao-cinerie",
+      "attributionMode": "newsroom",
+      "contentType": "news",
+      "language": "pt-BR",
+      "title": "Estudio confirma data de estreia da nova serie",
+      "subtitle": "Producao chega ao catalogo em marco",
+      "summary": "O estudio confirmou nesta terca-feira a data de estreia da nova serie, encerrando meses de especulacao entre os fas.",
+      "blocks": [
+        {
+          "type": "paragraph",
+          "id": "b1",
+          "text": "O estudio confirmou a data de estreia em comunicado enviado a imprensa nesta terca-feira."
+        },
+        {
+          "type": "paragraph",
+          "id": "b2",
+          "text": "A primeira temporada tera oito episodios, com lancamento semanal apos a estreia dupla."
+        }
+      ],
+      "externalSources": [
+        {
+          "id": "src-variety",
+          "name": "Variety",
+          "url": "https://variety.com/exemplo-de-materia",
+          "role": "primary"
+        }
+      ],
+      "entityLinks": [
+        {
+          "entityKind": "tv",
+          "entityId": "tv-12345",
+          "relation": "primary_subject",
+          "confidence": 0.95
+        }
+      ],
+      "media": [
+        {
+          "mediaId": "media-9001",
+          "intendedUse": "hero",
+          "altSuggestion": "Cartaz oficial da serie"
+        }
+      ],
+      "seo": {
+        "version": "seo-proposal-v1",
+        "title": "Nova serie ganha data de estreia oficial",
+        "metaDescription": "O estudio confirmou a data de estreia da nova serie, que chega ao catalogo em marco com oito episodios e lancamento semanal.",
+        "slugSuggestion": "nova-serie-data-de-estreia",
+        "focusKeyphrase": "data de estreia",
+        "relatedKeyphrases": [
+          "nova serie",
+          "catalogo de marco"
+        ],
+        "editorialKeywords": [
+          "serie",
+          "estreia",
+          "streaming"
+        ],
+        "schemaTypeRecommendation": "NewsArticle",
+        "articleSectionSuggestion": "Series",
+        "openGraphTitleSuggestion": "Nova serie ganha data de estreia",
+        "openGraphDescriptionSuggestion": "A producao chega ao catalogo em marco com oito episodios.",
+        "imageAltSuggestions": [
+          {
+            "mediaRef": "media-9001",
+            "alt": "Cartaz oficial da nova serie"
+          }
+        ],
+        "internalLinkSuggestions": [
+          {
+            "targetType": "tv_show",
+            "targetId": "tv-12345",
+            "anchorText": "a nova serie",
+            "reason": "entidade principal da materia",
+            "confidence": 0.95
+          }
+        ]
+      },
+      "provenance": {
+        "pipeline": "mnscr@2026.07",
+        "model": "redacao-assistida",
+        "inputHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      },
+      "qa": {
+        "version": "qa@1",
+        "passed": true,
+        "warnings": [],
+        "blockingErrors": []
+      },
+      "generatedAt": "2026-07-29T12:00:00.000Z",
+      "pipelineVersion": "mnscr@2026.07"
+    }
+  }
+}

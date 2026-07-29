@@ -27,8 +27,18 @@ from .config import (
     EDITORIAL_GATE_ENABLED,
     FACTUAL_ASSESSMENT_ENABLED,
     LOCAL_DRAFT_DIR,
+    MNSCR_ATTRIBUTION_MODE,
+    MNSCR_CINERIE_MAX_ATTEMPTS,
+    MNSCR_CINERIE_RETRY_BASE_SECONDS,
+    MNSCR_CINERIE_TIMEOUT_SECONDS,
+    MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS,
+    MNSCR_DELIVERY_MODE,
+    MNSCR_ENVIRONMENT,
+    MNSCR_PAYLOAD_API_KEY,
+    MNSCR_PUBLIC_AUTHOR_ID,
     OUTPUT_MODE,
     PAYLOAD_CMS_ENABLED,
+    PAYLOAD_INTERNAL_SERVICE_URL,
     PIPELINE_CONFIG,
     PIPELINE_ORDER,
     PUBLISHER_DOMAIN,
@@ -1494,6 +1504,12 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         rewritten_data['slug'] = final_slug
                         logger.info("[SLUG_SUGGESTION] slug=%s db_id=%s", final_slug, art_data["db_id"])
 
+                        # As sugestoes de SEO cruas da IA seguem para a camada
+                        # do Cinerie, que as normaliza e reconstroi. Guardadas em
+                        # `art_data` para nao alargar a assinatura do draft com um
+                        # campo que so a entrega usa.
+                        art_data['_seo_source'] = rewritten_data
+
                         # --- CONSTRUCAO DO DRAFT EDITORIAL ---
                         draft = build_editorial_draft(
                             art_data=art_data,
@@ -1601,6 +1617,11 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
 
                         # --- ENTREGA AO CMS (somente draft, apos o gate) ---
                         _deliver_draft(draft, art_data)
+
+                        # --- PUBLICACAO GOVERNADA NO CINERIE (AUTO_PUBLISH) ---
+                        # Canal separado do envio de rascunho: outro contrato,
+                        # outro endpoint, outro escopo.
+                        _publish_to_cinerie(draft, art_data)
 
                         # Link store: alimenta sugestoes de links internos futuros.
                         from .cluster_engine import score_event
@@ -1851,6 +1872,71 @@ def _deliver_draft(draft, art_data):
     finally:
         if service is not None:
             service.close()
+
+
+def _publish_to_cinerie(draft, art_data):
+    """Pede publicacao governada ao Cinerie, quando o modo e AUTO_PUBLISH.
+
+    Canal SEPARADO do envio de rascunho acima: outro contrato, outro endpoint,
+    outro escopo. Roda por ultimo pelo mesmo motivo — o artefato local ja esta
+    gravado, entao uma falha aqui nunca custa a copia local.
+
+    O servico recusa antes de qualquer socket quando o gate bloqueou, quando o
+    contrato divergiu ou quando o pedido nao passa na validacao local.
+    """
+    from .cinerie_service import MODE_AUTO_PUBLISH, resolve_delivery_mode
+
+    try:
+        mode = resolve_delivery_mode(MNSCR_DELIVERY_MODE, environment=MNSCR_ENVIRONMENT)
+    except Exception as exc:  # noqa: BLE001 - configuracao invalida nunca publica
+        logger.error("[CINERIE_PUBLICATION] modo de entrega invalido (%s); nada foi enviado", exc)
+        return None
+
+    if mode != MODE_AUTO_PUBLISH:
+        return None
+
+    service = None
+    try:
+        from .cinerie.client import CinerieClient, CinerieConfig
+        from .cinerie.preflight import ContractPreflight
+        from .cinerie_service import CinerieService
+        from .cinerie_store import CinerieStore
+        from .delivery.retry import RetryPolicy
+
+        client = CinerieClient(
+            CinerieConfig(
+                base_url=PAYLOAD_INTERNAL_SERVICE_URL,
+                api_key=MNSCR_PAYLOAD_API_KEY,
+                timeout_seconds=MNSCR_CINERIE_TIMEOUT_SECONDS,
+            )
+        )
+        service = CinerieService(
+            store=CinerieStore(),
+            client=client,
+            public_author_id=MNSCR_PUBLIC_AUTHOR_ID,
+            attribution_mode=MNSCR_ATTRIBUTION_MODE,
+            delivery_mode=mode,
+            preflight=ContractPreflight(
+                client, ttl_seconds=MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS
+            ),
+            retry_policy=RetryPolicy(
+                max_attempts=MNSCR_CINERIE_MAX_ATTEMPTS,
+                base_seconds=MNSCR_CINERIE_RETRY_BASE_SECONDS,
+            ),
+        )
+        result = service.publish_draft(draft, seo_source=art_data.get("_seo_source"))
+        logger.info("[CINERIE_PUBLICATION] draft_id=%s %s", draft.draft_id, result.safe_log_fields())
+        return result
+    except Exception as exc:  # noqa: BLE001 - o draft local nunca pode ser perdido
+        logger.exception(
+            "[CINERIE_PUBLICATION] draft_id=%s falha inesperada (%s); "
+            "o draft local permanece intacto",
+            draft.draft_id, type(exc).__name__,
+        )
+        return None
+    finally:
+        if service is not None:
+            service.store.close()
 
 
 def _run_factual_assessment(draft, art_data):
