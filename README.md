@@ -16,6 +16,7 @@ e vive no CMS.
 - Redige em português brasileiro com Gemini, com política de tamanho proporcional à fonte.
 - Aplica QA determinístico (título, meta, subtitle, CTA, entidades, estrutura).
 - Monta um `EditorialDraft` com fontes, evidências, candidatos de mídia e proveniência.
+- Estrutura o que o draft **afirma** e o que as fontes **sustentam** ou **contradizem**.
 - Classifica cada draft no **Editorial Gate** versionado antes da gravação.
 - Entrega o draft a um *submitter*.
 
@@ -164,6 +165,114 @@ python main.py --replay-event <event_key> --revision 2
 `processing_status`, `draft_id` e `received_at`. O payload completo não é
 exibido por padrão.
 
+## Estrutura factual
+
+O MNScr não guarda apenas *referências* de fonte: ele mantém a estrutura que
+permite perguntar o que o texto afirma e o que as fontes recebidas sustentam.
+
+| Conceito | O que é |
+|---|---|
+| **claim** | uma afirmação do draft, com o lugar onde aparece (`title`, `body:p:3`, …) |
+| **evidência** | um trecho curto de uma fonte recebida, com URL e hash |
+| **link** | como a fonte se relaciona com a afirmação, com justificativa objetiva |
+| **conflito** | onde as fontes discordam — registrado, nunca resolvido |
+| **cobertura** | quanto das afirmações materiais está de fato sustentado |
+
+### Status das afirmações
+
+| Status | Significado |
+|---|---|
+| `SUPPORTED` | ao menos uma fonte sustenta, sem contradição material |
+| `PARTIALLY_SUPPORTED` | parte relevante da afirmação segue sem confirmação |
+| `UNSUPPORTED` | **nenhuma fonte recebida sustenta** — não significa que seja falso |
+| `CONFLICTING` | alguma fonte contradiz o valor material |
+| `UNVERIFIED` | as fontes citam o assunto, mas não confirmam nem negam |
+
+Três distinções carregam o desenho:
+
+- **`UNSUPPORTED` não é falsidade.** Ausência de evidência não é evidência de
+  ausência: pode ser apenas que a fonte não chegou.
+- **Menção não é suporte.** Uma fonte que fala do mesmo filme sem confirmar a
+  data não confirma a data. A relação é `MENTIONS`, e ela nunca conta como
+  confirmação.
+- **`CONFLICTING` prevalece sobre `SUPPORTED`.** Uma afirmação contradita não é
+  "sustentada com ressalva".
+
+### Conflitos
+
+Um conflito só é criado quando há o **mesmo sujeito**, o **mesmo predicado**,
+**valores incompatíveis** e **evidência concreta**. Textos que apenas se leem
+diferente não são conflito.
+
+`resolution_status` é sempre `UNRESOLVED`. O MNScr **não** escolhe uma versão,
+**não** conta maioria de fontes e **não** usa reputação como critério de
+desempate. As duas versões ficam preservadas e a decisão é humana.
+
+### Cobertura e independência editorial
+
+```
+coverage_ratio = (supported + 0,5 × partially_supported) ÷ total_material_claims
+```
+
+Sem afirmações materiais, a razão é 0 e a revisão é exigida — um draft que não
+afirma nada verificável não está bem coberto, está inexaminado.
+
+`source_diversity` conta **origens editoriais**, não URLs. Duas URLs do mesmo
+veículo, uma edição regional ou uma republicação declarada valem uma origem:
+contá-las duas vezes fabricaria a aparência de confirmação independente.
+
+A cobertura é instrumento de revisão, **não** nota pública nem avaliação
+editorial.
+
+### Modos
+
+| Modo | Comportamento |
+|---|---|
+| `deterministic` | apenas padrões (datas, números, moedas, citações, status). Não chama IA e registra a limitação. |
+| `hybrid` | soma uma camada semântica cujo JSON é validado campo a campo |
+
+A camada de IA só pode **apontar** para texto que já existe no draft: uma
+afirmação cujo texto não está no rascunho é descartada, e uma resposta que não
+seja JSON válido é rejeitada por inteiro em vez de interpretada com tolerância.
+O prompt é versionado (`config/prompts/factual_claim_extraction_v1.txt`), trata
+o conteúdo recebido como dado não confiável e não obedece a instruções
+encontradas dentro dele.
+
+### Integração com o gate
+
+O gate passa a consumir a avaliação factual. Novas regras **bloqueantes**:
+`GATE_MATERIAL_CLAIM_UNSUPPORTED` (afirmação material sem suporte em posição
+crítica — manchete, subtítulo, meta, lead) e `GATE_CRITICAL_FACT_CONFLICT`.
+
+Novos **warnings**: `GATE_FACTUAL_COVERAGE_LOW`, `GATE_PARTIAL_SUPPORT_PRESENT`,
+`GATE_UNVERIFIED_CLAIMS_PRESENT`, `GATE_SOURCE_ORIGIN_DIVERSITY_LOW`.
+
+`GATE_EVIDENCE_MISSING` e `GATE_EVIDENCE_CONFLICT` foram adaptadas para ler a
+avaliação factual, mantendo compatibilidade com drafts anteriores à MS-4.
+
+Uma afirmação **não material** sem suporte nunca bloqueia sozinha.
+
+### Persistência e reavaliação
+
+Cinco tabelas: `factual_assessments`, `factual_claims`, `factual_evidence`,
+`claim_evidence_links` e `factual_conflicts`. Avaliações são histórico
+append-only: uma nova avaliação **não sobrescreve** a anterior.
+
+```powershell
+python main.py --show-factual-assessment <draft_id>
+python main.py --list-unsupported-claims
+python main.py --list-conflicting-claims
+python main.py --reevaluate-factual <draft_id>
+python main.py --reevaluate-factual <draft_id> --deterministic
+```
+
+A reavaliação lê apenas dados locais: não consulta o RSS Prime, não busca na
+web, não chama IA no modo `deterministic`, não avança cursor e não altera o
+`output_hash`. `assessment_hash` é separado de `output_hash` — mudar regra
+factual não pode parecer reescrita do corpo.
+
+`--show-factual-assessment` não exibe a matéria nem os excerpts completos.
+
 ## Editorial Gate
 
 O gate avalia cada `EditorialDraft` **depois** da validação técnica e **antes**
@@ -278,6 +387,12 @@ idempotente quando draft e política são idênticos.
 | `MNSCR_EDITORIAL_GATE_ENABLED` | `true` | Desabilitar registra `GATE_DISABLED` e nunca libera submissão. |
 | `MNSCR_EDITORIAL_GATE_POLICY` | `mnscr-editorial-gate-v1` | Política avaliada. Inexistente falha no startup. |
 | `MNSCR_EDITORIAL_GATE_POLICY_DIR` | `config/editorial_gate` | Onde as políticas vivem. |
+| `MNSCR_FACTUAL_ASSESSMENT_ENABLED` | `true` | Liga a estrutura factual. |
+| `MNSCR_FACTUAL_ASSESSMENT_MODE` | `hybrid` | `deterministic` (sem IA) ou `hybrid`. |
+| `MNSCR_MAX_CLAIMS_PER_DRAFT` | `100` | Teto de afirmações por draft. |
+| `MNSCR_MAX_EVIDENCE_PER_CLAIM` | `10` | Teto de evidências por afirmação. |
+| `MNSCR_MAX_EVIDENCE_EXCERPT_CHARS` | `500` | Evidência é ponteiro, não cópia. |
+| `MNSCR_MIN_FACTUAL_COVERAGE_RATIO` | `0.75` | Limiar técnico inicial, ajustável pelo Cinerie Editorial. |
 | `PAYLOAD_ENABLED` | `false` | Habilita o destino Payload (ainda bloqueado). |
 | `PAYLOAD_BASE_URL` | — | URL do Payload CMS. |
 | `PAYLOAD_API_TOKEN` | — | Token do Payload CMS. |
@@ -297,6 +412,11 @@ O `.env.example` traz a lista completa.
 - `app/gate_store.py` — vereditos e histórico do gate (SQLite)
 - `app/gate_service.py` — avaliação, reavaliação e consultas
 - `config/editorial_gate/` — políticas versionadas em JSON
+- `app/factual/` — domínio factual (`models`, `states`, `normalization`, `extraction`, `matching`, `conflicts`, `coverage`)
+- `app/factual_builder.py` — monta a avaliação a partir do draft e das fontes recebidas
+- `app/factual_store.py` — claims, evidências, links e conflitos (SQLite)
+- `app/factual_service.py` — construção, reavaliação e consultas
+- `config/prompts/` — prompts versionados
 - `app/editorial/` — modelo de domínio do draft (`models`, `states`, `serialization`, `builder`)
 - `app/submitters/` — contrato de submissão (`base`), `LocalDraftSubmitter`, `PayloadDraftSubmitter`
 - `app/pipeline.py` — orquestração do ciclo
@@ -352,6 +472,12 @@ python -m pytest
   em vez de fabricar evidência.
 - Não há aprovação humana, tela de revisão, RBAC nem workflow de CMS. O gate
   classifica; quem decide é uma pessoa, fora do MNScr.
+- Não há entity linking definitivo nem desambiguação de pessoas, obras e
+  empresas: o sujeito de uma afirmação é uma heurística rasa de nome próprio.
+- Não há Knowledge Graph, embeddings, banco vetorial, RAG nem busca externa. A
+  verificação usa exclusivamente as fontes já recebidas.
+- Conflitos não são resolvidos e não existe score editorial definitivo.
+- A MS-5 ainda não foi implementada.
 - Não há estrutura de conflito factual. Divergência entre fontes ainda é resolvida por
   instrução de prompt, sem registro.
 - Autor e data da fonte não são extraídos no caminho ativo; ficam `null` na proveniência.

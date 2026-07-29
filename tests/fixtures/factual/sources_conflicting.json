@@ -1,0 +1,14 @@
+[
+  {
+    "url": "https://variety.example/a",
+    "domain": "variety.example",
+    "source_name": "Variety",
+    "content": "O estudio confirmou que a estreia acontece em 29 de julho de 2026 conforme anunciado."
+  },
+  {
+    "url": "https://deadline.example/b",
+    "domain": "deadline.example",
+    "source_name": "Deadline",
+    "content": "A estreia foi remarcada e acontece agora em 05 de agosto de 2026 segundo o estudio. A producao custa R$ 4,1 milhoes de acordo com o estudio responsavel."
+  }
+]

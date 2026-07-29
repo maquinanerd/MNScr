@@ -217,7 +217,99 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Lista os drafts cujo ultimo veredito foi GATE_REVIEW_REQUIRED.",
     )
+    parser.add_argument(
+        "--show-factual-assessment",
+        metavar="DRAFT_ID",
+        help="Mostra claims, conflitos e cobertura factual (sem exibir a materia).",
+    )
+    parser.add_argument(
+        "--list-unsupported-claims",
+        action="store_true",
+        help="Lista afirmacoes materiais sem suporte nas fontes recebidas.",
+    )
+    parser.add_argument(
+        "--list-conflicting-claims",
+        action="store_true",
+        help="Lista conflitos factuais registrados (nenhum e resolvido automaticamente).",
+    )
+    parser.add_argument(
+        "--reevaluate-factual",
+        metavar="DRAFT_ID",
+        help=(
+            "Reavalia a estrutura factual usando apenas dados locais. "
+            "Nao consulta o feed, nao busca na web e nao avanca o cursor."
+        ),
+    )
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Em --reevaluate-factual, extrai apenas padroes deterministicos (sem IA).",
+    )
     return parser
+
+
+def _run_show_factual(logger: logging.Logger, draft_id: str) -> int:
+    """``--show-factual-assessment``: read-only, offline."""
+    from app.factual.serialization import format_assessment
+    from app.factual_service import FactualService
+
+    service = FactualService()
+    try:
+        assessment = service.get_factual_assessment(draft_id)
+    finally:
+        service.close()
+
+    if assessment is None:
+        logger.error("Nenhuma avaliacao factual registrada para o draft '%s'.", draft_id)
+        return 1
+    print(format_assessment(assessment))
+    return 0
+
+
+def _run_list_factual(logger: logging.Logger, *, conflicts: bool) -> int:
+    """``--list-unsupported-claims`` / ``--list-conflicting-claims``."""
+    from app.factual.serialization import format_conflict_listing, format_unsupported_listing
+    from app.factual_service import FactualService
+
+    service = FactualService()
+    try:
+        rows = service.list_conflicting_claims() if conflicts else service.list_unsupported_claims()
+    finally:
+        service.close()
+
+    print(format_conflict_listing(rows) if conflicts else format_unsupported_listing(rows))
+    return 0
+
+
+def _run_reevaluate_factual(
+    logger: logging.Logger, draft_id: str, deterministic: bool
+) -> int:
+    """``--reevaluate-factual``: local data only, no feed and no web."""
+    from app.factual.errors import FactualError
+    from app.factual.serialization import format_assessment
+    from app.factual.states import MODE_DETERMINISTIC
+    from app.factual_service import FactualService
+
+    service = FactualService()
+    try:
+        outcome = service.reevaluate_factual_assessment(
+            draft_id, mode=MODE_DETERMINISTIC if deterministic else None
+        )
+    except FactualError as exc:
+        logger.error(str(exc))
+        return 1
+    finally:
+        service.close()
+
+    print(format_assessment(outcome.assessment))
+    print()
+    print(
+        f"cobertura anterior: {outcome.previous_coverage_ratio if outcome.previous_coverage_ratio is not None else '-'} | "
+        f"mudou: {'sim' if outcome.changed else 'nao'} | "
+        f"novo registro: {'sim' if outcome.created_new_record else 'nao'} | "
+        f"gate: {outcome.gate_outcome or '-'}"
+    )
+    return 0
 
 
 def _run_show_gate(logger: logging.Logger, draft_id: str) -> int:
@@ -357,12 +449,30 @@ def main(argv: list[str] | None = None) -> None:
     if args.list_gate_review_required:
         raise SystemExit(_run_list_gate(logger, blocked=False))
 
+    if args.show_factual_assessment:
+        raise SystemExit(_run_show_factual(logger, args.show_factual_assessment))
+
+    if args.list_unsupported_claims:
+        raise SystemExit(_run_list_factual(logger, conflicts=False))
+
+    if args.list_conflicting_claims:
+        raise SystemExit(_run_list_factual(logger, conflicts=True))
+
+    if args.reevaluate_factual:
+        raise SystemExit(
+            _run_reevaluate_factual(logger, args.reevaluate_factual, args.deterministic)
+        )
+
     if args.revision is not None:
         logger.error("--revision so pode ser usado junto com --replay-event.")
         raise SystemExit(2)
 
     if args.gate_policy is not None:
         logger.error("--gate-policy so pode ser usado junto com --reevaluate-gate.")
+        raise SystemExit(2)
+
+    if args.deterministic:
+        logger.error("--deterministic so pode ser usado junto com --reevaluate-factual.")
         raise SystemExit(2)
 
     print_startup_banner()

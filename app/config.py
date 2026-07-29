@@ -118,6 +118,58 @@ EDITORIAL_GATE_POLICY_DIR = (
     os.getenv('MNSCR_EDITORIAL_GATE_POLICY_DIR') or 'config/editorial_gate'
 ).strip()
 
+# --- Avaliação factual (MS-4) ---
+# Claims, evidências, conflitos e cobertura. Não resolve conflito, não publica
+# e não verifica em fontes externas: usa apenas o material já recebido.
+FACTUAL_ASSESSMENT_ENABLED = (
+    os.getenv('MNSCR_FACTUAL_ASSESSMENT_ENABLED', 'true').strip().lower() != 'false'
+)
+FACTUAL_ASSESSMENT_VERSION = (
+    os.getenv('MNSCR_FACTUAL_ASSESSMENT_VERSION') or 'mnscr-factual-assessment-v1'
+).strip()
+# `deterministic` não chama IA: extrai só os padrões suportados e registra a
+# limitação. `hybrid` soma a camada semântica validada.
+FACTUAL_ASSESSMENT_MODE = (
+    os.getenv('MNSCR_FACTUAL_ASSESSMENT_MODE') or 'hybrid'
+).strip().lower()
+FACTUAL_PROMPT_VERSION = (
+    os.getenv('MNSCR_FACTUAL_PROMPT_VERSION') or 'factual-claim-extraction-v1'
+).strip()
+MAX_CLAIMS_PER_DRAFT = int(os.getenv('MNSCR_MAX_CLAIMS_PER_DRAFT', 100))
+MAX_EVIDENCE_PER_CLAIM = int(os.getenv('MNSCR_MAX_EVIDENCE_PER_CLAIM', 10))
+MAX_EVIDENCE_EXCERPT_CHARS = int(os.getenv('MNSCR_MAX_EVIDENCE_EXCERPT_CHARS', 500))
+MIN_FACTUAL_COVERAGE_RATIO = float(os.getenv('MNSCR_MIN_FACTUAL_COVERAGE_RATIO', 0.75))
+
+
+def get_factual_config_issues() -> List[str]:
+    """Blocking problems in the factual settings. Sem fallback silencioso."""
+    from app.factual.states import ASSESSMENT_MODES, ASSESSMENT_VERSIONS
+
+    issues: List[str] = []
+    if FACTUAL_ASSESSMENT_VERSION not in ASSESSMENT_VERSIONS:
+        issues.append(
+            f"MNSCR_FACTUAL_ASSESSMENT_VERSION desconhecida: '{FACTUAL_ASSESSMENT_VERSION}'. "
+            f"Conhecidas: {', '.join(sorted(ASSESSMENT_VERSIONS))}"
+        )
+    if FACTUAL_ASSESSMENT_MODE not in ASSESSMENT_MODES:
+        issues.append(
+            f"MNSCR_FACTUAL_ASSESSMENT_MODE desconhecido: '{FACTUAL_ASSESSMENT_MODE}'. "
+            f"Aceitos: {', '.join(sorted(ASSESSMENT_MODES))}"
+        )
+    for name, value in (
+        ('MNSCR_MAX_CLAIMS_PER_DRAFT', MAX_CLAIMS_PER_DRAFT),
+        ('MNSCR_MAX_EVIDENCE_PER_CLAIM', MAX_EVIDENCE_PER_CLAIM),
+        ('MNSCR_MAX_EVIDENCE_EXCERPT_CHARS', MAX_EVIDENCE_EXCERPT_CHARS),
+    ):
+        if value <= 0:
+            issues.append(f"{name} precisa ser positivo (recebido: {value})")
+    if not (0.0 <= MIN_FACTUAL_COVERAGE_RATIO <= 1.0):
+        issues.append(
+            "MNSCR_MIN_FACTUAL_COVERAGE_RATIO precisa estar entre 0 e 1 "
+            f"(recebido: {MIN_FACTUAL_COVERAGE_RATIO})"
+        )
+    return issues
+
 # --- Configuração da IA ---
 def _is_gemini_api_key_var_name(env_name: str) -> bool:
     """Return True only for env var names that are intended to store Gemini API keys."""
@@ -273,6 +325,9 @@ def get_runtime_config_issues() -> List[str]:
 
     if not AI_API_KEYS:
         issues.append("Nenhuma chave GEMINI válida foi encontrada")
+
+    if FACTUAL_ASSESSMENT_ENABLED:
+        issues.extend(get_factual_config_issues())
 
     # Uma política de gate inexistente precisa falhar no startup: usar um
     # fallback silencioso tornaria todo veredito armazenado inexplicável.

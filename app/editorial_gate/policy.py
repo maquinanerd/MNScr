@@ -35,6 +35,11 @@ KNOWN_THRESHOLDS: Final[frozenset[str]] = frozenset(
         "min_distinct_source_domains",
         "prompt_injection_min_signals",
         "block_on_unverified_media",
+        # MS-4: limiares factuais.
+        "minimumFactualCoverageRatio",
+        "minimumIndependentSourceOrigins",
+        "blockUnsupportedMaterialClaimsInCriticalLocations",
+        "blockCriticalFactConflicts",
     }
 )
 

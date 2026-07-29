@@ -25,6 +25,7 @@ from .config import (
     BLOCKED_TOPICS,
     CATEGORY_ALIASES,
     EDITORIAL_GATE_ENABLED,
+    FACTUAL_ASSESSMENT_ENABLED,
     LOCAL_DRAFT_DIR,
     OUTPUT_MODE,
     PIPELINE_CONFIG,
@@ -1534,12 +1535,17 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             score=quality['score'],
                         )
 
+                        # --- AVALIACAO FACTUAL (antes do gate) ---
+                        factual_assessment = _run_factual_assessment(draft, art_data)
+                        draft.factual_assessment = factual_assessment
+
                         # --- EDITORIAL GATE (classifica; nao aprova) ---
                         gate_result = _run_editorial_gate(
                             draft,
                             db=db,
                             article_db_id=art_data['db_id'],
                             input_event=_resolve_input_event(art_data),
+                            factual_assessment=factual_assessment,
                         )
                         draft.editorial_gate = gate_result
 
@@ -1808,7 +1814,79 @@ def _handle_watchdog_timeout(article: Dict[str, Any]) -> bool:
     finally:
         db.close()
 
-def _run_editorial_gate(draft, *, db, article_db_id, input_event=None):
+def _run_factual_assessment(draft, art_data):
+    """Build and persist the factual picture for this draft.
+
+    Runs before the Editorial Gate, which consumes it. A technical failure here
+    never costs the draft: the assessment is skipped, the reason recorded, and
+    the gate still produces a coherent verdict from what it does have.
+    """
+    from .factual_builder import build_factual_assessment
+    from .factual_store import FactualStore
+
+    if not FACTUAL_ASSESSMENT_ENABLED:
+        logger.info(
+            "[FACTUAL_ASSESSMENT_COMPLETED] draft_id=%s motivo=desabilitado_por_configuracao",
+            draft.draft_id,
+        )
+        return None
+
+    store = None
+    try:
+        assessment = build_factual_assessment(
+            draft, _source_material_for(art_data), claim_response=art_data.get("_claim_response")
+        )
+        store = FactualStore()
+        store.save_assessment(assessment)
+        return assessment
+    except Exception as exc:  # noqa: BLE001 - o draft local nunca pode ser perdido
+        logger.exception(
+            "[FACTUAL_ASSESSMENT_FAILED] draft_id=%s erro=%s: o draft segue para o gate",
+            draft.draft_id, type(exc).__name__,
+        )
+        return None
+    finally:
+        if store is not None:
+            store.close()
+
+
+def _source_material_for(art_data):
+    """Source documents already extracted for this article.
+
+    Uses only what the pipeline received: cluster documents when the event had
+    several sources, otherwise the single extracted article. Nothing is fetched.
+    """
+    material = []
+    for doc in art_data.get("cluster_docs") or []:
+        if not isinstance(doc, dict):
+            continue
+        material.append(
+            {
+                "url": doc.get("url") or doc.get("source_url"),
+                "content": doc.get("content") or doc.get("text") or "",
+                "title": doc.get("title"),
+                "source_name": doc.get("source_name") or doc.get("fonte_nome"),
+                "source_domain": doc.get("domain"),
+                "published_at": doc.get("published_at"),
+                "is_primary": bool(doc.get("is_primary")),
+                "canonical_url": doc.get("canonical_url"),
+            }
+        )
+    if not material and art_data.get("content"):
+        material.append(
+            {
+                "url": art_data.get("url") or art_data.get("canonical_url"),
+                "content": art_data.get("content"),
+                "title": art_data.get("title"),
+                "source_name": art_data.get("fonte_nome"),
+                "source_domain": art_data.get("domain"),
+                "is_primary": True,
+            }
+        )
+    return [m for m in material if m.get("url") and m.get("content")]
+
+
+def _run_editorial_gate(draft, *, db, article_db_id, input_event=None, factual_assessment=None):
     """Classify the draft and persist the verdict.
 
     The gate never turns a correctly generated draft into a failure: a blocked
@@ -1833,6 +1911,7 @@ def _run_editorial_gate(draft, *, db, article_db_id, input_event=None):
         "output_mode": OUTPUT_MODE,
         "input_event": input_event,
         "ingestion_warnings": list(draft.warnings or []),
+        "factual_assessment": factual_assessment,
     }
 
     gate_store = None

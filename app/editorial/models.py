@@ -226,6 +226,10 @@ class EditorialDraft:
     media_candidates: list[MediaCandidate] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     blocking_errors: list[str] = field(default_factory=list)
+    # MS-4: the factual picture — claims, evidence, conflicts, coverage. Like
+    # the gate verdict it is attached after the body exists and never takes part
+    # in ``content_hash``: re-assessing facts must not look like a rewrite.
+    factual_assessment: Any = None
     # MS-3: the Editorial Gate verdict, attached after technical validation.
     # Typed as Any to keep this module free of a dependency on the gate package
     # (the gate imports these models, not the other way round). It never takes

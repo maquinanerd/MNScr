@@ -60,6 +60,21 @@ CANONICAL_MODULES = [
     "app/editorial_gate/policy.py",
     "app/editorial_gate/rules.py",
     "app/editorial_gate/serialization.py",
+    # MS-4: camada factual.
+    "app/factual_builder.py",
+    "app/factual_service.py",
+    "app/factual_store.py",
+    "app/factual/__init__.py",
+    "app/factual/conflicts.py",
+    "app/factual/coverage.py",
+    "app/factual/errors.py",
+    "app/factual/extraction.py",
+    "app/factual/hashing.py",
+    "app/factual/matching.py",
+    "app/factual/models.py",
+    "app/factual/normalization.py",
+    "app/factual/serialization.py",
+    "app/factual/states.py",
 ]
 
 FORBIDDEN_SYMBOLS = [

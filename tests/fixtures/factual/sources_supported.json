@@ -1,0 +1,15 @@
+[
+  {
+    "url": "https://variety.example/a",
+    "domain": "variety.example",
+    "source_name": "Variety",
+    "is_primary": true,
+    "content": "O estudio confirmou em comunicado oficial que a estreia acontece em 29 de julho de 2026. A serie foi renovada para uma segunda temporada pelo estudio responsavel."
+  },
+  {
+    "url": "https://deadline.example/b",
+    "domain": "deadline.example",
+    "source_name": "Deadline",
+    "content": "A estreia da producao esta marcada para 29 de julho de 2026 segundo o estudio. A renovacao para a segunda temporada tambem foi confirmada pelo estudio."
+  }
+]
