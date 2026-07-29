@@ -1,0 +1,41 @@
+{
+  "contract_version": "rss-prime-event-v1",
+  "event_key": "evt-2026-07-superman-legacy",
+  "revision": 1,
+  "topic": "movies",
+  "title": "Titulo divergente para a mesma revisao",
+  "first_seen": "2026-07-01T10:00:00Z",
+  "last_seen": "2026-07-01T12:30:00Z",
+  "is_multi_source": true,
+  "source_count": 2,
+  "cluster_confidence": 0.91,
+  "cursor": "opaque-cursor-000123",
+  "sources": [
+    {
+      "source_id": "variety",
+      "name": "Variety",
+      "domain": "variety.example",
+      "url": "https://variety.example/2026/07/nova-fase",
+      "title": "Studio sets release date",
+      "author": "A. Reporter",
+      "published_at": "2026-07-01T10:00:00Z",
+      "source_type": "trade",
+      "is_primary": true
+    },
+    {
+      "source_id": "deadline",
+      "name": "Deadline",
+      "domain": "deadline.example",
+      "url": "https://deadline.example/2026/07/nova-fase",
+      "title": "Release date confirmed",
+      "author": "B. Writer",
+      "published_at": "2026-07-01T11:15:00Z",
+      "source_type": "trade",
+      "is_primary": false
+    }
+  ],
+  "metadata": {
+    "rssprime_batch": "batch-77"
+  },
+  "payload_hash": "0069f1ca6f0ce262bb25c1dbd1533db85b4b378bfbb0fef3a25aedfb0e7064c7"
+}

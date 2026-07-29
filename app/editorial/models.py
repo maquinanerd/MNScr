@@ -186,6 +186,13 @@ class DraftProvenance:
     commit_sha: Optional[str] = None
     input_contract_version: str = INPUT_CONTRACT_VERSION
     output_contract_version: str = OUTPUT_CONTRACT_VERSION
+    # MS-2: identity of the input delivery this draft was produced from. Lets a
+    # reviewer trace a draft back to the exact revision and payload that caused
+    # it, and lets replay rebuild it without going back to the feed.
+    input_event_key: Optional[str] = None
+    input_revision: Optional[int] = None
+    input_payload_hash: Optional[str] = None
+    input_cursor: Optional[str] = None
     model_provider: Optional[str] = None
     model_name: Optional[str] = None
     prompt_version: Optional[str] = None
@@ -207,6 +214,12 @@ class EditorialDraft:
     event_key: Optional[str] = None
     cluster_signature: Optional[str] = None
     revision: int = 1
+    # MS-2: when the acontecimento was first and last observed by RSS Prime, and
+    # how confident it is that these sources are one story. Editorial context for
+    # the reviewer; never a publication decision.
+    first_seen: Optional[str] = None
+    last_seen: Optional[str] = None
+    cluster_confidence: Optional[float] = None
     status: str = DRAFT_GENERATED
     sources: list[SourceReference] = field(default_factory=list)
     evidence: list[EvidenceRecord] = field(default_factory=list)

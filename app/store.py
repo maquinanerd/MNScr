@@ -1174,6 +1174,44 @@ class Database:
             logger.error(f"Failed to get status for article id {article_id}: {e}")
             return None
 
+    def get_article_by_event_key(self, event_key: str) -> Optional[Dict[str, Any]]:
+        """The article row for an acontecimento, most recent first."""
+        try:
+            cursor = self._get_cursor()
+            cursor.execute(
+                "SELECT * FROM seen_articles WHERE event_key = ? ORDER BY id DESC LIMIT 1",
+                (event_key,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            logger.error(f"Failed to load article for event_key '{event_key}': {e}")
+            return None
+
+    def reset_article_for_replay(self, article_id: int) -> bool:
+        """Release an article so a replay can reprocess it.
+
+        Clears the worker claim and puts the row back in QUEUED. Deliberately
+        does *not* clear draft_id or draft_output_hash: the previous attempt's
+        result stays visible until the replay produces a new one, and the replay
+        history lives in ``event_processing_attempts``.
+        """
+        try:
+            cursor = self._get_cursor()
+            cursor.execute(
+                """
+                UPDATE seen_articles
+                SET status = 'QUEUED', claimed_by = NULL, claimed_at = NULL
+                WHERE id = ?
+                """,
+                (article_id,),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            logger.error(f"Failed to reset article {article_id} for replay: {e}")
+            return False
+
     def get_articles_to_process(self, source_id: str, limit: int, clusters_only: bool = False) -> list:
         """Gets eligible pending articles for a given feed source."""
         try:

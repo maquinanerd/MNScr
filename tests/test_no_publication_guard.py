@@ -38,6 +38,18 @@ CANONICAL_MODULES = [
     "app/cluster_engine.py",
     "app/cluster_extractor.py",
     "app/cluster_feed_adapter.py",
+    # MS-2: contrato de entrada, persistencia de eventos e replay.
+    "app/ingestion.py",
+    "app/event_store.py",
+    "app/replay.py",
+    "app/contracts/__init__.py",
+    "app/contracts/errors.py",
+    "app/contracts/hashing.py",
+    "app/contracts/legacy_feed_v0.py",
+    "app/contracts/revisions.py",
+    "app/contracts/rssprime_event_v1.py",
+    "app/contracts/states.py",
+    "app/contracts/validation.py",
 ]
 
 FORBIDDEN_SYMBOLS = [

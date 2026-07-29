@@ -87,6 +87,23 @@ PAYLOAD_CONFIG: Dict[str, Any] = {
 # de publicação.
 PUBLISHER_DOMAIN = (os.getenv('PUBLISHER_DOMAIN') or '').strip().lower()
 
+# --- Contrato de entrada (MS-2) ---
+# Contrato canônico do RSS Prime. O feed legado ainda é aceito por um adaptador
+# temporário; quando MNSCR_REQUIRED_INPUT_CONTRACT for fixado em v1, ou quando
+# MNSCR_ACCEPT_LEGACY_FEED for false, itens sem contrato são rejeitados.
+#
+# TEMPORÁRIO: ACCEPT_LEGACY_FEED existe apenas até o RSS Prime emitir
+# `rss-prime-event-v1`. Será removido — não construa nada novo sobre ele.
+ACCEPT_LEGACY_FEED = os.getenv('MNSCR_ACCEPT_LEGACY_FEED', 'true').strip().lower() != 'false'
+REQUIRED_INPUT_CONTRACT = (os.getenv('MNSCR_REQUIRED_INPUT_CONTRACT') or '').strip()
+
+# O payload bruto é guardado para permitir replay fiel. Desligue apenas se o
+# volume for um problema: sem ele o replay perde a evidência do que chegou.
+STORE_RAW_EVENT_PAYLOAD = (
+    os.getenv('MNSCR_STORE_RAW_EVENT_PAYLOAD', 'true').strip().lower() != 'false'
+)
+MAX_EVENT_PAYLOAD_BYTES = int(os.getenv('MNSCR_MAX_EVENT_PAYLOAD_BYTES', 1048576))
+
 # --- Configuração da IA ---
 def _is_gemini_api_key_var_name(env_name: str) -> bool:
     """Return True only for env var names that are intended to store Gemini API keys."""
