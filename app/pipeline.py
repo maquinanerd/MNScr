@@ -36,6 +36,7 @@ from .editorial import DRAFT_FAILED, DRAFT_GENERATED, validate_draft
 from .editorial.builder import build_editorial_draft
 from .editorial_validator import validate_editorial_quality
 from .entity_validator import validate_and_fix_entities
+from .event_store import EventStore
 from .extractor import ContentExtractor
 from .feeds import FeedReader, canonicalize_url, normalize_title_for_match, titles_are_similar
 from .html_utils import (
@@ -58,6 +59,7 @@ from .html_utils import (
     unescape_html_content,
     validate_and_fix_figures,
 )
+from .ingestion import IngestionService
 from .internal_linking import add_internal_links
 from .link_store import format_for_prompt as ls_format_links
 from .link_store import get_link_map as ls_get_link_map
@@ -1504,6 +1506,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             ),
                             prompt_version=PROMPT_VERSION,
                             duration_ms=int((time.perf_counter() - _article_started_at) * 1000),
+                            input_event=_resolve_input_event(art_data),
                         )
 
                         blocking_errors = validate_draft(draft)
@@ -1794,6 +1797,140 @@ def _handle_watchdog_timeout(article: Dict[str, Any]) -> bool:
     finally:
         db.close()
 
+def _resolve_input_event(art_data: Dict[str, Any]):
+    """The normalized event behind this article, when there is one.
+
+    Prefers the object attached during this cycle. Falls back to the event store
+    when the article came back through the database (a re-enqueue loses the
+    in-memory object). Returns ``None`` for anything that never went through the
+    contract layer — the builder treats that as the pre-MS-2 path.
+    """
+    attached = art_data.get("_input_event")
+    if attached is not None:
+        return attached
+
+    event_key = art_data.get("event_key") or (art_data.get("cluster_item") or {}).get("event_key")
+    if not event_key:
+        return None
+
+    store = None
+    try:
+        store = EventStore()
+        stored = store.get_event(str(event_key))
+        if stored is None or not stored.normalized_payload:
+            return None
+        return stored.to_event()
+    except Exception as exc:  # noqa: BLE001 - provenance is best-effort, never fatal
+        logger.warning("[CONTRACT_VALIDATION] falha ao recuperar evento %s: %s", event_key, exc)
+        return None
+    finally:
+        if store is not None:
+            store.close()
+
+
+def apply_input_contract(
+    feed_items: List[Dict[str, Any]],
+    source_id: str,
+    event_store: Optional[EventStore] = None,
+) -> List[Dict[str, Any]]:
+    """Filter feed items through the versioned input contract.
+
+    Only VALIDATED events continue into the pipeline. Duplicates, conflicts,
+    stale revisions and invalid payloads are persisted with their reason and
+    dropped here, so nothing downstream has to re-derive why an item vanished.
+
+    Items that carry no event identity at all (plain fallback feeds, which are
+    not acontecimentos) pass through untouched: the contract governs RSS Prime
+    events, not every RSS item MNScr can read.
+    """
+    from .feeds import extract_event_envelope
+
+    owns_store = event_store is None
+    store = event_store or EventStore()
+    service = IngestionService(store)
+
+    accepted: List[Dict[str, Any]] = []
+    try:
+        for item in feed_items:
+            envelope = extract_event_envelope(item)
+            if not envelope.get("event_key") and not envelope.get("contract_version"):
+                accepted.append(item)
+                continue
+
+            outcome = service.ingest(envelope, source_id=source_id)
+            if outcome.accepted and outcome.event is not None:
+                enriched = dict(item)
+                enriched["_input_event"] = outcome.event
+                enriched["event_key"] = outcome.event.event_key
+                enriched.setdefault("topic", outcome.event.topic)
+                accepted.append(enriched)
+                continue
+
+            logger.info(
+                "[EVENT_RECEIVED] source_id=%s event_key=%s revision=%s status=%s "
+                "decision=%s errors=%s dropped=true",
+                source_id,
+                outcome.event.event_key if outcome.event else "-",
+                outcome.event.revision if outcome.event else "-",
+                outcome.validation_status,
+                outcome.decision or "-",
+                ",".join(outcome.error_codes) or "-",
+            )
+    finally:
+        if owns_store:
+            store.close()
+
+    return accepted
+
+
+def process_stored_event(event) -> Dict[str, Any]:
+    """Replay processor: rebuild the draft for one already-stored revision.
+
+    Reads nothing from the network and nothing from the feed. The event is
+    re-enqueued for the worker under its own revision, so the draft id it
+    produces is the deterministic id of that revision — replaying revision 2
+    can never overwrite revision 1.
+    """
+    db = Database()
+    try:
+        article = db.get_article_by_event_key(event.event_key)
+        if article is None:
+            raise RuntimeError(
+                f"Evento '{event.event_key}' nao tem artigo correspondente em seen_articles; "
+                "nada a reprocessar."
+            )
+        article = dict(article)
+        article["db_id"] = article.get("id")
+        article["_input_event"] = event
+        article["event_key"] = event.event_key
+        db.reset_article_for_replay(int(article["db_id"]))
+    finally:
+        db.close()
+
+    link_map = _build_link_map_for_replay()
+    process_batch([article], link_map)
+
+    db = Database()
+    try:
+        refreshed = db.get_article_by_event_key(event.event_key) or {}
+    finally:
+        db.close()
+    return {
+        "draft_id": refreshed.get("draft_id"),
+        "output_hash": refreshed.get("draft_output_hash"),
+        "status": refreshed.get("draft_status"),
+    }
+
+
+def _build_link_map_for_replay() -> Dict[str, Any]:
+    """Internal-link map for a replay run; empty is acceptable."""
+    try:
+        return ls_get_link_map() or {}
+    except Exception as exc:  # noqa: BLE001 - links are a nicety, not a blocker
+        logger.warning("[REPLAY_STARTED] mapa de links indisponivel: %s", exc)
+        return {}
+
+
 def run_pipeline_cycle():
     """Read feeds and enqueue articles for the worker."""
     initialize_runtime()
@@ -1909,6 +2046,7 @@ def run_pipeline_cycle():
                 continue
 
             feed_items = feed_reader.read_feeds(feed_config, source_id)
+            feed_items = apply_input_contract(feed_items, source_id)
             if origin == "fallback" and topic:
                 filtered_feed_items = []
                 skipped_count = 0

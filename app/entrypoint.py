@@ -170,15 +170,93 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Executa o ciclo do pipeline uma vez e sai.",
     )
+    parser.add_argument(
+        "--replay-event",
+        metavar="EVENT_KEY",
+        help=(
+            "Reprocessa um acontecimento ja recebido, lendo apenas o payload "
+            "persistido no SQLite. Nao consulta o RSS Prime e nao avanca o cursor."
+        ),
+    )
+    parser.add_argument(
+        "--revision",
+        type=int,
+        metavar="N",
+        help="Revisao especifica para --replay-event. Sem ela, usa a mais recente.",
+    )
+    parser.add_argument(
+        "--list-event-revisions",
+        metavar="EVENT_KEY",
+        help="Lista as revisoes registradas de um acontecimento (sem exibir o payload).",
+    )
     return parser
+
+
+def _run_list_event_revisions(logger: logging.Logger, event_key: str) -> int:
+    """``--list-event-revisions``: read-only, no network, no pipeline."""
+    from app.event_store import EventStore
+    from app.replay import ReplayError, ReplayService, format_revision_table
+
+    store = EventStore()
+    try:
+        rows = ReplayService(store).list_revisions(event_key)
+    except ReplayError as exc:
+        logger.error(str(exc))
+        return 1
+    finally:
+        store.close()
+
+    print(f"Acontecimento: {event_key}")
+    print(format_revision_table(rows))
+    return 0
+
+
+def _run_replay(logger: logging.Logger, event_key: str, revision: int | None) -> int:
+    """``--replay-event``: rebuild processing from the stored payload only."""
+    from app.event_store import EventStore
+    from app.pipeline import process_stored_event
+    from app.replay import ReplayError, ReplayService
+
+    store = EventStore()
+    try:
+        result = ReplayService(store, processor=process_stored_event).replay(event_key, revision)
+    except ReplayError as exc:
+        logger.error(str(exc))
+        return 1
+    finally:
+        store.close()
+
+    if result.ok:
+        logger.info(
+            "Replay concluido: event_key=%s revision=%s draft_id=%s (cursor nao avancou)",
+            result.event_key, result.revision, result.draft_id or "-",
+        )
+        return 0
+    logger.error(
+        "Replay falhou: event_key=%s revision=%s erro=%s",
+        result.event_key, result.revision, result.error,
+    )
+    return 1
 
 
 def main(argv: list[str] | None = None) -> None:
     logger = configure_logging()
-    print_startup_banner()
 
     args = build_parser().parse_args(argv)
 
+    # Operações de leitura/replay não sobem o agendador nem validam credenciais
+    # de IA: elas trabalham exclusivamente sobre o que já está no SQLite.
+    if args.list_event_revisions:
+        raise SystemExit(_run_list_event_revisions(logger, args.list_event_revisions))
+
+    if args.replay_event:
+        raise SystemExit(_run_replay(logger, args.replay_event, args.revision))
+
+    if args.revision is not None:
+        logger.error("--revision so pode ser usado junto com --replay-event.")
+        raise SystemExit(2)
+
+    print_startup_banner()
     validate_startup_configuration(logger)
     initialize_database(logger)
 

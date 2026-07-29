@@ -1,0 +1,16 @@
+{
+  "id": "https://variety.example/2026/07/nova-fase",
+  "url": "https://variety.example/2026/07/nova-fase",
+  "title": "Estudio confirma data de estreia da nova fase",
+  "topic": "movies",
+  "event_key": "evt-legacy-superfeed-001",
+  "urls": "https://variety.example/2026/07/nova-fase|https://deadline.example/2026/07/nova-fase",
+  "source_count": 2,
+  "multi_source": "true",
+  "primary_source": "Variety",
+  "all_sources": "Variety|Deadline",
+  "first_seen": "2026-07-01T10:00:00Z",
+  "last_seen": "2026-07-01T12:30:00Z",
+  "has_superfeed_meta": true,
+  "campo_desconhecido_do_feed": "valor que o MNScr nao modela"
+}

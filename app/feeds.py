@@ -1,5 +1,6 @@
 import gzip
 import hashlib
+import json
 import logging
 import re
 import time
@@ -125,6 +126,62 @@ SF_NS_CANDIDATES = (
     "https://superfeed.rssprime/ns/1.0",
     "https://rssprime.io/superfeed/1.0",
 )
+
+# --- Envelope extraction (MS-2) --------------------------------------------
+#
+# This is the seam between transport and contract. Everything above it deals
+# with RSS/XML/feedparser; everything below it deals with plain mappings. The
+# parser deliberately knows nothing about contract versions, revisions, hashes
+# or cursors — those are decided in ``app.contracts`` and ``app.ingestion``.
+#
+# There is no XSD and no XML schema for v1 here on purpose: RSS Prime has not
+# specified a wire encoding yet, so MNScr only recognizes an embedded JSON
+# document and refuses to guess at anything else.
+
+#: Element names that may carry a serialized ``rss-prime-event-v1`` document.
+V1_ENVELOPE_KEYS = (
+    "rssprime_event",
+    "rssprime:event",
+    "contract_payload",
+)
+
+
+def extract_event_envelope(raw_item: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the mapping that the contract layer should validate.
+
+    Three shapes are recognized, in order:
+
+    1. an embedded JSON document under one of ``V1_ENVELOPE_KEYS``;
+    2. an item that already declares ``contract_version`` inline;
+    3. anything else — handed on untouched, for the legacy adapter to read.
+
+    No validation happens here, and no revision rule is applied. A malformed
+    embedded document falls through to the legacy path rather than raising:
+    deciding it is invalid is the contract layer's job, not the parser's.
+    """
+    if not isinstance(raw_item, dict):
+        return {}
+
+    for key in V1_ENVELOPE_KEYS:
+        candidate = raw_item.get(key)
+        if not candidate:
+            continue
+        if isinstance(candidate, dict):
+            return dict(candidate)
+        if isinstance(candidate, str):
+            try:
+                decoded = json.loads(candidate)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "[CONTRACT_DETECTED] envelope '%s' presente mas nao e JSON valido; "
+                    "tratando como item legado",
+                    key,
+                )
+                continue
+            if isinstance(decoded, dict):
+                return decoded
+
+    return raw_item
 
 def normalize_item(raw: dict) -> dict:
     """

@@ -13,6 +13,7 @@ from typing import Any, Iterable, Optional
 from urllib.parse import urlparse
 
 from .models import (
+    INPUT_CONTRACT_VERSION,
     DraftContent,
     DraftProvenance,
     EditorialDraft,
@@ -218,19 +219,32 @@ def build_media_candidates(art_data: dict[str, Any], body_html: str = "") -> lis
     return candidates
 
 
-def build_input_fingerprint(art_data: dict[str, Any], sources: Iterable[SourceReference]) -> str:
-    """Deterministic hash of what went into the draft."""
-    return stable_hash(
-        {
-            "article_id": art_data.get("db_id"),
-            "event_key": art_data.get("event_key")
-            or (art_data.get("cluster_item") or {}).get("event_key"),
-            "cluster_signature": art_data.get("cluster_signature"),
-            "source_urls": sorted({source.url for source in sources}),
-            "source_word_count": art_data.get("source_word_count"),
-            "source_id": art_data.get("source_id"),
-        }
-    )
+def build_input_fingerprint(
+    art_data: dict[str, Any],
+    sources: Iterable[SourceReference],
+    input_event: Any = None,
+) -> str:
+    """Deterministic hash of what went into the draft.
+
+    When the draft came from a versioned event, the input payload hash and the
+    revision take part: revision 2 of an acontecimento must never share an
+    input fingerprint with revision 1.
+    """
+    fingerprint: dict[str, Any] = {
+        "article_id": art_data.get("db_id"),
+        "event_key": art_data.get("event_key")
+        or (art_data.get("cluster_item") or {}).get("event_key"),
+        "cluster_signature": art_data.get("cluster_signature"),
+        "source_urls": sorted({source.url for source in sources}),
+        "source_word_count": art_data.get("source_word_count"),
+        "source_id": art_data.get("source_id"),
+    }
+    if input_event is not None:
+        fingerprint["event_key"] = input_event.event_key or fingerprint["event_key"]
+        fingerprint["input_contract_version"] = input_event.contract_version
+        fingerprint["input_revision"] = int(input_event.revision or 1)
+        fingerprint["input_payload_hash"] = input_event.payload_hash
+    return stable_hash(fingerprint)
 
 
 def build_editorial_draft(
@@ -249,11 +263,37 @@ def build_editorial_draft(
     commit_sha: Optional[str] = None,
     duration_ms: Optional[int] = None,
     revision: int = 1,
+    input_event: Any = None,
 ) -> EditorialDraft:
-    """Assemble the final draft object with deterministic ids and hashes."""
+    """Assemble the final draft object with deterministic ids and hashes.
+
+    ``input_event`` is the normalized ``RssPrimeEventV1`` this draft came from,
+    when there is one. It fixes the revision and carries the input contract
+    identity into provenance, so a reviewer can trace the draft back to the
+    exact delivery. Passing ``None`` keeps the pre-MS-2 behaviour.
+    """
     cluster_item = art_data.get("cluster_item") or {}
     event_key = art_data.get("event_key") or cluster_item.get("event_key")
     cluster_signature = art_data.get("cluster_signature") or cluster_item.get("cluster_signature")
+
+    input_contract_version = INPUT_CONTRACT_VERSION
+    input_event_key = input_revision = input_payload_hash = input_cursor = None
+    first_seen = art_data.get("first_seen") or cluster_item.get("first_seen")
+    last_seen = art_data.get("last_seen") or cluster_item.get("last_seen")
+    cluster_confidence = None
+    if input_event is not None:
+        # The event is the authority on its own identity: never let a stale
+        # art_data field override the revision the draft is being built for.
+        event_key = input_event.event_key or event_key
+        revision = int(input_event.revision or revision)
+        input_contract_version = input_event.contract_version or INPUT_CONTRACT_VERSION
+        input_event_key = input_event.event_key
+        input_revision = int(input_event.revision or 1)
+        input_payload_hash = input_event.payload_hash or None
+        input_cursor = input_event.cursor
+        first_seen = input_event.first_seen or first_seen
+        last_seen = input_event.last_seen or last_seen
+        cluster_confidence = input_event.cluster_confidence
     article_id = art_data.get("db_id") or art_data.get("id") or ""
     canonical_url = art_data.get("canonical_url") or art_data.get("url") or ""
 
@@ -288,7 +328,7 @@ def build_editorial_draft(
         revision=revision,
     )
 
-    input_hash = build_input_fingerprint(art_data, sources)
+    input_hash = build_input_fingerprint(art_data, sources, input_event)
     output_hash = stable_hash(
         {
             "content": content,
@@ -298,12 +338,18 @@ def build_editorial_draft(
             "event_key": event_key,
             "cluster_signature": cluster_signature,
             "revision": revision,
+            "input_payload_hash": input_payload_hash,
         }
     )
 
     provenance = DraftProvenance(
         input_hash=input_hash,
         output_hash=output_hash,
+        input_contract_version=input_contract_version,
+        input_event_key=input_event_key,
+        input_revision=input_revision,
+        input_payload_hash=input_payload_hash,
+        input_cursor=input_cursor,
         commit_sha=commit_sha,
         model_provider=model_provider,
         model_name=model_name,
@@ -320,6 +366,9 @@ def build_editorial_draft(
         event_key=event_key,
         cluster_signature=cluster_signature,
         revision=revision,
+        first_seen=first_seen,
+        last_seen=last_seen,
+        cluster_confidence=cluster_confidence,
         status=DRAFT_GENERATED,
         content=content,
         sources=sources,
