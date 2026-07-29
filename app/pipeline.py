@@ -28,6 +28,7 @@ from .config import (
     FACTUAL_ASSESSMENT_ENABLED,
     LOCAL_DRAFT_DIR,
     OUTPUT_MODE,
+    PAYLOAD_CMS_ENABLED,
     PIPELINE_CONFIG,
     PIPELINE_ORDER,
     PUBLISHER_DOMAIN,
@@ -1598,6 +1599,9 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
 
                         logger.info("DRAFT GERADO: %s | %s", draft.draft_id, title[:70])
 
+                        # --- ENTREGA AO CMS (somente draft, apos o gate) ---
+                        _deliver_draft(draft, art_data)
+
                         # Link store: alimenta sugestoes de links internos futuros.
                         from .cluster_engine import score_event
                         event = score_event({
@@ -1813,6 +1817,41 @@ def _handle_watchdog_timeout(article: Dict[str, Any]) -> bool:
         return False
     finally:
         db.close()
+
+def _deliver_draft(draft, art_data):
+    """Hand an approved draft to the external CMS, if delivery is enabled.
+
+    Runs last on purpose: the artifact is already written and the draft already
+    recorded, so a delivery failure never costs the local copy. The service
+    refuses blocked drafts before opening a socket, so this call is safe even
+    when the gate said no.
+    """
+    from .delivery_service import DeliveryService
+
+    if not PAYLOAD_CMS_ENABLED:
+        return None
+
+    service = None
+    try:
+        service = DeliveryService()
+        outcome = service.deliver_draft(draft, topic=art_data.get("topic"))
+        logger.info(
+            "[DRAFT_DELIVERY] draft_id=%s status=%s remote_draft_id=%s tentativas=%s",
+            draft.draft_id, outcome.result.status,
+            outcome.result.remote_draft_id or "-", outcome.result.attempts,
+        )
+        return outcome
+    except Exception as exc:  # noqa: BLE001 - o draft local nunca pode ser perdido
+        logger.exception(
+            "[DRAFT_DELIVERY] draft_id=%s falha inesperada na entrega (%s); "
+            "o draft local permanece intacto",
+            draft.draft_id, type(exc).__name__,
+        )
+        return None
+    finally:
+        if service is not None:
+            service.close()
+
 
 def _run_factual_assessment(draft, art_data):
     """Build and persist the factual picture for this draft.

@@ -75,6 +75,18 @@ CANONICAL_MODULES = [
     "app/factual/normalization.py",
     "app/factual/serialization.py",
     "app/factual/states.py",
+    # MS-5: entrega editorial ao CMS.
+    "app/delivery_service.py",
+    "app/delivery_store.py",
+    "app/delivery/__init__.py",
+    "app/delivery/builder.py",
+    "app/delivery/categories.py",
+    "app/delivery/contract.py",
+    "app/delivery/destination.py",
+    "app/delivery/errors.py",
+    "app/delivery/payload_cms.py",
+    "app/delivery/retry.py",
+    "app/delivery/states.py",
 ]
 
 FORBIDDEN_SYMBOLS = [
@@ -169,3 +181,100 @@ def test_pipeline_terminal_state_is_draft_generated():
     assert "record_draft_generated" in source
     assert "submitter.submit(draft)" in source
     assert "DRAFT_GENERATED" in source
+
+
+# ---------------------------------------------------------------------------
+# MS-5: a fronteira de transporte
+# ---------------------------------------------------------------------------
+
+#: Modulos do caminho de entrega que precisam permanecer livres de transporte.
+#: `app/delivery/payload_cms.py` e a unica excecao deliberada.
+TRANSPORT_FREE_MODULES = [
+    "app/delivery/contract.py",
+    "app/delivery/builder.py",
+    "app/delivery/categories.py",
+    "app/delivery/destination.py",
+    "app/delivery/errors.py",
+    "app/delivery/retry.py",
+    "app/delivery/states.py",
+    "app/delivery_store.py",
+    "app/delivery_service.py",
+    "app/editorial_gate/engine.py",
+    "app/editorial_gate/rules.py",
+    "app/factual_builder.py",
+    "app/factual_store.py",
+]
+
+HTTP_CLIENT_MARKERS = ("import requests", "import httpx", "from requests", "urlopen")
+
+
+@pytest.mark.parametrize("module_path", TRANSPORT_FREE_MODULES)
+def test_delivery_domain_never_imports_an_http_client(module_path):
+    """So o adapter fala HTTP; e isso que torna o resto testavel sem socket."""
+    source = _source(module_path)
+    for marker in HTTP_CLIENT_MARKERS:
+        assert marker not in source, f"{module_path} importa cliente HTTP ({marker})"
+
+
+def test_only_the_payload_adapter_imports_requests():
+    offenders = []
+    for path in (APP_DIR / "delivery").rglob("*.py"):
+        if path.name == "payload_cms.py":
+            continue
+        if "import requests" in path.read_text(encoding="utf-8"):
+            offenders.append(str(path))
+    assert offenders == [], f"cliente HTTP fora do adapter: {offenders}"
+
+
+def test_the_gate_never_imports_the_delivery_adapter():
+    """O gate decide; ele nao pode conhecer o destino."""
+    for path in (APP_DIR / "editorial_gate").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert "payload_cms" not in source, f"{path} conhece o adapter do Payload"
+
+
+def test_the_factual_layer_never_imports_the_delivery_layer():
+    for path in (APP_DIR / "factual").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert "app.delivery" not in source and "from .delivery" not in source
+
+
+def test_delivery_never_alters_the_factual_assessment():
+    """A entrega le a avaliacao factual; nunca a reescreve."""
+    for path in (APP_DIR / "delivery").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert "factual_assessment =" not in source
+        assert "build_factual_assessment" not in source
+
+
+def test_ms5_does_not_import_tmdb_or_screen_app():
+    for path in list((APP_DIR / "delivery").rglob("*.py")) + [
+        APP_DIR / "delivery_service.py", APP_DIR / "delivery_store.py"
+    ]:
+        source = path.read_text(encoding="utf-8").lower()
+        for forbidden in ("tmdb", "screen_app", "screenapp", "knowledge_graph", "embedding"):
+            assert forbidden not in source, f"{path} referencia {forbidden}"
+
+
+def test_delivery_never_touches_the_ingestion_layer():
+    for path in (APP_DIR / "delivery").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        for forbidden in ("event_store", "ingestion", "advance_cursor"):
+            assert forbidden not in source, f"{path} mexe na ingestao ({forbidden})"
+
+
+def test_no_delivery_module_transmits_at_import_time():
+    """Importar nunca pode abrir conexao."""
+    for path in (APP_DIR / "delivery").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            assert not isinstance(node, ast.Expr) or not isinstance(
+                getattr(node, "value", None), ast.Call
+            ), f"{path} executa chamada no nivel do modulo"
+
+
+def test_delivery_only_ever_creates_drafts():
+    """Nao existe caminho que peca publicacao."""
+    source = _source("app/delivery/contract.py")
+    assert 'CMS_STATUS_DRAFT: Final[str] = "draft"' in source
+    assert "self.cms_status = CMS_STATUS_DRAFT" in source

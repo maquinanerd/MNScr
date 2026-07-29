@@ -141,6 +141,64 @@ MAX_EVIDENCE_EXCERPT_CHARS = int(os.getenv('MNSCR_MAX_EVIDENCE_EXCERPT_CHARS', 5
 MIN_FACTUAL_COVERAGE_RATIO = float(os.getenv('MNSCR_MIN_FACTUAL_COVERAGE_RATIO', 0.75))
 
 
+# --- Entrega ao Payload CMS (MS-5) ---
+# Desabilitada por padrão. O MNScr cria apenas drafts para revisão humana; não
+# existe caminho de publicação. O Payload CMS vive no repositório Screen-App, e
+# esta integração ainda não foi validada contra uma instância real.
+PAYLOAD_CMS_ENABLED = (
+    os.getenv('PAYLOAD_CMS_ENABLED', 'false').strip().lower() == 'true'
+)
+PAYLOAD_CMS_BASE_URL = (os.getenv('PAYLOAD_CMS_BASE_URL') or '').strip()
+PAYLOAD_CMS_DRAFT_ENDPOINT = (os.getenv('PAYLOAD_CMS_DRAFT_ENDPOINT') or '').strip()
+PAYLOAD_CMS_TOKEN = (os.getenv('PAYLOAD_CMS_TOKEN') or '').strip()
+PAYLOAD_CMS_COLLECTION = (
+    os.getenv('PAYLOAD_CMS_COLLECTION') or 'editorial-drafts'
+).strip()
+PAYLOAD_CMS_TIMEOUT_SECONDS = float(os.getenv('PAYLOAD_CMS_TIMEOUT_SECONDS', 15))
+PAYLOAD_CMS_MAX_ATTEMPTS = int(os.getenv('PAYLOAD_CMS_MAX_ATTEMPTS', 3))
+PAYLOAD_CMS_RETRY_BASE_SECONDS = float(os.getenv('PAYLOAD_CMS_RETRY_BASE_SECONDS', 2))
+
+
+def get_delivery_config_issues() -> List[str]:
+    """Blocking problems in the Payload CMS delivery settings.
+
+    Só valida quando a entrega está habilitada: um MNScr rodando em modo local
+    não deve falhar no startup por causa de um destino que ele não usa.
+    """
+    issues: List[str] = []
+    if not PAYLOAD_CMS_ENABLED:
+        return issues
+
+    if not PAYLOAD_CMS_BASE_URL and not PAYLOAD_CMS_DRAFT_ENDPOINT:
+        issues.append(
+            'PAYLOAD_CMS_ENABLED=true exige PAYLOAD_CMS_BASE_URL ou PAYLOAD_CMS_DRAFT_ENDPOINT'
+        )
+    for name, value in (
+        ('PAYLOAD_CMS_BASE_URL', PAYLOAD_CMS_BASE_URL),
+        ('PAYLOAD_CMS_DRAFT_ENDPOINT', PAYLOAD_CMS_DRAFT_ENDPOINT),
+    ):
+        if value and not value.startswith(('http://', 'https://')):
+            issues.append(f'{name} precisa começar com http:// ou https://')
+
+    if not PAYLOAD_CMS_TOKEN:
+        issues.append('PAYLOAD_CMS_ENABLED=true exige PAYLOAD_CMS_TOKEN')
+
+    if PAYLOAD_CMS_TIMEOUT_SECONDS <= 0:
+        issues.append(
+            f'PAYLOAD_CMS_TIMEOUT_SECONDS precisa ser positivo (recebido: {PAYLOAD_CMS_TIMEOUT_SECONDS})'
+        )
+    if PAYLOAD_CMS_MAX_ATTEMPTS < 1:
+        issues.append(
+            f'PAYLOAD_CMS_MAX_ATTEMPTS precisa ser >= 1 (recebido: {PAYLOAD_CMS_MAX_ATTEMPTS})'
+        )
+    if PAYLOAD_CMS_RETRY_BASE_SECONDS < 0:
+        issues.append(
+            'PAYLOAD_CMS_RETRY_BASE_SECONDS não pode ser negativo '
+            f'(recebido: {PAYLOAD_CMS_RETRY_BASE_SECONDS})'
+        )
+    return issues
+
+
 def get_factual_config_issues() -> List[str]:
     """Blocking problems in the factual settings. Sem fallback silencioso."""
     from app.factual.states import ASSESSMENT_MODES, ASSESSMENT_VERSIONS
@@ -328,6 +386,8 @@ def get_runtime_config_issues() -> List[str]:
 
     if FACTUAL_ASSESSMENT_ENABLED:
         issues.extend(get_factual_config_issues())
+
+    issues.extend(get_delivery_config_issues())
 
     # Uma política de gate inexistente precisa falhar no startup: usar um
     # fallback silencioso tornaria todo veredito armazenado inexplicável.
