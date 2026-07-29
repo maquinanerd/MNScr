@@ -18,7 +18,8 @@ e vive no CMS.
 - Monta um `EditorialDraft` com fontes, evidências, candidatos de mídia e proveniência.
 - Estrutura o que o draft **afirma** e o que as fontes **sustentam** ou **contradizem**.
 - Classifica cada draft no **Editorial Gate** versionado antes da gravação.
-- Entrega o draft a um *submitter*.
+- Entrega o draft a um *submitter* local.
+- Opcionalmente entrega o draft ao **Payload CMS**, sempre como `draft`.
 
 ## O que NÃO faz
 
@@ -50,6 +51,10 @@ Payload submission is not enabled until the Cinerie Editorial contract is finali
 Desde a MS-3 o submitter também recusa, **antes de qualquer outra verificação**,
 qualquer draft cujo gate não seja `GATE_CLEAR` — inclusive um draft sem veredito,
 porque a ausência de opinião não é aprovação.
+
+A MS-5 acrescenta um caminho **separado** de entrega
+(`PAYLOAD_CMS_ENABLED`), com contrato versionado, idempotência e retry. Esse
+caminho também só aceita `GATE_CLEAR`, e continua criando apenas drafts.
 
 ## Modo operacional atual
 
@@ -374,6 +379,125 @@ idempotente quando draft e política são idênticos.
 
 `--show-gate` não exibe o corpo da matéria.
 
+## Entrega ao Payload CMS
+
+O MNScr pode entregar um draft aprovado ao Payload CMS. Sempre como **draft**,
+nunca publicado: `cms_status` é fixo em `"draft"` e não existe caminho de código
+que peça outra coisa.
+
+> **Escopo.** O Payload CMS vive no repositório **Screen-App** — o Cinerie faz
+> parte desse projeto, não é um repositório separado. A MS-5 entregou o lado
+> MNScr e o exercitou contra um **servidor local falso**. A integração **não foi
+> validada contra uma instância real de Payload**. O que falta está em
+> [docs/ms5-screen-app.md](docs/ms5-screen-app.md).
+
+### Ordem
+
+```
+draft → validação técnica → avaliação factual → Editorial Gate
+      → contrato de entrega → validação → DELIVERY_PENDING
+      → tentativa → persistência do resultado
+```
+
+A entrega roda **depois** de o artefato local já estar gravado e o draft
+registrado, então uma falha de entrega nunca custa a cópia local. Toda recusa
+acontece antes de abrir socket, e o destino só é construído depois da validação —
+o adapter não tem como contornar o gate.
+
+### Contrato
+
+`app/delivery/contract.py`, versionado (`schema_version = "1"`). Os hashes são
+**transportados**, não recalculados: `content_hash` é o `output_hash` do draft,
+`assessment_hash` vem da MS-4 e `gate_hash` da MS-3.
+
+`entity_mentions` existe no contrato mas sai sempre **vazio**: o MNScr não extrai
+menções e a MS-5 não cria uma segunda pipeline de IA só para preencher o campo.
+Uma menção com `resolution_status` diferente de `UNRESOLVED` é rejeitada — seria
+um fato inventado.
+
+### Estados
+
+| Estado | Significado |
+|---|---|
+| `DELIVERY_PENDING` | registrada, ainda não tentada |
+| `DELIVERY_IN_PROGRESS` | tentativa em curso |
+| `DELIVERED` | draft remoto criado — terminal |
+| `DELIVERY_FAILED_RETRYABLE` | falha transitória; será repetida |
+| `DELIVERY_FAILED_PERMANENT` | repetir não mudaria o resultado |
+| `DELIVERY_BLOCKED` | recusada antes de qualquer rede |
+| `DELIVERY_NEEDS_RECONCILIATION` | resultado desconhecido; **nunca** recriar às cegas |
+| `DELIVERY_REQUIRES_MANUAL_REVIEW` | conteúdo mudou depois de uma entrega anterior |
+
+Transições inválidas são recusadas. `DELIVERED` é terminal.
+
+### Três conceitos distintos
+
+Fáceis de confundir, e o código os trata separadamente:
+
+| Conceito | Onde | Chave |
+|---|---|---|
+| **deduplicação editorial** | MS-2 | `event_key` + `payload_hash` |
+| **idempotência de entrega** | MS-5 | `draft_id` + `content_hash` + `destination` |
+| **atualização de draft remoto** | — | **não implementada** |
+
+`draft_id` já deriva de `event_key + revision`, então a identidade do evento
+viaja sem duplicar campos. Mesmo evento, mesma revisão e mesmo conteúdo → uma
+única entrega, e a reexecução devolve o resultado gravado sem nova chamada.
+
+### Conteúdo alterado
+
+Se o conteúdo muda depois de uma entrega bem-sucedida, o MNScr **não** sobrescreve
+o draft remoto. Ele registra uma nova entrega versionada, preserva a anterior no
+histórico e marca `DELIVERY_REQUIRES_MANUAL_REVIEW` — sobrescrever um draft que um
+revisor já pode ter editado destruiria trabalho humano.
+
+### Bloqueio
+
+A entrega é recusada, sem rede, quando: falta avaliação factual · falta gate ·
+gate diferente de `GATE_CLEAR` · conflito factual crítico · draft com erros
+bloqueantes · payload inválido · categoria sem correspondência canônica ·
+configuração ausente · transição inválida.
+
+### Retry e garantia
+
+Retryable: timeout de leitura, conexão, 408, 429, 500, 502, 503, 504.
+Permanente: 400, 401, 403, 404, 409, 422 e payload inválido.
+
+Backoff exponencial com jitter determinístico; `Retry-After` do destino sempre
+vence a estimativa local; `sleeper` e `clock` são injetáveis, então nenhum teste
+espera de verdade.
+
+Um *connect* timeout é tratado como falha de conexão — a requisição não chegou,
+nada foi criado. Só um *read* timeout deixa o resultado ambíguo, e esse vai para
+`DELIVERY_NEEDS_RECONCILIATION`.
+
+**A garantia é `at-least-once` com deduplicação best-effort.** O MNScr envia
+`Idempotency-Key`, mas não pode provar que o Payload o honra; a deduplicação que
+funciona hoje é local. **Não é `exactly-once`** e não é descrita como tal.
+
+### Taxonomia
+
+Só categorias já existentes em `EDITORIAL_CATEGORIES` são enviadas. O MNScr
+**nunca cria taxonomia remota**: um tópico sem correspondência bloqueia a entrega
+com motivo explícito, em vez de mandar um valor inventado.
+
+### Mídia
+
+Apenas metadados: URL de origem, veículo, crédito, `license_status` e alt. Nada é
+baixado, re-hospedado ou enviado; nenhuma licença é inventada e nenhum crédito é
+removido. Ausência de mídia **não** bloqueia a matéria.
+
+### Segurança
+
+O token nunca aparece em log, exceção, `repr` ou teste. URLs em mensagens de erro
+são reduzidas a esquema, host e caminho — uma query string pode carregar
+credencial. O corpo da matéria não é logado.
+
+### Persistência
+
+`editorial_deliveries` (única por `idempotency_key`) e `delivery_attempts`
+(append-only). Migrations aditivas e idempotentes; nada de MS-1..MS-4 é alterado.
+
 ## Configuração
 
 | Variável | Padrão | Papel |
@@ -393,6 +517,13 @@ idempotente quando draft e política são idênticos.
 | `MNSCR_MAX_EVIDENCE_PER_CLAIM` | `10` | Teto de evidências por afirmação. |
 | `MNSCR_MAX_EVIDENCE_EXCERPT_CHARS` | `500` | Evidência é ponteiro, não cópia. |
 | `MNSCR_MIN_FACTUAL_COVERAGE_RATIO` | `0.75` | Limiar técnico inicial, ajustável pelo Cinerie Editorial. |
+| `PAYLOAD_CMS_ENABLED` | `false` | Liga a entrega ao CMS. Desligada por padrão. |
+| `PAYLOAD_CMS_BASE_URL` | — | URL do Payload. |
+| `PAYLOAD_CMS_TOKEN` | — | Token. Nunca commitado, nunca logado. |
+| `PAYLOAD_CMS_COLLECTION` | `editorial-drafts` | Collection de destino. |
+| `PAYLOAD_CMS_TIMEOUT_SECONDS` | `15` | Timeout explícito por requisição. |
+| `PAYLOAD_CMS_MAX_ATTEMPTS` | `3` | Teto de tentativas. |
+| `PAYLOAD_CMS_RETRY_BASE_SECONDS` | `2` | Base do backoff exponencial. |
 | `PAYLOAD_ENABLED` | `false` | Habilita o destino Payload (ainda bloqueado). |
 | `PAYLOAD_BASE_URL` | — | URL do Payload CMS. |
 | `PAYLOAD_API_TOKEN` | — | Token do Payload CMS. |
@@ -417,6 +548,10 @@ O `.env.example` traz a lista completa.
 - `app/factual_store.py` — claims, evidências, links e conflitos (SQLite)
 - `app/factual_service.py` — construção, reavaliação e consultas
 - `config/prompts/` — prompts versionados
+- `app/delivery/` — contrato, estados, categorias, retry e adapter do CMS
+- `app/delivery_store.py` — entregas e tentativas (SQLite)
+- `app/delivery_service.py` — orquestra contrato → validação → envio → persistência
+- `docs/ms5-screen-app.md` — o que ainda falta no Screen-App
 - `app/editorial/` — modelo de domínio do draft (`models`, `states`, `serialization`, `builder`)
 - `app/submitters/` — contrato de submissão (`base`), `LocalDraftSubmitter`, `PayloadDraftSubmitter`
 - `app/pipeline.py` — orquestração do ciclo
@@ -477,7 +612,14 @@ python -m pytest
 - Não há Knowledge Graph, embeddings, banco vetorial, RAG nem busca externa. A
   verificação usa exclusivamente as fontes já recebidas.
 - Conflitos não são resolvidos e não existe score editorial definitivo.
-- A MS-5 ainda não foi implementada.
+- A integração com o Payload CMS foi implementada e testada **apenas contra um
+  servidor local falso**. Ela não foi validada contra uma instância real, e o
+  Screen-App ainda precisa confirmar a forma da collection, a autenticação, o
+  suporte a `Idempotency-Key` e a capacidade de lookup por `delivery_id`.
+- Não há atualização de draft remoto nem upload de mídia.
+- Entity linking, Knowledge Graph, embeddings e busca externa seguem fora de
+  escopo.
+- A MS-6 ainda não foi implementada.
 - Não há estrutura de conflito factual. Divergência entre fontes ainda é resolvida por
   instrução de prompt, sem registro.
 - Autor e data da fonte não são extraídos no caminho ativo; ficam `null` na proveniência.
