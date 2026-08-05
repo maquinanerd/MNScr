@@ -24,6 +24,7 @@ from app.pipeline import (  # noqa: E402
     EXIT_INVALID_CONFIGURATION,
     run_pipeline_cycle,
     run_pipeline_once,
+    stop_worker,
 )
 from app.store import Database  # noqa: E402
 
@@ -166,6 +167,9 @@ def run_forever(logger: logging.Logger) -> None:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
         logger.info("Agendador interrompido pelo usuário.")
+    finally:
+        if not stop_worker(timeout_s=30):
+            logger.error("[WORKER_SHUTDOWN] encerramento incompleto")
 
 
 def build_parser() -> argparse.ArgumentParser:

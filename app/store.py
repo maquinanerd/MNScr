@@ -4,6 +4,7 @@ Database management for the application using SQLite.
 """
 
 import hashlib
+import json
 import logging
 import os
 import sqlite3
@@ -104,6 +105,7 @@ class Database:
 
         missing_columns = {
             "event_key": "ALTER TABLE seen_articles ADD COLUMN event_key TEXT",
+            "event_revision": "ALTER TABLE seen_articles ADD COLUMN event_revision INTEGER",
             "is_cluster": "ALTER TABLE seen_articles ADD COLUMN is_cluster INTEGER DEFAULT 0",
             "cluster_size": "ALTER TABLE seen_articles ADD COLUMN cluster_size INTEGER DEFAULT 1",
             "sources_json": "ALTER TABLE seen_articles ADD COLUMN sources_json TEXT",
@@ -157,6 +159,11 @@ class Database:
 
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_seen_articles_event_key ON seen_articles(event_key)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_seen_articles_event_revision "
+            "ON seen_articles(event_key, event_revision) "
+            "WHERE event_key IS NOT NULL AND event_revision IS NOT NULL"
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_seen_articles_origin_topic ON seen_articles(origin, topic)"
@@ -503,12 +510,23 @@ class Database:
                         f"[SUPERFEED_COVERAGE] Fallback bloqueado porque URL ja foi coberta: {item_url}"
                     )
 
-                # Dedup por event_key (clusters RSSPRIME)
+                # Dedup por identidade versionada do evento RSS Prime.  Uma
+                # revisao nova e trabalho novo; a mesma revisao nao pode gerar
+                # uma segunda tarefa, mesmo sob concorrencia.
                 if not already_seen and item.get("is_cluster") and item.get("event_key"):
-                    cursor.execute(
-                        "SELECT id FROM seen_articles WHERE event_key = ?",
-                        (item["event_key"],)
-                    )
+                    event_revision = item.get("event_revision")
+                    if event_revision is None:
+                        event_revision = (item.get("_input_event_ref") or {}).get("revision")
+                    if event_revision is None:
+                        cursor.execute(
+                            "SELECT id FROM seen_articles WHERE event_key = ? AND event_revision IS NULL",
+                            (item["event_key"],),
+                        )
+                    else:
+                        cursor.execute(
+                            "SELECT id FROM seen_articles WHERE event_key = ? AND event_revision = ?",
+                            (item["event_key"], int(event_revision)),
+                        )
                     already_seen = cursor.fetchone() is not None
 
                 # Dedup estrutural por assinatura de cluster.
@@ -538,10 +556,10 @@ class Database:
                     cursor.execute(
                         """INSERT INTO seen_articles
                            (source_id, external_id, url, canonical_url, normalized_title,
-                            origin, topic, event_key, is_cluster, multi_source, source_count,
+                             origin, topic, event_key, event_revision, is_cluster, multi_source, source_count,
                             cluster_size, fonte_nome, primary_source, sources_json, urls_json,
                             cluster_signature, first_seen, last_seen, published_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             source_id,
                             ext_id,
@@ -551,6 +569,7 @@ class Database:
                             item.get("origin", "fallback"),
                             item.get("topic"),
                             item.get("event_key"),
+                            item.get("event_revision") or (item.get("_input_event_ref") or {}).get("revision"),
                             int(item.get("is_cluster", False)),
                             int(item.get("multi_source", False)),
                             int(item.get("source_count", 1) or 1),
@@ -577,6 +596,75 @@ class Database:
             self.conn.rollback()
             return []
         return new_articles
+
+    def reconcile_rssprime_event_tasks(self) -> List[Dict[str, Any]]:
+        """Create missing operational tasks for accepted, persisted events.
+
+        Event persistence and article task creation predate a shared transaction.
+        This idempotent reconciliation closes that crash window.  A legacy
+        unversioned article counts as a match, so upgrading never duplicates an
+        existing draft merely to backfill ``event_revision``.
+        """
+        if not self._table_exists("rssprime_events"):
+            return []
+        cursor = self._get_cursor()
+        rows = cursor.execute(
+            """
+            SELECT re.event_key, re.revision, re.normalized_payload_json
+            FROM rssprime_events re
+            WHERE re.validation_status = 'VALIDATED'
+              AND NOT EXISTS (
+                  SELECT 1 FROM seen_articles sa
+                  WHERE sa.event_key = re.event_key
+                    AND (sa.event_revision = re.revision OR sa.event_revision IS NULL)
+              )
+            ORDER BY re.id ASC
+            """
+        ).fetchall()
+        created: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["normalized_payload_json"] or "{}")
+                sources = payload.get("sources") or []
+                primary = sources[0] if sources and isinstance(sources[0], dict) else {}
+                url = primary.get("url")
+                if not url:
+                    logger.error(
+                        "[EVENT_RECONCILIATION] event_key=%s revision=%s skipped=no_source_url",
+                        row["event_key"], row["revision"],
+                    )
+                    continue
+                topic = str(payload.get("topic") or "movies")
+                source_id = f"rssprime_{topic}" if f"rssprime_{topic}" in RSS_FEEDS else "rssprime_movies"
+                item = {
+                    "id": f"event:{row['event_key']}:{int(row['revision'])}",
+                    "title": payload.get("title") or row["event_key"],
+                    "url": url,
+                    "source_id": source_id,
+                    "origin": "superfeed",
+                    "topic": topic,
+                    "event_key": row["event_key"],
+                    "event_revision": int(row["revision"]),
+                    "is_cluster": len(sources) > 1,
+                    "multi_source": len(sources) > 1,
+                    "source_count": len(sources) or 1,
+                    "all_sources": sources,
+                    "urls": [s.get("url") for s in sources if isinstance(s, dict) and s.get("url")],
+                    "fonte_nome": primary.get("name") or primary.get("source_name"),
+                    "primary_source": primary.get("url"),
+                    "_input_event_ref": {
+                        "schema": "rssprime-event-reference-v1",
+                        "event_key": row["event_key"],
+                        "revision": int(row["revision"]),
+                    },
+                }
+                created.extend(self.filter_new_articles(source_id, [item], limit=1))
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.error(
+                    "[EVENT_RECONCILIATION] event_key=%s revision=%s skipped=invalid_payload error=%s",
+                    row["event_key"], row["revision"], type(exc).__name__,
+                )
+        return created
 
     def register_covered_urls(
         self,
@@ -1215,14 +1303,22 @@ class Database:
             logger.error(f"Failed to record gate result for article {article_db_id}: {e}")
             return False
 
-    def get_article_by_event_key(self, event_key: str) -> Optional[Dict[str, Any]]:
+    def get_article_by_event_key(
+        self, event_key: str, event_revision: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
         """The article row for an acontecimento, most recent first."""
         try:
             cursor = self._get_cursor()
-            cursor.execute(
-                "SELECT * FROM seen_articles WHERE event_key = ? ORDER BY id DESC LIMIT 1",
-                (event_key,),
-            )
+            if event_revision is None:
+                cursor.execute(
+                    "SELECT * FROM seen_articles WHERE event_key = ? ORDER BY event_revision DESC, id DESC LIMIT 1",
+                    (event_key,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM seen_articles WHERE event_key = ? AND event_revision = ? LIMIT 1",
+                    (event_key, int(event_revision)),
+                )
             row = cursor.fetchone()
             return dict(row) if row else None
         except sqlite3.Error as e:
@@ -1272,6 +1368,7 @@ class Database:
                     sa.topic,
                     sa.status,
                     sa.event_key,
+                    sa.event_revision,
                     sa.is_cluster,
                     sa.multi_source,
                     sa.source_count,
@@ -1336,6 +1433,7 @@ class Database:
                     canonical_url,
                     normalized_title,
                     event_key,
+                    event_revision,
                     multi_source,
                     source_count,
                     cluster_signature,

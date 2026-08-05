@@ -104,6 +104,7 @@ worker_thread: Optional[threading.Thread] = None
 _runtime_lock = threading.Lock()
 _worker_pause_requested = threading.Event()
 _worker_idle = threading.Event()
+_worker_stop_requested = threading.Event()
 _worker_idle.set()
 
 # --- Environment variables for pipeline control ---
@@ -485,9 +486,29 @@ def ensure_worker_started() -> None:
     with _runtime_lock:
         if worker_thread and worker_thread.is_alive():
             return
-        worker_thread = threading.Thread(target=worker_loop, daemon=True, name="pipeline-worker")
+        _worker_stop_requested.clear()
+        worker_thread = threading.Thread(target=worker_loop, daemon=False, name="pipeline-worker")
         worker_thread.start()
         logger.info("Pipeline worker thread started.")
+
+
+def stop_worker(timeout_s: float = 30) -> bool:
+    """Request a coordinated worker shutdown and confirm that it joined."""
+    global worker_thread
+    _worker_pause_requested.clear()
+    _worker_stop_requested.set()
+    thread = worker_thread
+    if thread is None:
+        return True
+    thread.join(timeout=max(0.0, timeout_s))
+    stopped = not thread.is_alive()
+    if stopped:
+        worker_thread = None
+        _worker_idle.set()
+        logger.info("[WORKER_SHUTDOWN] joined=true")
+    else:
+        logger.error("[WORKER_SHUTDOWN] joined=false timeout_s=%s", timeout_s)
+    return stopped
 
 
 def pause_worker_for_maintenance(timeout_s: int = 300) -> bool:
@@ -589,7 +610,11 @@ def _process_one_queued_article() -> Optional[Dict[str, Any]]:
     process_batch([article], _once_link_map())
     db = Database()
     try:
-        row = db.get_article_by_event_key(article.get("event_key")) if article.get("event_key") else None
+        row = (
+            db.get_article_by_event_key(article.get("event_key"), article.get("event_revision"))
+            if article.get("event_key")
+            else None
+        )
         if row is None:
             cursor = db._get_cursor()
             row_data = cursor.execute("SELECT * FROM seen_articles WHERE id = ?", (article_id,)).fetchone()
@@ -610,6 +635,19 @@ def _record_once_outcome(result: OnceRunResult, row: Dict[str, Any]) -> None:
             result.review_required += 1
     elif status in {DRAFT_FAILED, "FAILED", "FAILED_PERMANENT"}:
         result.technical_failed += 1
+
+
+def reconcile_event_tasks() -> int:
+    """Rebuild durable queue tasks for accepted RSS Prime revisions after a crash."""
+    db = Database()
+    try:
+        tasks = db.reconcile_rssprime_event_tasks()
+        if tasks:
+            article_queue.push_many(tasks)
+            logger.info("[EVENT_RECONCILIATION] created_tasks=%s", len(tasks))
+        return len(tasks)
+    finally:
+        db.close()
 
 
 def run_pipeline_once(*, deadline_seconds: float, max_items: int) -> OnceRunResult:
@@ -634,6 +672,7 @@ def run_pipeline_once(*, deadline_seconds: float, max_items: int) -> OnceRunResu
         result.reconciled = sum(int(value) for key, value in recovered.items() if key != "still_alive")
     finally:
         db.close()
+    result.reconciled += reconcile_event_tasks()
 
     def drain() -> bool:
         while len(article_queue):
@@ -1884,10 +1923,10 @@ def worker_loop():
     last_pause_time = time.time()
     QUEUE_TIMEOUT_S = 30  # 30 segundos timeout para esperar artigo
 
-    while True:
+    while not _worker_stop_requested.is_set():
         if _worker_pause_requested.is_set():
             _worker_idle.set()
-            time.sleep(1)
+            _worker_stop_requested.wait(1)
             continue
 
         _worker_idle.set()
@@ -1899,7 +1938,9 @@ def worker_loop():
                 f"Pausando pipeline por {PAUSE_ON_LIMIT_S}s (5 minutos)."
             )
             last_pause_time = time.time()
-            time.sleep(PAUSE_ON_LIMIT_S)
+            _worker_stop_requested.wait(PAUSE_ON_LIMIT_S)
+            if _worker_stop_requested.is_set():
+                break
             requests_in_cycle = 0
             logger.info("[RPM PROTECTION] Resumindo pipeline apÃƒÂ³s pausa de 5 minutos.")
             continue
@@ -1931,7 +1972,7 @@ def worker_loop():
                 break
             else:
                 # Esperar um pouco antes de tentar novamente
-                time.sleep(1)
+                _worker_stop_requested.wait(1)
 
         if not articles:
             # Still no articles after timeout, reset cycle counter and continue
@@ -1943,7 +1984,7 @@ def worker_loop():
                 requests_in_cycle = 0
                 last_pause_time = time.time()
 
-            time.sleep(5)  # Esperar 5s antes de tentar novamente
+            _worker_stop_requested.wait(5)  # Esperar 5s antes de tentar novamente
             continue
         # Refresh link_map before processing to pick up articles published this session
         link_map = _refresh_link_map()
@@ -1976,7 +2017,10 @@ def worker_loop():
             f"Total requisiÃ§Ãµes neste ciclo: {requests_in_cycle}/{MAX_REQUESTS_PER_CYCLE}. "
             f"Dormindo por {ARTICLE_SLEEP_S}s."
         )
-        time.sleep(ARTICLE_SLEEP_S)
+        _worker_stop_requested.wait(ARTICLE_SLEEP_S)
+
+    _worker_idle.set()
+    logger.info("[WORKER_SHUTDOWN] loop_exited=true")
 
 
 def _handle_watchdog_timeout(article: Dict[str, Any]) -> bool:
@@ -2336,6 +2380,7 @@ def apply_input_contract(
                 enriched = dict(item)
                 enriched["_input_event"] = outcome.event
                 enriched["event_key"] = outcome.event.event_key
+                enriched["event_revision"] = outcome.event.revision
                 enriched.setdefault("topic", outcome.event.topic)
                 accepted.append(enriched)
                 continue
@@ -2367,7 +2412,7 @@ def process_stored_event(event) -> Dict[str, Any]:
     """
     db = Database()
     try:
-        article = db.get_article_by_event_key(event.event_key)
+        article = db.get_article_by_event_key(event.event_key, event.revision)
         if article is None:
             raise RuntimeError(
                 f"Evento '{event.event_key}' nao tem artigo correspondente em seen_articles; "
@@ -2377,6 +2422,7 @@ def process_stored_event(event) -> Dict[str, Any]:
         article["db_id"] = article.get("id")
         article["_input_event"] = event
         article["event_key"] = event.event_key
+        article["event_revision"] = event.revision
         db.reset_article_for_replay(int(article["db_id"]))
     finally:
         db.close()
@@ -2386,7 +2432,7 @@ def process_stored_event(event) -> Dict[str, Any]:
 
     db = Database()
     try:
-        refreshed = db.get_article_by_event_key(event.event_key) or {}
+        refreshed = db.get_article_by_event_key(event.event_key, event.revision) or {}
     finally:
         db.close()
     return {
@@ -2408,11 +2454,14 @@ def _build_link_map_for_replay() -> Dict[str, Any]:
 def run_pipeline_cycle(*, start_worker: bool = True, skip_pending_guard: bool = False):
     """Read feeds and enqueue articles for the worker or a bounded synchronous run."""
     initialize_runtime()
+    reconcile_event_tasks()
     if start_worker:
         ensure_worker_started()
-    if not skip_pending_guard and pipeline_has_pending_work():
-        logger.warning("[CYCLE_GUARD] Ciclo adiado: backlog Superfeed aguarda o worker ativo.")
-        return
+    # A persistent backlog is data, not proof that a worker is alive.  Queue
+    # uniqueness and claims make a fresh ingestion pass safe while the daemon
+    # drains; skipping here was the false-success path of --once.
+    if not skip_pending_guard:
+        pipeline_has_pending_work()
 
     logger.info("Starting new pipeline ingestion cycle.")
 
