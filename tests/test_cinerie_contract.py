@@ -47,7 +47,14 @@ from app.cinerie.validation import check_identity, ensure_valid, validate_reques
 #: de producao — la o valor e recalculado do arquivo. Aqui ele existe para provar
 #: que o que foi copiado e o que foi prometido.
 DELIVERED_SCHEMA_HASH = "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8"
-SOURCE_COMMIT = "f4c49c4"
+
+#: Commit do Screen-App contra o qual o snapshot foi revalidado.
+#:
+#: O hash acima NAO mudou de `f4c49c4` para `4279abd`, e isso e um fato sobre o
+#: contrato, nao sorte: `blocks.ts` e `common.ts` mudaram entre os dois, mas por
+#: acrescimo, e o acrescimo serve ao corpo PUBLICADO. Ver `revalidation` em
+#: contracts/cinerie/SOURCE.json para os blobs comparados.
+SOURCE_COMMIT = "4279abd"
 
 
 @pytest.fixture(autouse=True)
@@ -115,6 +122,38 @@ def test_source_record_points_at_the_delivered_commit():
     record = load_source_record()
     assert record["sourceCommitShort"] == SOURCE_COMMIT
     assert record["schemaHash"] == DELIVERED_SCHEMA_HASH
+
+
+def test_snapshot_files_agree_on_the_source_commit():
+    """Os dois arquivos do snapshot apontam para o MESMO commit de origem.
+
+    E a regressao de um re-snapshot pela metade: atualizar o `SOURCE.json` e
+    esquecer o manifesto (ou o contrario) produz um par que se contradiz sem
+    quebrar nada — ate alguem depurar uma divergencia de contrato lendo o
+    arquivo errado.
+    """
+    manifesto = json.loads((CONTRACTS_DIR / "contract-manifest.json").read_text(encoding="utf-8"))
+    registro = load_source_record()
+
+    assert manifesto["sourceCommit"].startswith(SOURCE_COMMIT)
+    assert registro["sourceCommit"].startswith(SOURCE_COMMIT)
+
+
+def test_the_request_hash_survived_the_move_to_the_new_commit():
+    """`f4c49c4` -> `4279abd` nao mexeu no contrato do PEDIDO.
+
+    Nao e sorte, e vale registrar por que: `blocks.ts` e `common.ts` mudaram
+    entre os dois commits, e ambos entram na geracao deste schema. As mudancas
+    sao aditivas e servem ao corpo PUBLICADO — `blocks.ts` ganhou `textMark` e
+    `publishedEditorialBlock` DEPOIS de `editorialBody`, que e o unico simbolo
+    que o pedido importa de la.
+
+    Se um dia o hash mudar, este teste falha aqui — e nao em producao, com todo
+    pedido em voo virando 409 CONFLICT no instante do deploy.
+    """
+    assert compute_schema_hash(schema_bytes()) == DELIVERED_SCHEMA_HASH
+    assert manifest_entry()["schemaHash"] == DELIVERED_SCHEMA_HASH
+    assert local_identity().source_commit == SOURCE_COMMIT
 
 
 def test_schema_bytes_are_canonical():
