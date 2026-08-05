@@ -6,6 +6,7 @@ para sugerir links contextuais ao Gemini.
 import logging
 import os
 import sqlite3
+from urllib.parse import urlparse
 
 from .sqlite_utils import connect_sqlite
 
@@ -13,6 +14,22 @@ _DB = os.path.join(os.path.dirname(__file__), "..", "data", "app.db")
 _LEGACY_DB = _DB
 logger = logging.getLogger(__name__)
 _INITIALIZED = False
+
+
+def _is_public_url(value: str) -> bool:
+    """O campo `url` guarda endereço público, e só isso.
+
+    A checagem existe porque o pipeline já gravou aqui
+    `artifacts\\local-drafts\\draft-....json` — o caminho do artefato em disco,
+    que o linking interno depois injetou no corpo como <a href>. Um caminho de
+    arquivo não é endereço de nada; a barreira fica no armazenamento para não
+    depender de cada chamador lembrar disso.
+    """
+    try:
+        parsed = urlparse(str(value or "").strip())
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -92,7 +109,17 @@ def _conn() -> sqlite3.Connection:
 
 
 def save_article(title: str, url: str, category: str = "", entity: str = "") -> None:
-    """Salva artigo publicado. Mantém apenas os 200 mais recentes."""
+    """Salva artigo publicado. Mantém apenas os 200 mais recentes.
+
+    Recusa o que não for endereço público: o link_store existe para virar
+    <a href> no corpo da próxima matéria.
+    """
+    if not _is_public_url(url):
+        logger.warning(
+            "[LINKS] recusado no link_store: %r nao e URL publica (title=%r)",
+            url, (title or "")[:60],
+        )
+        return
     try:
         with _conn() as c:
             c.execute(
@@ -120,7 +147,12 @@ def get_related(entity: str = "", category: str = "", limit: int = 3) -> list:
                     "SELECT title, url FROM link_store WHERE entity = ? ORDER BY published DESC LIMIT ?",
                     (entity, limit),
                 ).fetchall()
-                results = [{"title": r["title"], "url": r["url"]} for r in rows]
+                # Linhas gravadas antes da barreira de escrita ainda podem
+                # carregar caminho de arquivo; elas não voltam para o prompt.
+                results = [
+                    {"title": r["title"], "url": r["url"]}
+                    for r in rows if _is_public_url(r["url"])
+                ]
 
             if len(results) < limit and category:
                 needed = limit - len(results)
@@ -130,6 +162,8 @@ def get_related(entity: str = "", category: str = "", limit: int = 3) -> list:
                     (category, needed * 2),
                 ).fetchall()
                 for r in rows:
+                    if not _is_public_url(r["url"]):
+                        continue
                     if r["url"] not in existing_urls:
                         results.append({"title": r["title"], "url": r["url"]})
                     if len(results) >= limit:
@@ -155,6 +189,8 @@ def get_link_map() -> dict:
         for row in rows:
             title = row["title"]
             url = row["url"]
+            if not _is_public_url(url):
+                continue
             entity = row["entity"]
             kws = []
             # Entity curta (ex: "marvel", "one piece") → ótima para match

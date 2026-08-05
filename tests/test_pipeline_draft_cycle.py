@@ -7,6 +7,7 @@ article produces exactly one draft artifact and touches nothing else.
 from __future__ import annotations
 
 import json
+import re
 import socket
 from pathlib import Path
 
@@ -220,3 +221,83 @@ class TestPipelineProducesDrafts:
         count = db._get_cursor().execute("SELECT COUNT(*) AS n FROM posts").fetchone()["n"]
         db.close()
         assert count == 0, "MNScr nao pode registrar publicacoes"
+
+
+#: O link_map envenenado que o ciclo de 05/08 produziu: o link_store guardou o
+#: caminho do artefato no campo `url`, e o linking interno o injetou no corpo
+#: como <a href> com reason=generic_no_entity_match — link para materia sem
+#: relacao, so para ter link.
+POISONED_LINK_MAP = {
+    "posts": [
+        {
+            "link": "artifacts\\local-drafts\\draft-983733e65486f043f9d59f594fb88218.json",
+            "keywords": ["Star Wars", "Star Wars: 14 personagens mais inteligentes"],
+            "categories": [],
+        }
+    ]
+}
+
+
+class TestLocalModeInsertsNoInternalLink:
+    """Em OUTPUT_MODE=local nao existe endereco publico para apontar.
+
+    O draft nao vira pagina; o unico "endereco" que ele tem e o caminho do
+    artefato em disco. Injetado no corpo vira <a href> para um arquivo, e no
+    Cinerie cairia em seo.internalLinkSuggestions[].targetPath, que exige casar
+    ^\\/[^\\s]*$ dentro de um objeto .strict(): recusa o pedido inteiro.
+    """
+
+    @pytest.fixture
+    def link_store_calls(self, sandbox, monkeypatch):
+        calls: list[dict] = []
+        monkeypatch.setattr(pipeline, "ls_save_article", lambda **kwargs: calls.append(kwargs))
+        monkeypatch.setattr(pipeline, "ls_get_link_map", lambda: POISONED_LINK_MAP)
+        monkeypatch.setattr(pipeline, "ls_get_related", lambda **kwargs: [
+            {"title": "Star Wars", "url": POISONED_LINK_MAP["posts"][0]["link"]}
+        ])
+        return calls
+
+    def _body_of_the_draft(self, sandbox):
+        payload = json.loads(
+            next(Path(sandbox["drafts_dir"]).glob("*.json")).read_text(encoding="utf-8")
+        )
+        return payload["content"]["body_html"]
+
+    def _run_with_poisoned_link_map(self, sandbox):
+        db = Database(str(sandbox["db_path"]))
+        db.initialize()
+        items = pipeline.FeedReader(user_agent="test").read_feeds(
+            pipeline.RSS_FEEDS["screenrant_movie_news"], "screenrant_movie_news"
+        )
+        article = db.filter_new_articles("screenrant_movie_news", items, limit=1)[0]
+        article["source_id"] = "screenrant_movie_news"
+        db.close()
+
+        pipeline.article_queue.push_many([article])
+        claimed = pipeline.article_queue.pop_claimed("test-worker")
+        pipeline.process_batch([claimed], link_map=POISONED_LINK_MAP)
+        return claimed
+
+    def test_the_local_mode_disables_internal_linking(self):
+        assert pipeline.INTERNAL_LINKING_ENABLED is False
+
+    def test_no_file_path_is_injected_into_the_body(self, sandbox, link_store_calls):
+        self._run_with_poisoned_link_map(sandbox)
+        body = self._body_of_the_draft(sandbox)
+        assert "local-drafts" not in body
+        assert ".json" not in body
+
+    def test_no_fallback_link_is_appended(self, sandbox, link_store_calls):
+        """O fallback existia so para ter link; link falso e pior que ausente."""
+        self._run_with_poisoned_link_map(sandbox)
+        assert "Leia tambem" not in self._body_of_the_draft(sandbox)
+
+    def test_the_only_anchors_left_are_the_source_credit(self, sandbox, link_store_calls):
+        self._run_with_poisoned_link_map(sandbox)
+        body = self._body_of_the_draft(sandbox)
+        for href in re.findall(r'href="([^"]+)"', body):
+            assert href.startswith("https://deadline.example"), f"link nao-fonte no corpo: {href}"
+
+    def test_nothing_is_written_to_the_link_store(self, sandbox, link_store_calls):
+        self._run_with_poisoned_link_map(sandbox)
+        assert link_store_calls == []

@@ -89,7 +89,7 @@ from .policy_engine import (
 )
 from .seo_title_optimizer import optimize_title
 from .store import Database
-from .submitters import build_submitter
+from .submitters import OUTPUT_MODE_LOCAL, build_submitter
 from .superfeed_policy import check_superfeed_policy
 from .task_queue import ArticleQueue
 from .title_validator import TitleValidator
@@ -118,6 +118,21 @@ CLAIM_STALE_TIMEOUT_S = int(os.getenv('CLAIM_STALE_TIMEOUT_S', ARTICLE_WATCHDOG_
 
 # Versao do prompt canonico, registrada na proveniencia de cada draft.
 PROMPT_VERSION = os.getenv('MNSCR_PROMPT_VERSION', 'universal_prompt-ms1')
+
+# Link interno so existe quando ha um site para onde apontar.
+#
+# Em OUTPUT_MODE=local o draft nao vira pagina: o unico "endereco" que ele tem e
+# o caminho do artefato em disco (artifacts/local-drafts/draft-....json). Esse
+# valor nao e URL de nada. Gravado no link_store, ele volta como <a href> para um
+# arquivo no corpo da materia seguinte; e no dia em que o destino for o Cinerie
+# ele cai em seo.internalLinkSuggestions[].targetPath, que exige casar
+# ^\/[^\s]*$ dentro de um objeto .strict() — recusa o pedido inteiro, sem strip
+# silencioso.
+#
+# Entao em modo local nao ha link interno nenhum: nem sugestao ao writer, nem
+# insercao no corpo, nem escrita no link_store. Link falso e pior que link
+# ausente.
+INTERNAL_LINKING_ENABLED = OUTPUT_MODE != OUTPUT_MODE_LOCAL
 
 CLEANER_FUNCTIONS = {
     'globo.com': clean_html_for_globo_esporte,
@@ -1108,7 +1123,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         topic=art.get('cluster_item', {}).get('topic', art.get('category', '')),
                         k=6,
                         current_url=art.get('url', ''),
-                    )
+                    ) if INTERNAL_LINKING_ENABLED else []
                     ai_payload['internal_link_candidates'] = link_candidates
                     logger.info(
                         "[LINKS] writer candidates=%s db_id=%s",
@@ -1170,7 +1185,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                     entity=_pre_event.get("entity", ""),
                     category=art['category'],
                     limit=3,
-                )
+                ) if INTERNAL_LINKING_ENABLED else []
                 _link_block = ls_format_links(_related)
                 link_candidates = select_internal_links(
                     link_map=link_map,
@@ -1180,7 +1195,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                     topic=art.get('feed_config', {}).get('topic') or art.get('category', ''),
                     k=6,
                     current_url=art.get('url', ''),
-                )
+                ) if INTERNAL_LINKING_ENABLED else []
                 logger.info(
                     "[LINKS] writer candidates=%s db_id=%s",
                     len(link_candidates), art.get('db_id', '?'),
@@ -1406,7 +1421,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             {'nome': name} for name in category_suggestions
                         ]
 
-                        if link_map:
+                        if INTERNAL_LINKING_ENABLED and link_map:
                             content_html = add_internal_links(
                                 html_content=content_html, link_map_data=link_map,
                                 current_post_categories=[])
@@ -1624,18 +1639,30 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         _publish_to_cinerie(draft, art_data)
 
                         # Link store: alimenta sugestoes de links internos futuros.
-                        from .cluster_engine import score_event
-                        event = score_event({
-                            "title":   title,
-                            "content": content_html,
-                            "tags":    rewritten_data.get("tags_sugeridas", []),
-                        })
-                        ls_save_article(
-                            title=title,
-                            url=result.artifact_path or draft.draft_id,
-                            category=art_data['category'],
-                            entity=event.get("entity", ""),
-                        )
+                        #
+                        # Em modo local nao ha o que alimentar: `artifact_path` e
+                        # um caminho de arquivo e `draft_id` nao e endereco de
+                        # nada. Gravar qualquer um dos dois transformaria a
+                        # proxima materia em portadora de um link falso.
+                        if INTERNAL_LINKING_ENABLED:
+                            from .cluster_engine import score_event
+                            event = score_event({
+                                "title":   title,
+                                "content": content_html,
+                                "tags":    rewritten_data.get("tags_sugeridas", []),
+                            })
+                            ls_save_article(
+                                title=title,
+                                url=result.artifact_path or draft.draft_id,
+                                category=art_data['category'],
+                                entity=event.get("entity", ""),
+                            )
+                        else:
+                            logger.info(
+                                "[LINKS] link_store ignorado draft_id=%s motivo=output_mode=%s "
+                                "sem endereco publico para o draft",
+                                draft.draft_id, OUTPUT_MODE,
+                            )
 
                         if art_data.get('is_cluster'):
                             event_key = (art_data.get('cluster_item') or {}).get('event_key', '')
