@@ -506,6 +506,18 @@ class FactualAssessment:
     contract_version: str = ""
     version: str = S.ASSESSMENT_VERSION_V1
     mode: str = S.MODE_HYBRID
+    #: Modo PEDIDO e modo que de fato rodou. Eles divergem quando `hybrid` foi
+    #: solicitado e a camada semantica nao entregou claim nenhum — por falta de
+    #: resposta, por resposta irrecuperavel ou por adapter ausente. Sem essa
+    #: distincao o laudo persistido dizia `mode: hybrid` e quem o lesse depois
+    #: (a reavaliacao do gate, um humano, um relatorio) concluiria que a camada
+    #: semantica rodou e nao achou nada — quando ela simplesmente nao rodou.
+    #:
+    #: Ficam FORA de `to_hashable_dict` de proposito, seguindo `warnings`: sao
+    #: metadado sobre COMO a avaliacao foi produzida, nao sobre o que ela apurou,
+    #: e inclui-los mudaria o hash de todo laudo ja persistido.
+    requested_mode: str = ""
+    effective_mode: str = ""
     warnings: List[str] = dc_field(default_factory=list)
     blocking_errors: List[str] = dc_field(default_factory=list)
     assessment_id: str = ""
@@ -519,6 +531,10 @@ class FactualAssessment:
         self.revision = int(self.revision or 1)
         self.event_key = _clean(self.event_key)
         self.mode = S.validate_mode(self.mode)
+        # Um laudo antigo, ou construido a mao, nao declara os dois modos: nesse
+        # caso `mode` responde pelos dois, que e o que ele sempre significou.
+        self.requested_mode = S.validate_mode(self.requested_mode or self.mode)
+        self.effective_mode = S.validate_mode(self.effective_mode or self.mode)
         self.warnings = [w for w in (str(x).strip() for x in self.warnings) if w]
         self.blocking_errors = [e for e in (str(x).strip() for x in self.blocking_errors) if e]
         if not self.assessment_hash:
@@ -602,6 +618,8 @@ class FactualAssessment:
             "contract_version": self.contract_version,
             "version": self.version,
             "mode": self.mode,
+            "requested_mode": self.requested_mode,
+            "effective_mode": self.effective_mode,
             "claims": [c.to_dict() for c in self.claims],
             "evidence": [e.to_dict() for e in self.evidence],
             "links": [link.to_dict() for link in self.links],
@@ -627,6 +645,8 @@ class FactualAssessment:
             contract_version=payload.get("contract_version", ""),
             version=payload.get("version", S.ASSESSMENT_VERSION_V1),
             mode=payload.get("mode", S.MODE_HYBRID),
+            requested_mode=payload.get("requested_mode", ""),
+            effective_mode=payload.get("effective_mode", ""),
             warnings=list(payload.get("warnings") or []),
             blocking_errors=list(payload.get("blocking_errors") or []),
             assessment_id=payload.get("assessment_id", ""),
