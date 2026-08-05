@@ -1,76 +1,85 @@
-#!/usr/bin/env python3
-"""
-Test script para verificar rotação de chaves quando uma é penalizada
+"""Rodizio de chaves do pool da Gemini.
+
+Este arquivo era um SCRIPT: montava um `AIClient` com as chaves REAIS do `.env`
+no import — ou seja, na COLETA do pytest — e falhava com
+`ValueError: min() iterable argument is empty` em qualquer ambiente sem
+credencial. Um clone limpo, um CI ou um `.env` sem chave derrubavam a suite
+inteira antes de rodar um unico teste.
+
+O comportamento sob teste nao precisa de chave de verdade: o pool so manipula
+strings e relogio. As chaves aqui sao sinteticas de proposito.
 """
 
 import logging
 from time import monotonic
 
-from dotenv import load_dotenv
+import pytest
 
-# Carrega .env
-load_dotenv(override=True)
+from app.limiter import KeyPool
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Sem o prefixo `AIza`: ver a nota em `tests/test_api_logging.py`.
+CHAVES = ("CHAVE-DE-TESTE-SEM-VALOR-0001", "CHAVE-DE-TESTE-SEM-VALOR-0002")
 
-print("\n" + "="*80)
-print("🔄 TEST: Rotação de Chaves quando uma é Penalizada")
-print("="*80)
 
-from app.ai_client_gemini import AIClient
-from app.config import AI_API_KEYS
+@pytest.fixture
+def pool():
+    return KeyPool(list(CHAVES))
 
-client = AIClient(
-    keys=AI_API_KEYS,
-    min_interval_s=0.1,  # Reduzir intervalo para teste
-    backoff_base=20,
-    backoff_max=300
-)
 
-print(f"\n✅ AIClient inicializado com {len(AI_API_KEYS)} chaves")
+def test_pool_entrega_uma_chave_pronta(pool):
+    slot = pool.next_ready()
+    assert slot.key in CHAVES
+    assert slot.cooldown_until == 0.0
 
-# Teste 1: Pegar chave pronta
-print("\n1️⃣  PRIMEIRA CHAVE PRONTA:")
-slot1 = client.pool.next_ready()
-print(f"   Chave: {slot1.key[:20]}...{slot1.key[-4:]}")
-print(f"   Cooldown: {slot1.cooldown_until}")
 
-# Teste 2: Penalizar primeira chave
-print("\n2️⃣  PENALIZANDO PRIMEIRA CHAVE POR 5 SEGUNDOS:")
-client.pool.penalize(slot1, retry_after=5)
-print("   ✅ Penalização aplicada")
-print(f"   Cooldown_until agora é: {slot1.cooldown_until}")
+def test_chave_penalizada_entra_em_cooldown(pool):
+    slot = pool.next_ready()
+    pool.penalize(slot, retry_after=5)
+    assert slot.cooldown_until > monotonic()
 
-# Teste 3: Obter próxima chave (deve ser a segunda)
-print("\n3️⃣  OBTENDO PRÓXIMA CHAVE (deve ser a segunda):")
-slot2 = client.pool.next_ready()
-print(f"   Chave obtida: {slot2.key[:20]}...{slot2.key[-4:]}")
-print(f"   Cooldown: {slot2.cooldown_until}")
 
-if slot1.key != slot2.key:
-    print("   ✅ SUCESSO! Rotacionou para uma chave diferente!")
-else:
-    print("   ❌ ERRO! Retornou a mesma chave!")
+def test_rodizio_entrega_chave_diferente_apos_penalidade(pool):
+    """O ponto do pool: uma chave punida nao volta na tentativa seguinte."""
+    primeira = pool.next_ready()
+    pool.penalize(primeira, retry_after=30)
 
-# Teste 4: Penalizar segunda chave também
-print("\n4️⃣  PENALIZANDO SEGUNDA CHAVE TAMBÉM:")
-client.pool.penalize(slot2, retry_after=5)
-print("   ✅ Ambas as chaves estão em cooldown")
+    segunda = pool.next_ready()
+    assert segunda.key != primeira.key
 
-# Teste 5: Tentar obter chave quando todas estão em cooldown
-print("\n5️⃣  TENTANDO OBTER CHAVE QUANDO TODAS ESTÃO EM COOLDOWN:")
-print("   (Isso vai aguardar até sair do cooldown)")
-start = monotonic()
-slot3 = client.pool.next_ready()
-elapsed = monotonic() - start
-print(f"   ✅ Chave obtida após {elapsed:.1f}s de espera")
-print(f"   Chave: {slot3.key[:20]}...{slot3.key[-4:]}")
 
-print("\n" + "="*80)
-print("✅ TESTE CONCLUÍDO - ROTAÇÃO FUNCIONANDO CORRETAMENTE!")
-print("="*80 + "\n")
+def test_com_todas_penalizadas_espera_ate_alguma_liberar(pool, monkeypatch):
+    """Sem cortar o relogio, este teste dormiria o cooldown inteiro.
+
+    `next_ready` bloqueia com `time.sleep` ate alguma chave sair do cooldown.
+    Avancar o relogio prova a regra sem transformar a suite em espera real — e
+    um `sleep(30)` dentro de um teste e a razao mais comum para alguem desligar
+    a suite.
+    """
+    primeira = pool.next_ready()
+    pool.penalize(primeira, retry_after=5)
+    segunda = pool.next_ready()
+    pool.penalize(segunda, retry_after=5)
+
+    futuro = monotonic() + 60
+    monkeypatch.setattr("app.limiter.monotonic", lambda: futuro)
+    monkeypatch.setattr(
+        "app.limiter.time.sleep",
+        lambda _s: pytest.fail("nao deveria dormir: o cooldown ja passou"),
+    )
+
+    assert pool.next_ready().key in CHAVES
+
+
+def test_pool_de_uma_chave_so_devolve_ela():
+    assert KeyPool([CHAVES[0]]).next_ready().key == CHAVES[0]
+
+
+def test_chave_nunca_aparece_inteira_no_log(caplog, pool):
+    """Log de chave e sempre mascarado: `****` mais os quatro ultimos caracteres."""
+    with caplog.at_level(logging.DEBUG, logger="app.limiter"):
+        pool.penalize(pool.next_ready(), retry_after=1)
+
+    registrado = "\n".join(record.getMessage() for record in caplog.records)
+    assert CHAVES[0] not in registrado
+    assert CHAVES[1] not in registrado
+    assert "****" in registrado
