@@ -18,6 +18,28 @@ def _scanned_sources():
     return [p for p in paths if p.resolve() != THIS_FILE]
 
 
+@pytest.fixture(autouse=True)
+def _isolate_from_local_dotenv(monkeypatch):
+    """Impede que o `.env` da maquina decida o resultado destes testes.
+
+    `app/config.py` chama `load_dotenv(override=True)` no nivel do modulo, e
+    varios testes daqui fazem `importlib.reload(config)` depois de um
+    `monkeypatch.setenv`. O reload reexecuta o `load_dotenv`, que com
+    `override=True` SOBRESCREVE justamente a variavel que o teste acabou de
+    definir — o valor do arquivo vence o valor do teste.
+
+    Enquanto existiu um `.env` com `GEMINI_KEY_1` real ao alcance da busca, isso
+    passou despercebido: a chave do arquivo satisfazia a assercao por acaso. Num
+    clone limpo, ou com a chave vazia, `test_local_mode_produces_no_issue`
+    quebrava — e apontava para configuracao de saida, que nao tem relacao
+    nenhuma com o defeito.
+
+    Um teste cujo resultado depende de um arquivo ignorado pelo git nao esta
+    testando o codigo.
+    """
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+
+
 class TestOutputConfiguration:
     def test_wordpress_credentials_are_not_required(self, monkeypatch):
         for var in ("WORDPRESS_URL", "WORDPRESS_USER", "WORDPRESS_PASSWORD"):

@@ -27,6 +27,7 @@ from .config import (
     CATEGORY_ALIASES,
     EDITORIAL_GATE_ENABLED,
     FACTUAL_ASSESSMENT_ENABLED,
+    FACTUAL_ASSESSMENT_MODE,
     LOCAL_DRAFT_DIR,
     MNSCR_ATTRIBUTION_MODE,
     MNSCR_CINERIE_MAX_ATTEMPTS,
@@ -2187,7 +2188,9 @@ def _run_factual_assessment(draft, art_data):
     store = None
     try:
         assessment = build_factual_assessment(
-            draft, _source_material_for(art_data), claim_response=art_data.get("_claim_response")
+            draft,
+            _source_material_for(art_data),
+            claim_response=_claim_response_for(draft, art_data),
         )
         store = FactualStore()
         store.save_assessment(assessment)
@@ -2201,6 +2204,31 @@ def _run_factual_assessment(draft, art_data):
     finally:
         if store is not None:
             store.close()
+
+
+def _claim_response_for(draft, art_data):
+    """Resposta bruta da camada semântica de claims, quando o modo pede uma.
+
+    Um ``_claim_response`` já presente em ``art_data`` vence: é assim que o
+    replay reprocessa com a resposta original e que os testes injetam uma
+    resposta fixa sem tocar a rede.
+
+    Em ``deterministic`` não há chamada — e a ausência é registrada pelo próprio
+    ``build_factual_assessment`` como ``DETERMINISTIC_MODE_ONLY_PATTERN_CLAIMS``,
+    não aqui: um único lugar decide o que a ausência significa.
+    """
+    injected = art_data.get("_claim_response")
+    if injected is not None:
+        return injected
+
+    from .factual.states import MODE_DETERMINISTIC
+
+    if FACTUAL_ASSESSMENT_MODE == MODE_DETERMINISTIC:
+        return None
+
+    from .factual_ai import request_claim_extraction
+
+    return request_claim_extraction(draft)
 
 
 def _source_material_for(art_data):
@@ -2225,12 +2253,25 @@ def _source_material_for(art_data):
                 "canonical_url": doc.get("canonical_url"),
             }
         )
-    if not material and art_data.get("content"):
+    # No caminho de fonte unica o texto extraido vive em art_data['extracted'],
+    # nao no topo: o dicionario montado em worker_loop guarda a extracao inteira
+    # sob essa chave. Ler so o topo devolvia lista vazia para TODO artigo nao
+    # clusterizado, e a avaliacao factual saia com zero evidencia e cobertura
+    # 0.0 — sem erro nenhum no caminho, porque lista vazia e um valor legitimo.
+    extracted = art_data.get("extracted")
+    extracted = extracted if isinstance(extracted, dict) else {}
+    single_content = (
+        extracted.get("content")
+        or art_data.get("content")
+        or art_data.get("content_html")
+        or ""
+    )
+    if not material and single_content:
         material.append(
             {
                 "url": art_data.get("url") or art_data.get("canonical_url"),
-                "content": art_data.get("content"),
-                "title": art_data.get("title"),
+                "content": single_content,
+                "title": extracted.get("title") or art_data.get("title"),
                 "source_name": art_data.get("fonte_nome"),
                 "source_domain": art_data.get("domain"),
                 "is_primary": True,

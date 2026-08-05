@@ -173,6 +173,9 @@ FACTUAL_ASSESSMENT_MODE = (
 FACTUAL_PROMPT_VERSION = (
     os.getenv('MNSCR_FACTUAL_PROMPT_VERSION') or 'factual-claim-extraction-v1'
 ).strip()
+FACTUAL_PROMPT_DIR = (
+    os.getenv('MNSCR_FACTUAL_PROMPT_DIR') or 'config/prompts'
+).strip()
 MAX_CLAIMS_PER_DRAFT = int(os.getenv('MNSCR_MAX_CLAIMS_PER_DRAFT', 100))
 MAX_EVIDENCE_PER_CLAIM = int(os.getenv('MNSCR_MAX_EVIDENCE_PER_CLAIM', 10))
 MAX_EVIDENCE_EXCERPT_CHARS = int(os.getenv('MNSCR_MAX_EVIDENCE_EXCERPT_CHARS', 500))
@@ -373,6 +376,19 @@ def get_factual_config_issues() -> List[str]:
             "MNSCR_MIN_FACTUAL_COVERAGE_RATIO precisa estar entre 0 e 1 "
             f"(recebido: {MIN_FACTUAL_COVERAGE_RATIO})"
         )
+
+    # Mesma regra da política do gate: prompt ausente falha no startup. Sem esta
+    # checagem, `hybrid` com prompt inexistente rodava a cada artigo produzindo
+    # zero claims semânticos e reportando o modo caro — indistinguível, no log,
+    # de um artigo que realmente não tinha o que extrair.
+    if FACTUAL_ASSESSMENT_MODE == 'hybrid':
+        from app.factual_ai import ClaimPromptError, load_claim_prompt
+
+        try:
+            load_claim_prompt(FACTUAL_PROMPT_VERSION, FACTUAL_PROMPT_DIR)
+        except ClaimPromptError as exc:
+            issues.append(str(exc))
+
     return issues
 
 # --- Configuração da IA ---
