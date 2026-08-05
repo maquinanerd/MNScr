@@ -23,7 +23,13 @@ from typing import Any, Dict, Final, List, Mapping, Optional, Sequence
 from .blocks import BlockConversion, has_rating, has_structured_list, has_structured_steps, html_to_blocks
 from .contract import ContractIdentity, local_identity
 from .errors import RequestBuildError
-from .identity import RequestIdentity, build_identity, build_source_id, is_stable_id
+from .identity import (
+    RequestIdentity,
+    build_identity,
+    build_source_id,
+    is_public_author_id,
+    is_stable_id,
+)
 from .policy import AUTO_PUBLISH_INELIGIBLE, BLOCKING, seo_policy
 from .seo import SeoFinding, SeoProposal, build_seo_proposal, lead_text_of
 from .text import collapse, plain_text
@@ -216,10 +222,10 @@ def build_publication_request(
     policy = seo_policy()
     contract_identity = contract or local_identity()
 
-    if not is_stable_id(public_author_id):
+    if not is_public_author_id(public_author_id):
         raise RequestBuildError(
-            "publicAuthorId ausente ou fora do formato; a materia sai assinada por uma "
-            "entidade Author previamente autorizada, nunca por um nome livre"
+            "publicAuthorId ausente ou fora do formato; esperado o id numerico da "
+            "entidade Author no Cinerie (ex.: \"12\"), nunca um slug e nunca um nome livre"
         )
     if attribution_mode not in policy.attribution_modes:
         raise RequestBuildError(

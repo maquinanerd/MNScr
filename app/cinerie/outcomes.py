@@ -5,19 +5,38 @@ tratar ``ROUTED_TO_REVIEW`` como falha: o conteudo foi aceito, validado e
 guardado — o que falta e julgamento humano. Reenviar nao acelera nada, consome
 teto e polui a auditoria com tentativas que nao eram tentativas.
 
-+---------------------+------+--------------------------------+-----------+
-| desfecho            | HTTP | significa                      | reenviar? |
-+---------------------+------+--------------------------------+-----------+
-| PUBLISHED           | 201  | materia publicada              | nao       |
-| ROUTED_TO_REVIEW    | 202  | aceito, aguardando humano      | nao       |
-| CONFLICT            | 409  | estado divergente              | so apos   |
-|                     |      |                                | reconciliar|
-| BLOCKED             | 422  | defeito permanente no pedido   | nao       |
-+---------------------+------+--------------------------------+-----------+
++---------------------+------+--------------------------------+------------------+
+| desfecho            | HTTP | significa                      | reenviar?        |
++---------------------+------+--------------------------------+------------------+
+| PUBLISHED           | 201  | materia publicada              | nao              |
+| ROUTED_TO_REVIEW    | 202  | aceito, aguardando humano      | nao              |
+| DEFERRED            | 429  | teto diario esgotado           | so depois de     |
+|                     |      | (nada persistido)              | nextEligibleAt   |
+| CONFLICT            | 409  | estado divergente              | so apos          |
+|                     |      |                                | reconciliar      |
+| BLOCKED             | 422  | defeito permanente no pedido   | nao              |
+| OPERATIONAL_ERROR   | 503  | falha de plataforma            | sim, com backoff |
++---------------------+------+--------------------------------+------------------+
 
-Alem desses, o Cinerie pode responder ``OPERATIONAL_ERROR`` com HTTP 503 e
-``retryable: true`` — falha de plataforma em que nada foi persistido e nenhum
-teto consumido.
+``DEFERRED`` e o desfecho que mais engana, e por dois motivos opostos.
+
+Ele chega em **429**, o codigo que qualquer cliente HTTP trata como "voce esta
+rapido demais" — mas aqui ele nao fala de taxa, e sim de **teto diario da
+redacao**. Retentar em segundos nao resolve: a janela e o dia civil no fuso da
+redacao, e o ``Retry-After`` costuma vir em horas. Por isso ele **nao** entra no
+laco de tentativas; ele sai daqui como desfecho, com ``nextEligibleAt``, para
+que o agendador reenvie **o mesmo corpo com o mesmo requestId** depois da
+virada. Um requestId novo contaria como publicacao nova e consumiria uma vaga
+do teto do dia seguinte.
+
+E, ao contrario de ``BLOCKED``, ele **nao** e defeito do pedido: nada foi
+persistido, nenhum contador foi consumido, e o mesmo corpo passa amanha sem uma
+linha alterada. Tratar isso como falha permanente joga fora uma materia boa.
+
+O parente proximo e a armadilha: o teto de **reescrita da mesma materia**
+(``AUTO_PUBLISH_ARTICLE_UPDATE_LIMIT_REACHED``) responde ``BLOCKED`` 422, sem
+``Retry-After`` e sem horario prometido — decisao de produto, nao limitacao
+tecnica. Ali o reenvio automatico para de vez.
 """
 
 from __future__ import annotations
@@ -27,18 +46,20 @@ from typing import Any, Dict, Final, FrozenSet, List, Mapping, Optional, Tuple
 
 PUBLISHED: Final[str] = "PUBLISHED"
 ROUTED_TO_REVIEW: Final[str] = "ROUTED_TO_REVIEW"
+DEFERRED: Final[str] = "DEFERRED"
 CONFLICT: Final[str] = "CONFLICT"
 BLOCKED: Final[str] = "BLOCKED"
 OPERATIONAL_ERROR: Final[str] = "OPERATIONAL_ERROR"
 
 OUTCOMES: Final[FrozenSet[str]] = frozenset(
-    {PUBLISHED, ROUTED_TO_REVIEW, CONFLICT, BLOCKED, OPERATIONAL_ERROR}
+    {PUBLISHED, ROUTED_TO_REVIEW, DEFERRED, CONFLICT, BLOCKED, OPERATIONAL_ERROR}
 )
 
 #: Desfecho -> HTTP, conforme `outcomeHttpStatus` do Cinerie.
 OUTCOME_STATUS: Final[Dict[str, int]] = {
     PUBLISHED: 201,
     ROUTED_TO_REVIEW: 202,
+    DEFERRED: 429,
     CONFLICT: 409,
     BLOCKED: 422,
     OPERATIONAL_ERROR: 503,
@@ -48,10 +69,28 @@ OUTCOME_STATUS: Final[Dict[str, int]] = {
 ACCEPTED: Final[FrozenSet[str]] = frozenset({PUBLISHED, ROUTED_TO_REVIEW})
 
 #: Desfechos que NUNCA devem ser reenviados automaticamente.
+#:
+#: ``DEFERRED`` esta deliberadamente FORA: ele sera reenviado — so nao agora.
 TERMINAL: Final[FrozenSet[str]] = frozenset({PUBLISHED, ROUTED_TO_REVIEW, BLOCKED})
 
 #: Codigo que o Cinerie usa quando a troca de autor exige humano.
 AUTHOR_CHANGE_REQUIRES_HUMAN: Final[str] = "AUTHOR_CHANGE_REQUIRES_HUMAN"
+
+#: Teto de reescrita da MESMA materia. Vem como ``BLOCKED`` 422, sem horario
+#: prometido: outra revisao automatica daquela materia passa por humano.
+ARTICLE_UPDATE_LIMIT_REACHED: Final[str] = "AUTO_PUBLISH_ARTICLE_UPDATE_LIMIT_REACHED"
+
+#: As quatro dimensoes de teto diario que produzem ``DEFERRED``. Registradas
+#: nominalmente para que a auditoria diga QUAL teto estourou: "esgotou o teto do
+#: autor" e "esgotou o teto global da redacao" pedem providencias diferentes.
+DEFERRAL_CODES: Final[FrozenSet[str]] = frozenset(
+    {
+        "AUTO_PUBLISH_GLOBAL_DAILY_LIMIT_REACHED",
+        "AUTO_PUBLISH_CONTENT_TYPE_DAILY_LIMIT_REACHED",
+        "AUTO_PUBLISH_SECTION_DAILY_LIMIT_REACHED",
+        "AUTO_PUBLISH_AUTHOR_DAILY_LIMIT_REACHED",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +122,9 @@ class PublicationResult:
     idempotent: bool = False
     remote_code: Optional[str] = None
     retryable: bool = False
+    #: Segundos do header ``Retry-After``. Acompanha ``DEFERRED`` e vem do MESMO
+    #: instante que ``nextEligibleAt``, entao os dois nunca se contradizem.
+    retry_after_seconds: Optional[float] = None
     attempts: int = 1
 
     @property
@@ -97,6 +139,21 @@ class PublicationResult:
     def awaiting_human(self) -> bool:
         """202 e sucesso-com-espera. Nao e falha do pipeline."""
         return self.outcome == ROUTED_TO_REVIEW
+
+    @property
+    def deferred(self) -> bool:
+        """429: teto diario esgotado. Nada persistido, nada consumido."""
+        return self.outcome == DEFERRED
+
+    @property
+    def deferral_codes(self) -> List[str]:
+        """Quais tetos estouraram, entre os quatro conhecidos."""
+        return [code for code in self.reason_codes if code in DEFERRAL_CODES]
+
+    @property
+    def article_update_limit_reached(self) -> bool:
+        """Teto de reescrita da mesma materia: para de reenviar aquele update."""
+        return any(reason.code == ARTICLE_UPDATE_LIMIT_REACHED for reason in self.reasons)
 
     @property
     def author_change_requires_human(self) -> bool:
@@ -114,6 +171,7 @@ class PublicationResult:
             "article_id": self.article_id,
             "reason_codes": self.reason_codes,
             "next_eligible_at": self.next_eligible_at,
+            "retry_after_seconds": self.retry_after_seconds,
             "idempotent": self.idempotent,
             "attempts": self.attempts,
         }
@@ -139,12 +197,22 @@ def parse_reasons(raw: Any) -> List[OutcomeReason]:
     return reasons
 
 
-def parse_result(body: Any, status: int, *, attempts: int = 1) -> Optional[PublicationResult]:
+def parse_result(
+    body: Any,
+    status: int,
+    *,
+    attempts: int = 1,
+    retry_after_seconds: Optional[float] = None,
+) -> Optional[PublicationResult]:
     """Le a resposta do Cinerie. ``None`` quando ela nao e reconhecivel.
 
     ``None`` importa: uma resposta 2xx que nao diz o desfecho nao pode virar
     sucesso presumido — o pedido pode ter sido aplicado, e adivinhar aqui e como
     se publica duas vezes.
+
+    ``None`` tambem e o que separa um ``DEFERRED`` de um 429 de verdade: o
+    desfecho do portao vem com corpo declarando ``outcome``; um 429 de proxy ou
+    de limitador de taxa nao vem, e ai continua sendo erro de transporte.
     """
     if not isinstance(body, Mapping):
         return None
@@ -170,15 +238,21 @@ def parse_result(body: Any, status: int, *, attempts: int = 1) -> Optional[Publi
         idempotent=body.get("idempotent") is True,
         remote_code=_text(body.get("code")),
         retryable=body.get("retryable") is True,
+        retry_after_seconds=retry_after_seconds,
         attempts=attempts,
     )
 
 
 def should_resend(result: PublicationResult) -> Tuple[bool, str]:
-    """Reenviar este pedido resolve alguma coisa?
+    """Reenviar este pedido **agora**, no laco de tentativas, resolve alguma coisa?
 
     Quase nunca. A funcao existe para que a resposta seja uma decisao explicita
     com motivo registrado, em vez de um `if` espalhado pelo orquestrador.
+
+    "Agora" e a palavra que carrega o peso. ``DEFERRED`` sera reenviado, e a
+    resposta aqui ainda e ``False``: perguntar "retento?" a um teto que vira a
+    meia-noite so gasta tentativa. Quem responde por ele e
+    :func:`resend_not_before`.
     """
     if result.outcome == PUBLISHED:
         return False, "materia publicada; reenviar criaria duplicata"
@@ -186,6 +260,11 @@ def should_resend(result: PublicationResult) -> Tuple[bool, str]:
         return False, "conteudo aceito e aguardando humano; nao ha o que retentar"
     if result.outcome == BLOCKED:
         return False, "defeito permanente no pedido; reenviar igual repete o defeito"
+    if result.outcome == DEFERRED:
+        return False, (
+            "teto diario esgotado; o reenvio e agendado para depois de "
+            "nextEligibleAt, nunca imediato"
+        )
     if result.outcome == CONFLICT:
         return False, "estado divergente; exige reconciliacao antes de qualquer reenvio"
     if result.outcome == OPERATIONAL_ERROR:
@@ -197,11 +276,28 @@ def should_resend(result: PublicationResult) -> Tuple[bool, str]:
     return False, "desfecho desconhecido"
 
 
+def resend_not_before(result: PublicationResult) -> Optional[str]:
+    """Instante ISO a partir do qual reenviar este pedido faz sentido.
+
+    ``None`` para todo desfecho que nao seja ``DEFERRED`` — inclusive quando ha
+    ``nextEligibleAt`` no corpo. Um horario informativo num desfecho ja aceito
+    nao e uma promessa de que reenviar depois dele muda alguma coisa, e tratar
+    os dois como a mesma coisa reenviaria materia que ja esta na fila de um
+    humano.
+    """
+    if result.outcome != DEFERRED:
+        return None
+    return result.next_eligible_at
+
+
 __all__ = [
     "ACCEPTED",
+    "ARTICLE_UPDATE_LIMIT_REACHED",
     "AUTHOR_CHANGE_REQUIRES_HUMAN",
     "BLOCKED",
     "CONFLICT",
+    "DEFERRAL_CODES",
+    "DEFERRED",
     "OPERATIONAL_ERROR",
     "OUTCOMES",
     "OUTCOME_STATUS",
@@ -212,5 +308,6 @@ __all__ = [
     "TERMINAL",
     "parse_reasons",
     "parse_result",
+    "resend_not_before",
     "should_resend",
 ]

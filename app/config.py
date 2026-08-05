@@ -212,6 +212,8 @@ MNSCR_PAYLOAD_API_KEY = (os.getenv('MNSCR_PAYLOAD_API_KEY') or '').strip()
 
 #: Autor PÚBLICO que assina a matéria. Não é o ator técnico — esse é derivado da
 #: credencial autenticada, do lado do Cinerie, e nunca sai daqui.
+#:
+#: É o **id numérico** da entidade `Author` no Cinerie (`"12"`), não o slug.
 MNSCR_PUBLIC_AUTHOR_ID = (os.getenv('MNSCR_PUBLIC_AUTHOR_ID') or '').strip()
 MNSCR_ATTRIBUTION_MODE = (os.getenv('MNSCR_ATTRIBUTION_MODE') or 'newsroom').strip()
 
@@ -232,6 +234,18 @@ MNSCR_ENVIRONMENT = (os.getenv('MNSCR_ENVIRONMENT') or 'development').strip().lo
 
 def cinerie_auto_publish_enabled() -> bool:
     return MNSCR_DELIVERY_MODE == 'AUTO_PUBLISH'
+
+
+def _is_public_author_id(value: str) -> bool:
+    """A mesma regra que `app.cinerie.identity` aplica ao montar o pedido.
+
+    Importado aqui dentro, e não no topo: `app.config` é carregado por quase
+    todo o repositório, e uma dependência de `app.cinerie` no import faria o
+    pacote de publicação subir mesmo em execução que nunca publica.
+    """
+    from app.cinerie.identity import is_public_author_id
+
+    return is_public_author_id(value)
 
 
 def get_cinerie_config_issues() -> List[str]:
@@ -269,6 +283,15 @@ def get_cinerie_config_issues() -> List[str]:
         issues.append(
             'MNSCR_DELIVERY_MODE=AUTO_PUBLISH exige MNSCR_PUBLIC_AUTHOR_ID '
             '(a matéria sai assinada por uma entidade Author autorizada)'
+        )
+    elif not _is_public_author_id(MNSCR_PUBLIC_AUTHOR_ID):
+        # O contrato aceita `stableId` neste campo, mas o runtime do Cinerie
+        # testa `/^\d+$/` antes de procurar o autor. Um slug passa no schema e
+        # reprova em toda matéria com `author_not_found`. Falhar aqui custa um
+        # startup; falhar lá custa o ciclo inteiro, uma matéria por vez.
+        issues.append(
+            f"MNSCR_PUBLIC_AUTHOR_ID precisa ser o id numérico da entidade Author "
+            f"no Cinerie (ex.: '12'), não um slug: '{MNSCR_PUBLIC_AUTHOR_ID[:40]}'"
         )
     if MNSCR_ATTRIBUTION_MODE not in ('byline', 'newsroom', 'assisted'):
         issues.append(

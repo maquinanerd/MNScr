@@ -21,9 +21,11 @@ from .errors import (
     RequestBuildError,
     SchemaValidationError,
 )
+from .identity import is_public_author_id
 from .outcomes import (
     BLOCKED,
     CONFLICT,
+    DEFERRED,
     OPERATIONAL_ERROR,
     PUBLISHED,
     ROUTED_TO_REVIEW,
@@ -45,6 +47,7 @@ __all__ = [
     "CinerieError",
     "ContractIdentity",
     "ContractMismatchError",
+    "DEFERRED",
     "OPERATIONAL_ERROR",
     "PUBLISHED",
     "PublicationResult",
@@ -57,6 +60,7 @@ __all__ = [
     "build_publication_request",
     "build_seo_proposal",
     "ensure_valid",
+    "is_public_author_id",
     "local_identity",
     "seo_policy",
     "validate_request",

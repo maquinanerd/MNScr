@@ -31,6 +31,7 @@ from app.cinerie.errors import (
     RateLimitedError,
     ServerError,
 )
+from app.cinerie.identity import is_public_author_id
 from app.cinerie.preflight import ContractPreflight
 from app.cinerie_service import (
     MODE_AUTO_PUBLISH,
@@ -42,6 +43,7 @@ from app.cinerie_store import (
     STATUS_AWAITING_HUMAN,
     STATUS_BLOCKED,
     STATUS_COMPLETED,
+    STATUS_DEFERRED,
     STATUS_FAILED_PERMANENT,
     STATUS_NEEDS_RECONCILIATION,
     CinerieStore,
@@ -56,7 +58,16 @@ from tests.fake_cinerie_server import FakeCinerieServer, ScriptedResponse, asser
 #: provar que ele NAO aparece em log, excecao, repr ou relatorio.
 SENTINEL_KEY = "fake-cinerie-sentinel-key-do-not-log-0001"
 
-AUTHOR_ID = "author-redacao-cinerie"
+#: Id NUMERICO da entidade `Author` no Cinerie — a linha do documento, como
+#: string. Nao e o slug.
+AUTHOR_ID = "12"
+
+#: O valor que a fixture canonica do PROPRIO Cinerie usa. Ele passa no schema e
+#: e recusado pelo runtime com `author_not_found`, entao existe aqui so como
+#: contraexemplo. Adota-lo como padrao da suite, que foi o que aconteceu antes,
+#: faz os testes provarem o contrario do que o servidor faz.
+AUTHOR_SLUG = "author-redacao-cinerie"
+
 FILLER = " ".join(["palavra"] * 120)
 
 SOURCES = [
@@ -143,6 +154,23 @@ def published_body(article_id="article-8801", **overrides):
     return body
 
 
+def deferred_body(code="AUTO_PUBLISH_GLOBAL_DAILY_LIMIT_REACHED", **overrides):
+    """A resposta 429 do portao: teto diario esgotado, nada persistido.
+
+    Repare no que ela NAO tem: `articleId`. Nenhuma linha foi criada do outro
+    lado, e nenhum contador foi consumido — e por isso que o mesmo corpo passa
+    depois da virada sem alteracao nenhuma.
+    """
+    return published_body(
+        outcome=O.DEFERRED,
+        articleId=None,
+        reasons=[{"code": code, "detail": "dimensao global"}],
+        nextEligibleAt="2026-08-05T03:00:00.000Z",
+        retryable=True,
+        **overrides,
+    )
+
+
 @pytest.fixture
 def server():
     instance = FakeCinerieServer().start()
@@ -213,6 +241,76 @@ def test_non_http_url_is_refused():
 def test_valid_config_has_no_issue():
     """Controle NEGATIVO: sem ele a validacao poderia recusar tudo."""
     assert CinerieConfig(base_url="https://cms.example", api_key=SENTINEL_KEY).issues() == []
+
+
+# ---------------------------------------------------------------------------
+# publicAuthorId — o campo em que o schema e o runtime discordam
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["12", "340", "1"])
+def test_numeric_author_id_is_accepted(value):
+    assert is_public_author_id(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        AUTHOR_SLUG,  # o valor da fixture canonica do Cinerie
+        "",
+        None,
+        "12a",
+        "author_12",
+        "12.0",
+        " 12",
+        "١٢",  # digito decimal arabe: `\d` do Python aceitaria, o do JS nao
+    ],
+)
+def test_non_numeric_author_id_is_refused(value):
+    assert is_public_author_id(value) is False
+
+
+def test_author_slug_never_reaches_the_network(server, store):
+    """O defeito e de configuracao: descobri-lo materia a materia custa um ciclo.
+
+    Um slug passa no schema do contrato e reprova no runtime do Cinerie com
+    `author_not_found`. Deixar o servidor descobrir isso gastaria um round-trip
+    por materia para chegar sempre a mesma conclusao.
+    """
+    result = make_service(server, store, public_author_id=AUTHOR_SLUG).publish_draft(make_draft())
+
+    assert result.status == STATUS_BLOCKED
+    assert server.publication_count == 0
+    assert result.error_code == "REQUEST_BUILD_FAILED"
+
+    # E o mesmo draft com o id numerico atravessa: sem este controle, o teste
+    # acima passaria mesmo que a recusa viesse de outro defeito qualquer.
+    server.script = [ScriptedResponse(201, published_body())]
+    assert make_service(server, store).publish_draft(make_draft()).published
+
+
+def test_config_refuses_an_author_slug_at_startup(monkeypatch):
+    from app import config as config_module
+
+    monkeypatch.setattr(config_module, "MNSCR_DELIVERY_MODE", "AUTO_PUBLISH")
+    monkeypatch.setattr(config_module, "PAYLOAD_INTERNAL_SERVICE_URL", "https://cms.example")
+    monkeypatch.setattr(config_module, "MNSCR_PAYLOAD_API_KEY", SENTINEL_KEY)
+    monkeypatch.setattr(config_module, "MNSCR_PUBLIC_AUTHOR_ID", AUTHOR_SLUG)
+
+    issues = config_module.get_cinerie_config_issues()
+    assert any("MNSCR_PUBLIC_AUTHOR_ID" in issue for issue in issues)
+
+
+def test_config_accepts_a_numeric_author_id(monkeypatch):
+    """Controle NEGATIVO: sem ele a validacao poderia recusar todo autor."""
+    from app import config as config_module
+
+    monkeypatch.setattr(config_module, "MNSCR_DELIVERY_MODE", "AUTO_PUBLISH")
+    monkeypatch.setattr(config_module, "PAYLOAD_INTERNAL_SERVICE_URL", "https://cms.example")
+    monkeypatch.setattr(config_module, "MNSCR_PAYLOAD_API_KEY", SENTINEL_KEY)
+    monkeypatch.setattr(config_module, "MNSCR_PUBLIC_AUTHOR_ID", AUTHOR_ID)
+
+    assert config_module.get_cinerie_config_issues() == []
 
 
 @pytest.mark.parametrize("mode", ["DRAFT", "AUTO_PUBLISH"])
@@ -404,6 +502,31 @@ def test_blocked_is_permanent(server, store):
     assert server.publication_count == 1, "BLOCKED reenviado repete o defeito"
 
 
+def test_article_update_ceiling_is_blocked_without_a_promised_time(server, store):
+    """O teto vizinho do DEFERRED, e o unico que nao promete horario.
+
+    Reescrever a MESMA materia tem teto proprio, e ele responde 422 sem
+    `Retry-After`. O contador de fato reabre a meia-noite — mas prometer isso
+    seria autorizar reescrever a mesma materia todo dia, que e exatamente o
+    comportamento que o teto existe para conter.
+    """
+    server.script = [
+        ScriptedResponse(
+            422,
+            published_body(
+                outcome=O.BLOCKED,
+                reasons=[{"code": O.ARTICLE_UPDATE_LIMIT_REACHED, "detail": ""}],
+            ),
+        )
+    ]
+
+    result = make_service(server, store).publish_draft(make_draft())
+
+    assert result.status == STATUS_FAILED_PERMANENT
+    assert result.next_eligible_at is None
+    assert result.deferred is False
+
+
 @pytest.mark.parametrize(
     "outcome,expected",
     [
@@ -411,27 +534,145 @@ def test_blocked_is_permanent(server, store):
         (O.ROUTED_TO_REVIEW, False),
         (O.BLOCKED, False),
         (O.CONFLICT, False),
+        # DEFERRED sera reenviado — so nao agora, e nao por este laco.
+        (O.DEFERRED, False),
     ],
 )
-def test_no_outcome_is_worth_resending(outcome, expected):
+def test_no_outcome_is_worth_resending_right_now(outcome, expected):
     result = O.PublicationResult(outcome=outcome, http_status=O.OUTCOME_STATUS[outcome])
     assert O.should_resend(result)[0] is expected
 
 
-def test_next_eligible_at_is_recorded_but_not_scheduled(server, store):
-    """O horario e informativo: a materia ja esta na fila de um humano."""
+def test_next_eligible_at_in_an_accepted_outcome_is_not_scheduled(server, store):
+    """O horario e informativo: a materia ja esta na fila de um humano.
+
+    Um `nextEligibleAt` so vira agendamento quando vem com `DEFERRED`. Num 202
+    ele nao promete nada — reenviar depois dele duplicaria uma materia que ja
+    esta esperando decisao humana.
+    """
     server.script = [
         ScriptedResponse(
             202,
             published_body(
                 outcome=O.ROUTED_TO_REVIEW,
-                reasons=[{"code": "DAILY_LIMIT_REACHED", "detail": "dimensao global"}],
+                reasons=[{"code": "qa_not_passed", "detail": "fato sem segunda fonte"}],
                 nextEligibleAt="2026-07-30T03:00:00.000Z",
             ),
         )
     ]
     result = make_service(server, store).publish_draft(make_draft())
     assert result.next_eligible_at == "2026-07-30T03:00:00.000Z"
+    assert result.deferred is False
+    assert O.resend_not_before(
+        O.PublicationResult(
+            outcome=O.ROUTED_TO_REVIEW,
+            http_status=202,
+            next_eligible_at="2026-07-30T03:00:00.000Z",
+        )
+    ) is None
+
+
+# ===========================================================================
+# DEFERRED — o 429 que NAO e limitacao de taxa
+# ===========================================================================
+
+
+def test_deferred_is_an_outcome_not_a_transport_error(server, store):
+    """429 com desfecho no corpo e o portao falando, nao a borda da rede."""
+    server.script = [ScriptedResponse(429, deferred_body(), headers={"Retry-After": "40000"})]
+
+    result = make_service(server, store).publish_draft(make_draft())
+
+    assert result.outcome == O.DEFERRED
+    assert result.status == STATUS_DEFERRED
+    assert result.error_code is None, "teto diario nao e erro do MNScr"
+    assert result.next_eligible_at == "2026-08-05T03:00:00.000Z"
+
+
+def test_deferred_never_burns_the_retry_budget(server, store):
+    """A parede so cai na virada do dia; retentar em segundos e desperdicio.
+
+    Este e o coracao da correcao. Antes, o 429 virava `RateLimitedError`, e o
+    laco gastava as tres tentativas — com o `Retry-After` de horas truncado no
+    teto de backoff — para terminar registrando erro de transporte em vez do
+    desfecho que o servidor tinha declarado.
+    """
+    sleeper = FakeSleeper()
+    server.default_response = ScriptedResponse(
+        429, deferred_body(), headers={"Retry-After": "40000"}
+    )
+
+    result = make_service(server, store, sleeper=sleeper).publish_draft(make_draft())
+
+    assert server.publication_count == 1, "DEFERRED foi retentado dentro do ciclo"
+    assert result.attempts == 1
+    assert sleeper.total_slept == 0
+
+
+def test_deferred_records_which_ceiling_was_reached(server, store):
+    """"Estourou o teto do autor" e "estourou o teto da redacao" pedem coisas
+    diferentes de quem opera; colapsar os dois num erro generico apaga a
+    diferenca."""
+    server.script = [
+        ScriptedResponse(429, deferred_body(code="AUTO_PUBLISH_AUTHOR_DAILY_LIMIT_REACHED"))
+    ]
+
+    result = make_service(server, store).publish_draft(make_draft())
+
+    assert result.reason_codes == ["AUTO_PUBLISH_AUTHOR_DAILY_LIMIT_REACHED"]
+    record = store.get_by_request_id(result.request_id)
+    assert record.reason_codes == ["AUTO_PUBLISH_AUTHOR_DAILY_LIMIT_REACHED"]
+
+
+def test_deferred_persists_nothing_as_delivered(server, store):
+    """Nada foi criado do outro lado: marcar como entregue seria mentira."""
+    server.script = [ScriptedResponse(429, deferred_body())]
+
+    result = make_service(server, store).publish_draft(make_draft())
+
+    record = store.get_by_request_id(result.request_id)
+    assert record.delivery_status == STATUS_DEFERRED
+    assert record.delivered_at is None
+    assert record.payload_article_id is None
+    assert record.next_eligible_at == "2026-08-05T03:00:00.000Z"
+
+
+def test_deferred_keeps_the_retry_after_for_the_scheduler(server, store):
+    """O horario tem de sobreviver ate quem vai reenviar."""
+    server.script = [ScriptedResponse(429, deferred_body(), headers={"Retry-After": "40000"})]
+
+    result = make_service(server, store).publish_draft(make_draft())
+
+    attempts = store.list_attempts(result.request_id)
+    assert attempts[-1]["retry_after_seconds"] == 40000
+    assert O.resend_not_before(
+        O.PublicationResult(
+            outcome=O.DEFERRED, http_status=429, next_eligible_at="2026-08-05T03:00:00.000Z"
+        )
+    ) == "2026-08-05T03:00:00.000Z"
+
+
+def test_a_deferred_resend_reuses_the_same_request_id(server, store):
+    """Identidade nova no reenvio gastaria uma vaga do teto de amanha."""
+    server.script = [ScriptedResponse(429, deferred_body())]
+    first = make_service(server, store).publish_draft(make_draft())
+
+    server.script = [ScriptedResponse(201, published_body())]
+    second = make_service(server, store).publish_draft(make_draft())
+
+    assert second.request_id == first.request_id
+    assert second.idempotency_key == first.idempotency_key
+
+
+def test_429_without_an_outcome_is_still_rate_limiting(server):
+    """Controle NEGATIVO: sem ele, todo 429 viraria desfecho do portao.
+
+    Um limitador de taxa na borda responde 429 sem `outcome`. Esse continua
+    sendo transporte — retentavel com backoff curto, e nao um teto diario.
+    """
+    server.script = [ScriptedResponse(429, {"error": "rate limited"})]
+    with pytest.raises(RateLimitedError):
+        make_client(server).submit_publication({"contractName": "x"})
     assert server.publication_count == 1
 
 

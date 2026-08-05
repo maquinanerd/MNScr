@@ -45,8 +45,40 @@ MAX_ID_LENGTH: Final[int] = 200
 NAMESPACE: Final[str] = "mnscr"
 
 
+#: ``publicAuthorId`` no RUNTIME do Cinerie — que e mais estreito do que o
+#: contrato declara.
+#:
+#: ``[0-9]`` e nao ``\d``: do lado de la a regra e a `/^\d+$/` do JavaScript,
+#: que so conhece ASCII. O ``\d`` do Python tambem aceita digito decimal de
+#: outros alfabetos, e aceitar aqui o que o servidor recusa la reintroduz
+#: exatamente o erro que esta funcao existe para pegar cedo.
+NUMERIC_ID: Final[re.Pattern[str]] = re.compile(r"^[0-9]+$")
+
+
 def is_stable_id(value: Optional[str]) -> bool:
     return bool(value) and len(value) <= MAX_ID_LENGTH and bool(STABLE_ID.match(value))
+
+
+def is_public_author_id(value: Optional[str]) -> bool:
+    """``publicAuthorId`` aceitavel — pelo schema **e** pelo runtime.
+
+    O contrato declara este campo como ``stableId``, e um slug como
+    ``author-redacao-cinerie`` passa no schema sem uma reclamacao. O runtime do
+    Cinerie e outra historia: ele testa ``/^\\d+$/`` antes de procurar o autor e,
+    falhando, devolve ``exists:false`` — que vira ``author_not_found`` e
+    ``422 BLOCKED``.
+
+    O valor esperado e o **id da linha do documento ``Author``** no PostgreSQL do
+    CMS, em forma de string: ``"12"``, ``"340"``. Nao e o campo ``slug`` da
+    collection (que existe, mas nao e consultado aqui) e nao e o nome.
+
+    Vale recusar isso aqui, e nao la, por uma razao simples de custo: um id nao
+    numerico e um defeito de configuracao que reprova **toda** materia do ciclo,
+    uma por uma, gastando um round-trip para descobrir de novo a mesma coisa.
+    A propria fixture canonica do Cinerie usa um slug — copia-la e o caminho
+    curto para esse erro.
+    """
+    return is_stable_id(value) and bool(NUMERIC_ID.match(str(value)))
 
 
 def _digest(value: str, *, length: int = 32) -> str:
@@ -161,12 +193,14 @@ def build_identity(
 __all__ = [
     "MAX_ID_LENGTH",
     "NAMESPACE",
+    "NUMERIC_ID",
     "RequestIdentity",
     "STABLE_ID",
     "build_idempotency_key",
     "build_identity",
     "build_request_id",
     "build_source_id",
+    "is_public_author_id",
     "is_stable_id",
     "normalize_cluster_id",
 ]

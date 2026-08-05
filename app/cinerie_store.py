@@ -39,6 +39,14 @@ STATUS_NEEDS_RECONCILIATION: str = "NEEDS_RECONCILIATION"
 STATUS_FAILED_RETRYABLE: str = "FAILED_RETRYABLE"
 STATUS_FAILED_PERMANENT: str = "FAILED_PERMANENT"
 
+#: Teto diario da redacao esgotado. Estado proprio, e nao um sabor de falha:
+#: o pedido esta correto, nada foi persistido do outro lado, e o mesmo corpo
+#: passa depois de `next_eligible_at` sem uma linha alterada. Guardado a parte
+#: para que um relatorio saiba distinguir "a materia nao entrou porque tem
+#: defeito" de "a materia nao entrou porque a redacao ja publicou o teto de
+#: hoje" — as duas frases pedem providencias opostas.
+STATUS_DEFERRED: str = "DEFERRED"
+
 DELIVERY_STATUSES = frozenset(
     {
         STATUS_PENDING,
@@ -46,6 +54,7 @@ DELIVERY_STATUSES = frozenset(
         STATUS_COMPLETED,
         STATUS_BLOCKED,
         STATUS_AWAITING_HUMAN,
+        STATUS_DEFERRED,
         STATUS_NEEDS_RECONCILIATION,
         STATUS_FAILED_RETRYABLE,
         STATUS_FAILED_PERMANENT,
@@ -491,6 +500,7 @@ __all__ = [
     "STATUS_AWAITING_HUMAN",
     "STATUS_BLOCKED",
     "STATUS_COMPLETED",
+    "STATUS_DEFERRED",
     "STATUS_FAILED_PERMANENT",
     "STATUS_FAILED_RETRYABLE",
     "STATUS_IN_PROGRESS",

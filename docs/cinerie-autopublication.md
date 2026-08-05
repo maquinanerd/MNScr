@@ -151,22 +151,57 @@ falar sobre ele.
 Em produção, `MNSCR_DELIVERY_MODE` ausente ou inválido **bloqueia**. É a decisão
 mais consequente do arquivo de configuração e não pode ter default do código.
 
-## Os quatro desfechos
+## `publicAuthorId` — o campo em que o schema e o runtime discordam
+
+`MNSCR_PUBLIC_AUTHOR_ID` é o **id numérico** da entidade `Author` no Cinerie
+(`"12"`), não o slug e não o nome.
+
+O contrato declara o campo como `stableId`, e um slug como
+`author-redacao-cinerie` passa no schema sem uma reclamação. O runtime do Cinerie
+é outra história: ele testa `/^\d+$/` antes de procurar o autor e, falhando,
+responde `author_not_found` → `422 BLOCKED`. Um valor errado aqui reprova **toda**
+matéria do ciclo, uma por uma, gastando um round-trip para descobrir de novo a
+mesma coisa — por isso a recusa acontece no startup (`get_cinerie_config_issues`)
+e de novo ao montar o pedido (`is_public_author_id`).
+
+A armadilha tem nome: a fixture canônica do próprio Cinerie usa um slug nesse
+campo. Copiá-la é o caminho curto para o erro.
+
+## Os desfechos
 
 | Desfecho | HTTP | Estado local | Reenviar? |
 |---|---|---|---|
 | `PUBLISHED` | 201 | `COMPLETED` | não |
 | `ROUTED_TO_REVIEW` | 202 | `AWAITING_HUMAN` | **não** — aguarde |
+| `DEFERRED` | 429 | `DEFERRED` | **sim, depois de `nextEligibleAt`** |
 | `CONFLICT` | 409 | `NEEDS_RECONCILIATION` | só após reconciliar |
 | `BLOCKED` | 422 | `FAILED_PERMANENT` | não — repete o defeito |
+| `OPERATIONAL_ERROR` | 503 | `FAILED_RETRYABLE` | sim, com backoff |
 
 **`ROUTED_TO_REVIEW` não é falha.** O conteúdo passou por todas as validações de
 forma; falta julgamento humano. O texto foi guardado.
 
-Quando o motivo é teto diário, a resposta traz `nextEligibleAt`. Ele é
-**informativo**: a matéria já foi encaminhada para revisão, e transformar o
-horário em agendamento faria o pipeline reenviar algo que já está na fila de
-alguém.
+**`DEFERRED` também não é falha, e não é limitação de taxa.** É o único 429 que
+não vem da borda da rede: o teto diário da redação acabou. Nada foi persistido e
+nenhum contador foi consumido — o mesmo corpo passa depois da virada sem uma
+linha alterada. Por isso ele sai do cliente como **desfecho**, e não como erro de
+transporte: retentar dentro do ciclo queimaria as tentativas contra uma parede
+que só cai à meia-noite do fuso da redação, e perderia qual dos quatro tetos
+estourou (`global`, `content_type`, `section`, `author`).
+
+O reenvio de um `DEFERRED` repete o **mesmo `requestId`**. Um id novo declara ao
+Cinerie "conte isto como publicação nova" e consumiria uma vaga do teto do dia
+seguinte.
+
+`nextEligibleAt` em **qualquer outro** desfecho é informativo, não agendamento:
+transformá-lo em reenvio mandaria de novo uma matéria que já está na fila de
+alguém. Quem faz essa distinção é `outcomes.resend_not_before()`.
+
+O teto vizinho é a exceção: reescrever a **mesma matéria** tem limite próprio,
+e ele responde `BLOCKED` 422 (`AUTO_PUBLISH_ARTICLE_UPDATE_LIMIT_REACHED`), sem
+`Retry-After` e sem horário prometido. O contador de fato reabre à meia-noite,
+mas prometer isso seria autorizar reescrever a mesma matéria todo dia — que é o
+comportamento que o teto existe para conter.
 
 `AUTHOR_CHANGE_REQUIRES_HUMAN` volta como `ROUTED_TO_REVIEW` e **nada do update é
 aplicado** — nem o corpo. Aplicar metade deixaria a matéria com texto novo e
@@ -174,12 +209,17 @@ assinatura antiga, sem ninguém ter decidido isso.
 
 ## Retry
 
-Retentável: timeout, conexão recusada, 408, 429, 500, 502, 504, e 503 **marcado**
-`retryable: true`. Sem a marca não há promessa de que nada foi persistido, e
-retentar às cegas poderia duplicar.
+Retentável **dentro do ciclo**: timeout, conexão recusada, 408, 500, 502, 504, e
+503 **marcado** `retryable: true`. Sem a marca não há promessa de que nada foi
+persistido, e retentar às cegas poderia duplicar.
 
-Nunca retentado: 201, 202, 409 sem reconciliação, 422, contrato divergente, JSON
-Schema inválido, autor ausente, configuração inválida.
+Um 429 **sem `outcome` no corpo** continua nessa lista: é limitador de taxa na
+borda, não o portão. O 429 do portão traz `outcome: "DEFERRED"` e sai como
+desfecho.
+
+Nunca retentado dentro do ciclo: 201, 202, 409 sem reconciliação, 422, 429 do
+portão, contrato divergente, JSON Schema inválido, autor ausente, configuração
+inválida.
 
 Backoff exponencial com jitter determinístico; `Retry-After` do destino sempre
 vence a estimativa local; `sleeper` e `clock` injetáveis — nenhum teste espera de

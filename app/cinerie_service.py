@@ -43,6 +43,7 @@ from app.cinerie_store import (
     STATUS_AWAITING_HUMAN,
     STATUS_BLOCKED,
     STATUS_COMPLETED,
+    STATUS_DEFERRED,
     STATUS_FAILED_PERMANENT,
     STATUS_FAILED_RETRYABLE,
     STATUS_IN_PROGRESS,
@@ -88,6 +89,11 @@ class PublicationAttemptResult:
     def published(self) -> bool:
         return self.outcome == O.PUBLISHED
 
+    @property
+    def deferred(self) -> bool:
+        """Teto diario esgotado: reenviar este mesmo pedido depois da virada."""
+        return self.outcome == O.DEFERRED
+
     def safe_log_fields(self) -> Dict[str, Any]:
         return {
             "delivery_status": self.status,
@@ -95,6 +101,7 @@ class PublicationAttemptResult:
             "outcome": self.outcome,
             "article_id": self.article_id,
             "reason_codes": self.reason_codes,
+            "next_eligible_at": self.next_eligible_at,
             "attempts": self.attempts,
             "error_code": self.error_code,
         }
@@ -301,6 +308,7 @@ class CinerieService:
                 duration_ms=duration,
                 http_status=result.http_status,
                 outcome=result.outcome,
+                retry_after_seconds=result.retry_after_seconds,
             )
             return self._finish_with_result(built, result, preflight=preflight)
 
@@ -345,13 +353,34 @@ class CinerieService:
                 request_id,
             )
 
-        if result.next_eligible_at and result.outcome == O.ROUTED_TO_REVIEW:
-            # O horario e informativo. Transforma-lo em agendamento faria o
+        if result.deferred:
+            # Teto diario da redacao. Nada foi persistido e nenhum contador foi
+            # consumido: o MESMO corpo, com o MESMO requestId, passa depois da
+            # virada. Gerar identidade nova no reenvio seria declarar uma
+            # publicacao nova e gastar uma vaga do teto de amanha.
+            logger.info(
+                "[cinerie] teto diario esgotado (%s); reenvio do mesmo requestId "
+                "so a partir de %s",
+                ", ".join(result.deferral_codes) or "dimensao nao declarada",
+                result.next_eligible_at or "horario nao informado",
+            )
+        elif result.next_eligible_at and result.outcome == O.ROUTED_TO_REVIEW:
+            # Aqui o horario e informativo. Transforma-lo em agendamento faria o
             # pipeline reenviar uma materia que ja esta na fila de um humano.
             logger.info(
-                "[cinerie] teto atingido; a materia ja foi encaminhada para revisao "
-                "(nextEligibleAt=%s, sem reenvio automatico)",
+                "[cinerie] nextEligibleAt=%s num desfecho ja aceito; sem reenvio automatico",
                 result.next_eligible_at,
+            )
+
+        if result.article_update_limit_reached:
+            # Teto de reescrita da MESMA materia: vem como BLOCKED, sem horario
+            # prometido. O contador reabre a meia-noite, mas prometer isso seria
+            # autorizar reescrever a mesma materia todo dia — exatamente o que o
+            # teto existe para conter.
+            logger.warning(
+                "[cinerie] teto de reescrita da materia atingido (%s); "
+                "outra revisao automatica passa por decisao humana",
+                request_id,
             )
 
         return PublicationAttemptResult(
@@ -374,6 +403,10 @@ class CinerieService:
         if result.outcome == O.ROUTED_TO_REVIEW:
             # Sucesso com espera humana. Nao e falha do pipeline.
             return STATUS_AWAITING_HUMAN
+        if result.outcome == O.DEFERRED:
+            # Espera de relogio, nao de humano nem de conserto. O pedido esta
+            # correto; o dia e que acabou.
+            return STATUS_DEFERRED
         if result.outcome == O.CONFLICT:
             return STATUS_NEEDS_RECONCILIATION
         if result.outcome == O.BLOCKED:

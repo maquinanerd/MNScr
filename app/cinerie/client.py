@@ -33,7 +33,7 @@ from .errors import (
     RateLimitedError,
     ServerError,
 )
-from .outcomes import PublicationResult, parse_result
+from .outcomes import OPERATIONAL_ERROR, PublicationResult, parse_result
 
 logger = logging.getLogger(__name__)
 
@@ -192,14 +192,22 @@ class CinerieClient:
     def submit_publication(self, payload: Mapping[str, Any]) -> PublicationResult:
         """Envia o pedido e devolve o desfecho normalizado.
 
-        Os quatro desfechos do contrato **nao sao erro de transporte**: 201, 202,
+        Os desfechos do portao **nao sao erro de transporte**: 201, 202, 429,
         409 e 422 voltam como resultado. Erro operacional e de rede viram
         excecao, que e o que a camada de retry entende.
+
+        O 429 esta nessa lista, e e o unico codigo da faixa de erro que um
+        cliente HTTP normal trataria sozinho. Aqui ele nao pode: um ``DEFERRED``
+        e o portao dizendo "o teto do dia acabou", com ``nextEligibleAt`` e um
+        ``Retry-After`` de horas. Deixa-lo virar ``RateLimitedError`` faria o
+        laco de tentativas queimar as tres chances contra uma parede que so cai
+        na virada do dia, e o desfecho — com a dimensao de teto que estourou —
+        se perderia numa mensagem de erro de transporte.
         """
         status, body, headers = self._request("POST", PUBLICATIONS_PATH, body=payload)
 
-        result = parse_result(body, status)
-        if result is not None and result.outcome != "OPERATIONAL_ERROR":
+        result = parse_result(body, status, retry_after_seconds=self._retry_after(headers))
+        if result is not None and result.outcome != OPERATIONAL_ERROR:
             return result
 
         self._raise_for_transport_status(status, body, headers=headers)
@@ -238,6 +246,10 @@ class CinerieClient:
                 "service account sem o escopo editorial_auto_publish (403)"
             )
         if status == 429:
+            # Um 429 que chega ate aqui NAO e `DEFERRED`: o desfecho do portao
+            # traz corpo com `outcome` e ja voltou como resultado. Sobra o 429
+            # sem desfecho — proxy, limitador de taxa, borda — e esse sim e
+            # transporte, retentavel com backoff curto.
             raise RateLimitedError("Cinerie limitou a taxa (429)", retry_after_seconds=retry_after)
         if status == 503:
             # A marca `retryable` e o que separa "tente de novo" de "nao sei o
