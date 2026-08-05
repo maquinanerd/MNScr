@@ -19,8 +19,9 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -64,6 +65,15 @@ DELIVERY_STATUSES = frozenset(
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _iso_from_now(seconds: int) -> str:
+    """Instante futuro em ISO, comparavel como TEXTO no SQLite.
+
+    Todos os carimbos desta tabela sao ISO-8601 em UTC, entao a ordem
+    lexicografica coincide com a cronologica e o `<=` do SQL vale.
+    """
+    return (datetime.now(timezone.utc) + timedelta(seconds=max(0, int(seconds)))).isoformat()
 
 
 def _dumps(value: Any) -> Optional[str]:
@@ -186,9 +196,26 @@ class CinerieStore:
                 http_status INTEGER,
                 idempotent_replay INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                claimed_by TEXT,
+                lease_until TEXT
             )
             """
+        )
+        # Bancos criados antes da posse existir nao tem as duas colunas. ALTER
+        # em vez de recriar a tabela: ha entrega em voo la dentro.
+        existentes = {
+            row["name"]
+            for row in cursor.execute("PRAGMA table_info(cinerie_publications)")
+        }
+        for coluna in ("claimed_by", "lease_until"):
+            if coluna not in existentes:
+                cursor.execute(
+                    f"ALTER TABLE cinerie_publications ADD COLUMN {coluna} TEXT"
+                )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cinerie_publications_claim "
+            "ON cinerie_publications(delivery_status, lease_until)"
         )
         cursor.execute(
             """
@@ -432,6 +459,99 @@ class CinerieStore:
         )
         row = cursor.fetchone()
         return str(row["payload_article_id"]) if row and row["payload_article_id"] else None
+
+    #: Estados que voltam para a varredura. `COMPLETED`, `BLOCKED`,
+    #: `FAILED_PERMANENT` e `AWAITING_HUMAN` ficam de fora de proposito: os dois
+    #: primeiros ja terminaram, o terceiro nao melhora com repeticao e o quarto
+    #: espera gente, nao maquina.
+    CLAIMABLE_STATUSES: tuple = (
+        STATUS_PENDING,
+        STATUS_FAILED_RETRYABLE,
+        STATUS_DEFERRED,
+        STATUS_NEEDS_RECONCILIATION,
+        STATUS_IN_PROGRESS,
+    )
+
+    def claim_pending(
+        self,
+        *,
+        worker_id: str,
+        limit: int = 10,
+        lease_seconds: int = 300,
+    ) -> List[PublicationRecord]:
+        """Toma posse de entregas reivindicaveis. Escrita condicional, nao leitura.
+
+        Ler o que esta pendente e depois enviar nao serve quando ha mais de um
+        processo: dois workers leem a mesma linha e mandam o mesmo pedido. Do
+        outro lado a chave idempotente evita artigo duplicado, mas o teto diario
+        e consumido POR CHAVE — entao a dupla entrega custa COTA, e cota
+        esgotada so volta a meia-noite do fuso da redacao.
+
+        A posse e tomada por um UPDATE condicional. No SQLite a escrita e
+        serializada, entao dois workers concorrentes nao conseguem casar a mesma
+        condicao: quem perder a corrida simplesmente nao vera a linha.
+
+        Regras que o UPDATE codifica:
+
+        - `IN_PROGRESS` so volta com o lease VENCIDO. E como um worker morto
+          devolve o trabalho sem ninguem intervir na mao.
+        - `DEFERRED` so volta depois de `next_eligible_at`. Antes disso ele nao
+          e trabalho: reenviar produz outro 429 e nada mais.
+        - `retry_count` NAO e tocado aqui. Tomar posse nao e tentar; quem conta
+          tentativa e quem envia. Sem isso um `DEFERRED` seria aposentado por
+          excesso de tentativas antes de a cota sequer virar.
+        """
+        agora = _utc_now_iso()
+        # Marca unica desta reivindicacao: e ela que permite reler exatamente as
+        # linhas que ESTE claim tomou, sem correr atras de rowid.
+        marca = f"{worker_id}#{uuid.uuid4().hex}"
+        vencimento = _iso_from_now(lease_seconds)
+
+        with self.conn:
+            self.conn.execute(
+                f"""
+                UPDATE cinerie_publications
+                   SET claimed_by = ?, lease_until = ?, delivery_status = ?, updated_at = ?
+                 WHERE id IN (
+                       SELECT id FROM cinerie_publications
+                        WHERE delivery_status IN ({",".join("?" * len(self.CLAIMABLE_STATUSES))})
+                          AND (delivery_status != ? OR lease_until IS NULL OR lease_until <= ?)
+                          AND (delivery_status != ? OR next_eligible_at IS NULL OR next_eligible_at <= ?)
+                          AND (claimed_by IS NULL OR lease_until IS NULL OR lease_until <= ?)
+                        ORDER BY created_at
+                        LIMIT ?
+                 )
+                """,
+                (
+                    marca, vencimento, STATUS_IN_PROGRESS, agora,
+                    *self.CLAIMABLE_STATUSES,
+                    STATUS_IN_PROGRESS, agora,
+                    STATUS_DEFERRED, agora,
+                    agora,
+                    int(limit),
+                ),
+            )
+
+        rows = self.conn.execute(
+            "SELECT * FROM cinerie_publications WHERE claimed_by = ? ORDER BY created_at",
+            (marca,),
+        ).fetchall()
+        registros = [self._row_to_record(row) for row in rows]
+        if registros:
+            logger.info(
+                "[CINERIE_CLAIMED] worker=%s tomadas=%s lease_until=%s",
+                worker_id, len(registros), vencimento,
+            )
+        return registros
+
+    def release_claim(self, request_id: str) -> None:
+        """Devolve a posse sem alterar o estado da entrega."""
+        with self.conn:
+            self.conn.execute(
+                "UPDATE cinerie_publications SET claimed_by = NULL, lease_until = NULL, "
+                "updated_at = ? WHERE request_id = ?",
+                (_utc_now_iso(), request_id),
+            )
 
     def list_by_status(self, status: str, limit: int = 50) -> List[PublicationRecord]:
         cursor = self.conn.cursor()
