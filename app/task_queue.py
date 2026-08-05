@@ -63,6 +63,31 @@ class ArticleQueue:
     @staticmethod
     def _serialize(item: Dict[str, Any]) -> tuple[Optional[int], str]:
         item = ArticleQueue._apply_runtime_metadata(dict(item))
+        # Domain events are deliberately not placed in the JSON queue.  A
+        # RssPrimeEventV1 is a Python object and serialising it with ``str``
+        # would both lose its structure and make a restart unrecoverable.  The
+        # authoritative event is already versioned in EventStore; the queue
+        # carries only the stable lookup reference needed to get it back.
+        attached_event = item.pop("_input_event", None)
+        if attached_event is not None:
+            event_key = getattr(attached_event, "event_key", None)
+            revision = getattr(attached_event, "revision", None)
+            if not event_key or revision is None:
+                raise TypeError("_input_event precisa expor event_key e revision estaveis")
+            item["_input_event_ref"] = {
+                "schema": "rssprime-event-reference-v1",
+                "event_key": str(event_key),
+                "revision": int(revision),
+            }
+
+        event_ref = item.get("_input_event_ref")
+        if event_ref is not None:
+            if not isinstance(event_ref, dict):
+                raise TypeError("_input_event_ref precisa ser um objeto")
+            if event_ref.get("schema") != "rssprime-event-reference-v1":
+                raise ValueError("versao desconhecida de _input_event_ref")
+            if not event_ref.get("event_key") or not isinstance(event_ref.get("revision"), int):
+                raise ValueError("_input_event_ref sem event_key/revision validos")
         article_db_id = item.get("db_id") if isinstance(item, dict) else None
         payload = json.dumps(item, ensure_ascii=False)
         return article_db_id, payload

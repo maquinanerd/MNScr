@@ -19,7 +19,12 @@ for _stream in (sys.stdout, sys.stderr):
 from apscheduler.schedulers.blocking import BlockingScheduler  # noqa: E402
 
 from app.config import SCHEDULE_CONFIG, validate_runtime_config  # noqa: E402
-from app.pipeline import run_pipeline_cycle  # noqa: E402
+from app.pipeline import (  # noqa: E402
+    EXIT_CRITICAL_EXCEPTION,
+    EXIT_INVALID_CONFIGURATION,
+    run_pipeline_cycle,
+    run_pipeline_once,
+)
 from app.store import Database  # noqa: E402
 
 _FILE_HANDLER: logging.Handler | None = None
@@ -101,7 +106,7 @@ def validate_startup_configuration(logger: logging.Logger) -> None:
     except Exception as e:
         logger.critical(f"Falha na validação de configuração: {e}", exc_info=True)
         flush_logs()
-        sys.exit(1)
+        raise SystemExit(EXIT_INVALID_CONFIGURATION)
 
 
 def initialize_database(logger: logging.Logger) -> None:
@@ -117,7 +122,7 @@ def initialize_database(logger: logging.Logger) -> None:
     except Exception as e:
         logger.critical(f"Falha ao inicializar o banco de dados: {e}", exc_info=True)
         flush_logs()
-        sys.exit(1)
+        raise SystemExit(EXIT_INVALID_CONFIGURATION)
 
 
 def run_pipeline_cycle_guarded() -> None:
@@ -126,17 +131,19 @@ def run_pipeline_cycle_guarded() -> None:
         run_pipeline_cycle()
 
 
-def run_once(logger: logging.Logger) -> None:
-    """Execute a single pipeline cycle and exit."""
-    logger.info("Executando um único ciclo do pipeline (--once).")
+def run_once(logger: logging.Logger, *, deadline_seconds: float, max_items: int) -> int:
+    """Execute one bounded, synchronous pipeline run and return its exit code."""
+    logger.info("Executando --once sincronamente.")
     flush_logs()
     try:
-        run_pipeline_cycle_guarded()
-    except Exception as e:
-        logger.critical(f"Erro crítico durante a execução do ciclo único: {e}", exc_info=True)
-        flush_logs()
+        result = run_pipeline_once(deadline_seconds=deadline_seconds, max_items=max_items)
+        logger.info("[ONCE_RESULT] %s", result.to_dict())
+        return result.exit_code
+    except Exception:
+        logger.exception("[ONCE_CRITICAL] falha inesperada")
+        return EXIT_CRITICAL_EXCEPTION
     finally:
-        logger.info("Ciclo único finalizado.")
+        logger.info("Ciclo --once finalizado.")
         flush_logs()
 
 
@@ -169,6 +176,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--once",
         action="store_true",
         help="Executa o ciclo do pipeline uma vez e sai.",
+    )
+    parser.add_argument(
+        "--once-deadline-seconds",
+        type=float,
+        default=float(os.getenv("MNSCR_ONCE_DEADLINE_SECONDS", "900")),
+        help="Deadline monotônico de --once; preserva o backlog quando expira.",
+    )
+    parser.add_argument(
+        "--once-max-items",
+        type=int,
+        default=int(os.getenv("MNSCR_ONCE_MAX_ITEMS", "25")),
+        help="Máximo de itens em --once; o limite resulta em execução incompleta.",
     )
     parser.add_argument(
         "--replay-event",
@@ -598,6 +617,12 @@ def main(argv: list[str] | None = None) -> None:
     initialize_database(logger)
 
     if args.once:
-        run_once(logger)
+        raise SystemExit(
+            run_once(
+                logger,
+                deadline_seconds=args.once_deadline_seconds,
+                max_items=args.once_max_items,
+            )
+        )
     else:
         run_forever(logger)

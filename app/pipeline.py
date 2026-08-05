@@ -8,6 +8,7 @@ import time
 import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -115,6 +116,15 @@ BETWEEN_BATCH_DELAY_S = int(os.getenv('BETWEEN_BATCH_DELAY_S', 30))  # 30s entre
 BETWEEN_PUBLISH_DELAY_S = int(os.getenv('BETWEEN_PUBLISH_DELAY_S', 30))  # 30s entre publicaÃ§Ãµes
 ARTICLE_WATCHDOG_TIMEOUT_S = int(os.getenv('ARTICLE_WATCHDOG_TIMEOUT_S', 300))
 CLAIM_STALE_TIMEOUT_S = int(os.getenv('CLAIM_STALE_TIMEOUT_S', ARTICLE_WATCHDOG_TIMEOUT_S * 2))
+
+# Exit codes are shared with the CLI entrypoint.  In particular, an unfinished
+# backlog is never reported as a successful --once invocation.
+EXIT_SUCCESS = 0
+EXIT_INVALID_CONFIGURATION = 2
+EXIT_CRITICAL_EXCEPTION = 3
+EXIT_PROCESSING_FAILURE = 4
+EXIT_DEADLINE_EXCEEDED = 5
+EXIT_SHUTDOWN_INCOMPLETE = 6
 
 # Versao do prompt canonico, registrada na proveniencia de cada draft.
 PROMPT_VERSION = os.getenv('MNSCR_PROMPT_VERSION', 'universal_prompt-ms1')
@@ -520,6 +530,153 @@ def pipeline_has_pending_work() -> bool:
             pending_fallback,
         )
     return False
+
+
+@dataclass
+class OnceRunResult:
+    """Auditable outcome of one bounded, synchronous pipeline execution."""
+
+    initial: int = 0
+    reconciled: int = 0
+    ingested: int = 0
+    claimed: int = 0
+    completed: int = 0
+    editorial_blocked: int = 0
+    review_required: int = 0
+    technical_failed: int = 0
+    remaining: int = 0
+    stop_reason: str = "completed"
+    duration_ms: int = 0
+    success: bool = False
+    exit_code: int = EXIT_SUCCESS
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    def log_summary(self) -> None:
+        logger.info(
+            "[ONCE_SUMMARY] initial=%s reconciled=%s ingested=%s claimed=%s completed=%s "
+            "editorial_blocked=%s review_required=%s technical_failed=%s remaining=%s "
+            "duration_ms=%s stop_reason=%s outcome=%s exit_code=%s",
+            self.initial, self.reconciled, self.ingested, self.claimed, self.completed,
+            self.editorial_blocked, self.review_required, self.technical_failed,
+            self.remaining, self.duration_ms, self.stop_reason,
+            "success" if self.success else "incomplete", self.exit_code,
+        )
+
+
+def _once_link_map() -> Dict[str, Any]:
+    """Get the same SQLite-backed links that the worker uses, without a thread."""
+    try:
+        return ls_get_link_map() or {"posts": []}
+    except Exception as exc:  # links must not make a durable queue item disappear
+        logger.warning("[ONCE_LINKS] mapa de links indisponivel: %s", exc)
+        return {"posts": []}
+
+
+def _process_one_queued_article() -> Optional[Dict[str, Any]]:
+    """Claim and process exactly one item using the canonical batch processor.
+
+    This is intentionally shared by ``--once`` and the daemon worker: it does
+    not reimplement any editorial, factual or gate rule.
+    """
+    worker_id = f"once:{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex[:12]}"
+    article = article_queue.pop_claimed(worker_id)
+    if article is None:
+        return None
+
+    article_id = int(article.get("db_id") or article.get("id"))
+    process_batch([article], _once_link_map())
+    db = Database()
+    try:
+        row = db.get_article_by_event_key(article.get("event_key")) if article.get("event_key") else None
+        if row is None:
+            cursor = db._get_cursor()
+            row_data = cursor.execute("SELECT * FROM seen_articles WHERE id = ?", (article_id,)).fetchone()
+            row = dict(row_data) if row_data else {}
+        return dict(row or {})
+    finally:
+        db.close()
+
+
+def _record_once_outcome(result: OnceRunResult, row: Dict[str, Any]) -> None:
+    status = str(row.get("status") or "")
+    if status == DRAFT_GENERATED:
+        result.completed += 1
+        gate = row.get("latest_gate_status")
+        if gate == GATE_BLOCKED:
+            result.editorial_blocked += 1
+        elif gate == GATE_REVIEW_REQUIRED:
+            result.review_required += 1
+    elif status in {DRAFT_FAILED, "FAILED", "FAILED_PERMANENT"}:
+        result.technical_failed += 1
+
+
+def run_pipeline_once(*, deadline_seconds: float, max_items: int) -> OnceRunResult:
+    """Run reconciliation, drain, one ingest pass and a final drain synchronously.
+
+    The deadline is monotonic and is only checked between articles.  An active
+    article is never abandoned in a daemon thread: finishing it preserves the
+    claim and prevents duplicate draft creation.
+    """
+    if deadline_seconds <= 0 or max_items <= 0:
+        raise ValueError("deadline_seconds e max_items devem ser positivos")
+
+    started = time.monotonic()
+    result = OnceRunResult(initial=len(article_queue))
+
+    db = Database()
+    try:
+        recovered = db.recover_stale_processing_claims(
+            stale_seconds=CLAIM_STALE_TIMEOUT_S,
+            max_recoveries=MAX_ARTICLE_WATCHDOG_TIMEOUTS,
+        )
+        result.reconciled = sum(int(value) for key, value in recovered.items() if key != "still_alive")
+    finally:
+        db.close()
+
+    def drain() -> bool:
+        while len(article_queue):
+            if time.monotonic() >= started + deadline_seconds:
+                result.stop_reason = "deadline"
+                result.exit_code = EXIT_DEADLINE_EXCEEDED
+                return False
+            if result.claimed >= max_items:
+                result.stop_reason = "item_limit"
+                result.exit_code = EXIT_DEADLINE_EXCEEDED
+                return False
+            row = _process_one_queued_article()
+            if row is None:
+                break
+            result.claimed += 1
+            _record_once_outcome(result, row)
+        return True
+
+    try:
+        if not drain():
+            return result
+
+        before_ingest = len(article_queue)
+        run_pipeline_cycle(start_worker=False, skip_pending_guard=True)
+        result.ingested = max(0, len(article_queue) - before_ingest)
+        drain()
+    except Exception:
+        logger.exception("[ONCE_CRITICAL] execucao sincrona interrompida")
+        result.stop_reason = "critical_exception"
+        result.exit_code = EXIT_CRITICAL_EXCEPTION
+    finally:
+        result.remaining = len(article_queue)
+        result.duration_ms = int((time.monotonic() - started) * 1000)
+        if result.exit_code == EXIT_SUCCESS and result.technical_failed:
+            result.stop_reason = "processing_failure"
+            result.exit_code = EXIT_PROCESSING_FAILURE
+        result.success = result.exit_code == EXIT_SUCCESS and result.remaining == 0
+        if result.exit_code == EXIT_SUCCESS and result.remaining:
+            result.stop_reason = "shutdown_incomplete"
+            result.exit_code = EXIT_SHUTDOWN_INCOMPLETE
+            result.success = False
+        result.log_summary()
+    return result
 
 
 def initialize_runtime() -> None:
@@ -2114,15 +2271,27 @@ def _resolve_input_event(art_data: Dict[str, Any]):
     if attached is not None:
         return attached
 
-    event_key = art_data.get("event_key") or (art_data.get("cluster_item") or {}).get("event_key")
+    event_ref = art_data.get("_input_event_ref")
+    if event_ref is not None:
+        if not isinstance(event_ref, dict) or event_ref.get("schema") != "rssprime-event-reference-v1":
+            logger.warning("[EVENT_REFERENCE] referencia de fila invalida ou desconhecida")
+            return None
+        event_key = event_ref.get("event_key")
+        revision = event_ref.get("revision")
+    else:
+        # Legacy payloads predate the event-reference queue format.  They are
+        # still consumable without rewriting their persisted JSON.
+        event_key = art_data.get("event_key") or (art_data.get("cluster_item") or {}).get("event_key")
+        revision = None
     if not event_key:
         return None
 
     store = None
     try:
         store = EventStore()
-        stored = store.get_event(str(event_key))
+        stored = store.get_event(str(event_key), int(revision) if revision is not None else None)
         if stored is None or not stored.normalized_payload:
+            logger.warning("[EVENT_REFERENCE] evento ausente event_key=%s revision=%s", event_key, revision)
             return None
         return stored.to_event()
     except Exception as exc:  # noqa: BLE001 - provenance is best-effort, never fatal
@@ -2236,12 +2405,13 @@ def _build_link_map_for_replay() -> Dict[str, Any]:
         return {}
 
 
-def run_pipeline_cycle():
-    """Read feeds and enqueue articles for the worker."""
+def run_pipeline_cycle(*, start_worker: bool = True, skip_pending_guard: bool = False):
+    """Read feeds and enqueue articles for the worker or a bounded synchronous run."""
     initialize_runtime()
-    ensure_worker_started()
-    if pipeline_has_pending_work():
-        logger.warning("[CYCLE_GUARD] Ciclo ignorado: worker/fila ainda processando ciclo anterior.")
+    if start_worker:
+        ensure_worker_started()
+    if not skip_pending_guard and pipeline_has_pending_work():
+        logger.warning("[CYCLE_GUARD] Ciclo adiado: backlog Superfeed aguarda o worker ativo.")
         return
 
     logger.info("Starting new pipeline ingestion cycle.")
