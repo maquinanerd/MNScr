@@ -59,6 +59,21 @@ MODE_DRAFT: str = "DRAFT"
 MODE_AUTO_PUBLISH: str = "AUTO_PUBLISH"
 DELIVERY_MODES = frozenset({MODE_DRAFT, MODE_AUTO_PUBLISH})
 
+#: Falhas em que o pedido PODE ter sido aplicado do outro lado.
+#:
+#: Todas acontecem depois de os bytes terem saido: o timeout de LEITURA, uma
+#: resposta que nao da para interpretar e um erro de servidor nao retentavel. A
+#: diferenca para `CONNECTION_ERROR` importa — la a conexao nem se estabeleceu,
+#: nada foi aplicado, e o reenvio e limpo.
+AMBIGUOUS_ERROR_CODES = frozenset(
+    {"TIMEOUT", "INVALID_REMOTE_RESPONSE", "SERVER_ERROR_NOT_RETRYABLE"}
+)
+
+#: Estados em que perguntar de novo so custa cota.
+TERMINAL_DELIVERY_STATUSES = frozenset(
+    {STATUS_COMPLETED, STATUS_BLOCKED, STATUS_FAILED_PERMANENT, STATUS_AWAITING_HUMAN}
+)
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -255,6 +270,13 @@ class CinerieService:
     def _send(self, built: BuiltRequest, *, preflight: PreflightResult) -> PublicationAttemptResult:
         request_id = built.identity.request_id
         last_error: Optional[CinerieError] = None
+        # Ambiguidade nao expira. Depois de um timeout de LEITURA o pedido pode
+        # ter sido aplicado do outro lado, e nenhuma tentativa posterior desfaz
+        # esse fato: um 500 na tentativa 2 nao prova que a 1 nao entrou. Sem esta
+        # memoria o desfecho final era o do ULTIMO erro, e o registro terminava
+        # como FAILED_RETRYABLE — "pode reenviar" — quando a verdade era
+        # "consulte o destino antes de decidir".
+        saw_ambiguous = False
 
         for attempt in range(1, self.retry_policy.max_attempts + 1):
             delay = self.retry_policy.delay_for(
@@ -283,6 +305,8 @@ class CinerieService:
                     retry_after_seconds=getattr(exc, "retry_after_seconds", None),
                 )
                 last_error = exc
+                if exc.code in AMBIGUOUS_ERROR_CODES:
+                    saw_ambiguous = True
 
                 if exc.code == "CONTRACT_MISMATCH":
                     # O contrato mudou no meio do caminho: o cache guardado nao
@@ -290,7 +314,10 @@ class CinerieService:
                     self.preflight.invalidate()
 
                 if not exc.retryable or attempt >= self.retry_policy.max_attempts:
-                    return self._finish_with_error(built, exc, attempts=attempt, preflight=preflight)
+                    return self._finish_with_error(
+                        built, exc, attempts=attempt, preflight=preflight,
+                        ambiguous=saw_ambiguous,
+                    )
                 logger.warning(
                     "[cinerie] tentativa %s/%s falhou (%s); nova tentativa",
                     attempt,
@@ -420,22 +447,32 @@ class CinerieService:
         *,
         attempts: int,
         preflight: PreflightResult,
+        ambiguous: bool = False,
     ) -> PublicationAttemptResult:
         request_id = built.identity.request_id
 
         # Timeout de LEITURA esgotado e ambiguo: o pedido pode ter sido aplicado.
         # Recriar seria duplicar; declarar falha esconderia uma publicacao real.
-        ambiguous = exc.code in ("TIMEOUT", "INVALID_REMOTE_RESPONSE", "SERVER_ERROR_NOT_RETRYABLE")
+        # `ambiguous` chega True quando QUALQUER tentativa desta rodada foi
+        # ambigua, e nao so a ultima.
+        ambiguous = ambiguous or exc.code in AMBIGUOUS_ERROR_CODES
         status = (
             STATUS_NEEDS_RECONCILIATION
             if ambiguous
             else (STATUS_FAILED_RETRYABLE if exc.retryable else STATUS_FAILED_PERMANENT)
         )
 
+        # O ultimo erro nem sempre e o que importa. Quando alguma tentativa foi
+        # ambigua, o motivo do estado e a ambiguidade — nao o 500 que veio
+        # depois. Sem esta marca o operador le "SERVER_ERROR" e conclui que basta
+        # reenviar, que e exatamente a decisao errada.
+        reason_codes = [exc.code]
+        if ambiguous:
+            reason_codes.append("RESULTADO_AMBIGUO")
         record = self.store.update_result(
             request_id,
             delivery_status=status,
-            reason_codes=[exc.code],
+            reason_codes=reason_codes,
             error_code=exc.code,
             retry_count=max(0, attempts - 1),
         )
@@ -451,7 +488,7 @@ class CinerieService:
             idempotency_key=built.identity.idempotency_key,
             attempts=attempts,
             error_code=exc.code,
-            reason_codes=[exc.code],
+            reason_codes=list(reason_codes),
             record=record,
             preflight=preflight,
         )
@@ -512,6 +549,78 @@ class CinerieService:
         if article_id:
             return INTENT_UPDATE, article_id
         return INTENT_PUBLISH, None
+
+    def reconcile_ambiguous(
+        self,
+        request_id: str,
+        *,
+        draft: Any,
+        **build_kwargs: Any,
+    ) -> Optional[PublicationRecord]:
+        """Descobre o que aconteceu com um pedido de desfecho desconhecido.
+
+        Nao existe endpoint de consulta neste contrato. Quem responde "isto
+        chegou?" e o proprio POST, desde que ele seja IDENTICO: com o mesmo
+        ``requestId`` e a mesma ``idempotencyKey``, o Cinerie reconhece o pedido,
+        devolve o desfecho original com ``idempotent: true`` e **nao** reaplica
+        nem consome teto.
+
+        Por isso a unica coisa que esta funcao nao pode fazer e inventar
+        identidade. Se o pedido for remontado a partir de um corpo diferente, o
+        hash muda, a chave muda, e o que era uma pergunta vira uma publicacao
+        nova — segundo artigo e mais uma fatia do teto diario.
+
+        Item ja terminado nao e reconciliado: perguntar de novo custa cota e nao
+        acrescenta nada.
+        """
+        record = self.store.get_by_request_id(request_id)
+        if record is None:
+            return None
+
+        if record.delivery_status in TERMINAL_DELIVERY_STATUSES:
+            logger.info(
+                "[cinerie] reconciliacao dispensada: %s ja esta em %s",
+                request_id, record.delivery_status,
+            )
+            return record
+
+        try:
+            preflight = self.preflight.ensure_compatible()
+        except CinerieError as exc:
+            logger.warning("[cinerie] reconciliacao adiada, preflight indisponivel: %s", exc)
+            return record
+
+        resolved_intent, resolved_target = self._resolve_intent(draft, None, None)
+        built = build_publication_request(
+            draft,
+            public_author_id=self.public_author_id,
+            attribution_mode=self.attribution_mode,
+            intent=resolved_intent,
+            target_article_id=resolved_target,
+            pipeline_version=self.pipeline_version,
+            contract=self.identity,
+            **build_kwargs,
+        )
+
+        # A guarda que sustenta a seguranca de todo o resto.
+        if (
+            built.identity.request_id != record.request_id
+            or built.identity.idempotency_key != record.idempotency_key
+        ):
+            logger.error(
+                "[cinerie] reconciliacao ABORTADA: a remontagem gerou outra "
+                "identidade (gravado=%s remontado=%s). Reenviar criaria um "
+                "segundo artigo e queimaria cota.",
+                record.request_id, built.identity.request_id,
+            )
+            return self.store.update_result(
+                request_id,
+                delivery_status=STATUS_NEEDS_RECONCILIATION,
+                reason_codes=[*(record.reason_codes or []), "IDENTIDADE_NAO_REPRODUZIVEL"],
+            )
+
+        result = self._send(built, preflight=preflight)
+        return result.record or self.store.get_by_request_id(request_id)
 
     def reconcile(self, request_id: str) -> Optional[PublicationRecord]:
         """Reconciliacao de ``CONFLICT``, sem sobrescrever revisao mais nova.
