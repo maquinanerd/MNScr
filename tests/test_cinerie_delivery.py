@@ -17,18 +17,26 @@ import json
 import pytest
 
 from app.cinerie import outcomes as O
-from app.cinerie.client import CinerieClient, CinerieConfig, _safe_url
+from app.cinerie.client import (
+    MAX_REQUEST_BYTES,
+    CinerieClient,
+    CinerieConfig,
+    _safe_url,
+)
 from app.cinerie.contract import local_identity
 from app.cinerie.errors import (
     AuthenticationError,
+    BadRequestError,
     CinerieTimeoutError,
     ConfigurationError,
     ContractMismatchError,
+    EndpointUnavailableError,
     InvalidRemoteResponseError,
     NonRetryableServerError,
     OperationalError,
     PermissionError_,
     RateLimitedError,
+    RequestTooLargeError,
     ServerError,
 )
 from app.cinerie.identity import is_public_author_id
@@ -784,8 +792,11 @@ def test_timeout_goes_to_reconciliation(server, store):
 @pytest.mark.parametrize(
     "status,expected",
     [
+        (400, BadRequestError),
         (401, AuthenticationError),
         (403, PermissionError_),
+        (404, EndpointUnavailableError),
+        (405, EndpointUnavailableError),
         (429, RateLimitedError),
         (500, ServerError),
         (502, ServerError),
@@ -796,6 +807,100 @@ def test_http_status_is_classified(server, status, expected):
     server.script = [ScriptedResponse(status, {"error": "x"})]
     with pytest.raises(expected):
         make_client(server).submit_publication({"contractName": "x"})
+
+
+# ===========================================================================
+# Defeito NOSSO nao vai para reconciliacao humana
+# ===========================================================================
+
+
+@pytest.mark.parametrize("erro", ["invalid_json", "invalid_body"])
+def test_400_is_permanent_not_reconciliation(server, store, erro):
+    """400 nao e estado remoto incerto: o contrato garante que nada foi gravado.
+
+    Antes, todo status fora da lista conhecida virava
+    `InvalidRemoteResponseError`, que o servico classifica como **ambiguo** e
+    manda para `NEEDS_RECONCILIATION`. Para um 400 isso e chamar uma pessoa para
+    conferir um estado que sabidamente nao mudou.
+    """
+    server.script = [ScriptedResponse(400, {"error": erro})]
+
+    result = make_service(server, store).publish_draft(make_draft())
+
+    assert result.status == STATUS_FAILED_PERMANENT
+    assert result.status != STATUS_NEEDS_RECONCILIATION
+    assert result.error_code == "REQUEST_REJECTED"
+    assert server.publication_count == 1, "400 e permanente; reenviar repete o defeito"
+
+
+@pytest.mark.parametrize("status", [404, 405])
+def test_missing_endpoint_is_permanent_and_names_the_setting(server, store, status):
+    """404/405 e endereco errado, nao rede instavel. Retentar nao cria rota."""
+    server.script = [ScriptedResponse(status, {"error": "not found"})]
+
+    result = make_service(server, store).publish_draft(make_draft())
+
+    assert result.status == STATUS_FAILED_PERMANENT
+    assert result.error_code == "ENDPOINT_NOT_FOUND"
+    assert server.publication_count == 1
+
+    with pytest.raises(EndpointUnavailableError, match="PAYLOAD_INTERNAL_SERVICE_URL"):
+        server.script = [ScriptedResponse(status, {"error": "not found"})]
+        make_client(server).submit_publication({"contractName": "x"})
+
+
+def test_400_message_never_echoes_the_request_body(server):
+    """A recusa vai para o log; o corpo recusado carrega materia inedita."""
+    server.script = [ScriptedResponse(400, {"error": "invalid_body", "echo": "TEXTO-INEDITO"})]
+
+    with pytest.raises(BadRequestError) as exc:
+        make_client(server).submit_publication({"title": "TEXTO-INEDITO"})
+
+    assert "TEXTO-INEDITO" not in str(exc.value)
+    assert "invalid_body" in str(exc.value)
+
+
+# ===========================================================================
+# Teto de 2 MiB do PEDIDO
+# ===========================================================================
+
+
+def test_oversized_request_never_reaches_the_network(server):
+    """O destino recusaria com 400; medir aqui poupa subir 2 MiB para ouvir nao."""
+    gigante = {"contractName": "x", "enchimento": "a" * (MAX_REQUEST_BYTES + 1)}
+
+    with pytest.raises(RequestTooLargeError) as exc:
+        make_client(server).submit_publication(gigante)
+
+    assert server.publication_count == 0, "corpo acima do teto foi enviado assim mesmo"
+    assert str(MAX_REQUEST_BYTES) in str(exc.value)
+
+
+def test_a_body_under_the_ceiling_still_goes_through(server, store):
+    """Controle NEGATIVO: sem ele, a guarda poderia recusar qualquer pedido."""
+    server.script = [ScriptedResponse(201, published_body())]
+
+    result = make_service(server, store).publish_draft(make_draft())
+
+    assert result.published
+    assert server.publication_count == 1
+
+
+def test_the_size_guard_measures_the_bytes_actually_sent(server):
+    """Acento ocupa mais de um byte em UTF-8, e o teto do Cinerie e em BYTES.
+
+    Medir caracteres deixaria passar um corpo que o destino recusa: 1,5 milhao
+    de caracteres acentuados sao 3 MiB na rede.
+    """
+    # Cada 'ç' ocupa 2 bytes em UTF-8: metade do numero de caracteres do teto
+    # ja o ultrapassa em bytes.
+    corpo = {"contractName": "x", "enchimento": "ç" * (MAX_REQUEST_BYTES // 2 + 10)}
+    assert len(str(corpo)) < MAX_REQUEST_BYTES, "o teste precisa ser menor em CARACTERES"
+
+    with pytest.raises(RequestTooLargeError):
+        make_client(server).submit_publication(corpo)
+
+    assert server.publication_count == 0
 
 
 def test_retryable_503_is_operational(server):

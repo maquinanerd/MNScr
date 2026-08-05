@@ -175,11 +175,52 @@ class InvalidRemoteResponseError(TransportError):
     code = "INVALID_REMOTE_RESPONSE"
 
 
+class BadRequestError(TransportError):
+    """400. O Cinerie recusou o pedido ANTES de olhar o conteudo.
+
+    Duas causas, ambas nossas: ``invalid_json`` (corpo ilegivel) e
+    ``invalid_body`` (corpo vazio ou acima de 2 MiB).
+
+    A distincao que justifica uma classe propria e em relacao a
+    ``InvalidRemoteResponseError``. As duas sao permanentes, mas so aquela e
+    **ambigua**: la o pedido pode ter sido aplicado e nao ha como saber, entao o
+    trabalho vai para reconciliacao humana. Aqui nao ha ambiguidade nenhuma — o
+    contrato garante que nada e persistido, e o defeito e do lado de ca.
+    Mandar isto para reconciliacao chamaria uma pessoa para conferir um estado
+    remoto que sabidamente nao mudou.
+    """
+
+    code = "REQUEST_REJECTED"
+
+
+class RequestTooLargeError(BadRequestError):
+    """Corpo acima do teto de 2 MiB do Cinerie.
+
+    Levantado ANTES do envio. O destino responderia 400 ``invalid_body``, e o
+    round-trip so confirmaria o que ja da para medir aqui — com a diferenca de
+    que a mensagem local diz o tamanho, e a remota nao.
+    """
+
+    code = "REQUEST_TOO_LARGE"
+
+
+class EndpointUnavailableError(TransportError):
+    """404 ou 405: o caminho nao existe, ou nao aceita este metodo.
+
+    Nao e falha de rede nem de conteudo — e endereco errado, ou um Cinerie sem o
+    endpoint interno publicado. Retentar nao constroi rota, e o pedido nunca
+    chegou a ser avaliado.
+    """
+
+    code = "ENDPOINT_NOT_FOUND"
+
+
 RETRYABLE_STATUS_CODES: Final[FrozenSet[int]] = frozenset({408, 429, 500, 502, 504})
 
 
 __all__ = [
     "AuthenticationError",
+    "BadRequestError",
     "BlockedByPolicyError",
     "CinerieConnectionError",
     "CinerieError",
@@ -187,6 +228,7 @@ __all__ = [
     "ConfigurationError",
     "ContractArtifactError",
     "ContractMismatchError",
+    "EndpointUnavailableError",
     "ForbiddenFieldError",
     "InvalidRemoteResponseError",
     "NonRetryableServerError",
@@ -195,6 +237,7 @@ __all__ = [
     "RETRYABLE_STATUS_CODES",
     "RateLimitedError",
     "RequestBuildError",
+    "RequestTooLargeError",
     "SchemaValidationError",
     "ServerError",
     "TransportError",

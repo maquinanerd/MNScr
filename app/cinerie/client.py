@@ -23,14 +23,17 @@ import requests
 
 from .errors import (
     AuthenticationError,
+    BadRequestError,
     CinerieConnectionError,
     CinerieTimeoutError,
     ConfigurationError,
+    EndpointUnavailableError,
     InvalidRemoteResponseError,
     NonRetryableServerError,
     OperationalError,
     PermissionError_,
     RateLimitedError,
+    RequestTooLargeError,
     ServerError,
 )
 from .outcomes import OPERATIONAL_ERROR, PublicationResult, parse_result
@@ -46,6 +49,27 @@ AUTH_SCHEME: str = "service-accounts API-Key"
 #: Teto do corpo aceito na resposta. Uma resposta gigante e defeito, e ler tudo
 #: antes de descobrir isso e como um cliente vira vetor de exaustao de memoria.
 MAX_RESPONSE_BYTES: int = 1 * 1024 * 1024
+
+#: Teto do corpo do PEDIDO — espelha o `MAX_REQUEST_BYTES` do Cinerie.
+#:
+#: Distinto de `MAX_RESPONSE_BYTES`, e nao por simetria: este numero nao e nosso.
+#: E a regra do destino, que acima dele responde `400 invalid_body` sem olhar o
+#: conteudo. Medir antes de enviar troca um round-trip e uma mensagem generica
+#: por uma recusa local que diz o tamanho — e um corpo de 2 MiB e caro de subir
+#: so para ouvir "nao".
+MAX_REQUEST_BYTES: int = 2 * 1024 * 1024
+
+
+def _remote_error(body: Any) -> Optional[str]:
+    """O campo ``error`` da recusa (``invalid_json``, ``invalid_body``).
+
+    So o codigo, nunca o corpo inteiro: a mensagem de erro vai para o log, e o
+    corpo de um pedido recusado carrega materia inedita.
+    """
+    if not isinstance(body, Mapping):
+        return None
+    value = body.get("error")
+    return value.strip()[:60] if isinstance(value, str) and value.strip() else None
 
 
 def _safe_url(url: str) -> str:
@@ -144,12 +168,21 @@ class CinerieClient:
         url = self.config.url_for(path)
         caller = self._session if self._session is not None else requests
 
+        # Serializa UMA vez e mede o que sera realmente enviado. Medir o dict, ou
+        # medir uma segunda serializacao, mediria outra coisa.
+        encoded = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+        if encoded is not None and len(encoded) > MAX_REQUEST_BYTES:
+            raise RequestTooLargeError(
+                f"corpo de {len(encoded)} bytes acima do teto de {MAX_REQUEST_BYTES} "
+                f"do Cinerie; nada foi enviado"
+            )
+
         try:
             response = caller.request(
                 method,
                 url,
                 headers=self._headers(),
-                data=json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None,
+                data=encoded,
                 timeout=self.config.timeout_seconds,
                 verify=self.config.verify_tls,
             )
@@ -182,7 +215,7 @@ class CinerieClient:
     def fetch_contracts(self) -> Dict[str, Any]:
         """Manifesto de contratos do Cinerie."""
         status, body, _ = self._request("GET", CONTRACTS_PATH)
-        self._raise_for_transport_status(status, body, headers={})
+        self._raise_for_transport_status(status, body, headers={}, path=CONTRACTS_PATH)
         if not isinstance(body, Mapping) or not isinstance(body.get("contracts"), list):
             raise InvalidRemoteResponseError("manifesto de contratos em formato inesperado")
         return dict(body)
@@ -210,7 +243,7 @@ class CinerieClient:
         if result is not None and result.outcome != OPERATIONAL_ERROR:
             return result
 
-        self._raise_for_transport_status(status, body, headers=headers)
+        self._raise_for_transport_status(status, body, headers=headers, path=PUBLICATIONS_PATH)
 
         # 2xx sem desfecho reconhecivel: o pedido pode ter sido aplicado.
         # Presumir sucesso publicaria as cegas; presumir falha e retentar
@@ -231,7 +264,7 @@ class CinerieClient:
         return None
 
     def _raise_for_transport_status(
-        self, status: int, body: Any, *, headers: Mapping[str, str]
+        self, status: int, body: Any, *, headers: Mapping[str, str], path: str = ""
     ) -> None:
         if 200 <= status < 300:
             return
@@ -239,11 +272,23 @@ class CinerieClient:
         retry_after = self._retry_after(headers)
         remote_code = body.get("code") if isinstance(body, Mapping) else None
 
+        if status == 400:
+            # `invalid_json` ou `invalid_body`. O contrato garante que nada foi
+            # persistido, entao isto e defeito PERMANENTE nosso — e nao um
+            # estado remoto incerto que precise de reconciliacao humana.
+            raise BadRequestError(
+                f"Cinerie recusou o pedido (400, {_remote_error(body) or 'sem codigo'})"
+            )
         if status == 401:
             raise AuthenticationError("Cinerie recusou a credencial (401)")
         if status == 403:
             raise PermissionError_(
                 "service account sem o escopo editorial_auto_publish (403)"
+            )
+        if status in (404, 405):
+            raise EndpointUnavailableError(
+                f"Cinerie nao expoe {path or 'o caminho pedido'} ({status}); confira "
+                f"PAYLOAD_INTERNAL_SERVICE_URL e se o endpoint interno esta publicado"
             )
         if status == 429:
             # Um 429 que chega ate aqui NAO e `DEFERRED`: o desfecho do portao
@@ -275,6 +320,7 @@ __all__ = [
     "CONTRACTS_PATH",
     "CinerieClient",
     "CinerieConfig",
+    "MAX_REQUEST_BYTES",
     "MAX_RESPONSE_BYTES",
     "PUBLICATIONS_PATH",
 ]
