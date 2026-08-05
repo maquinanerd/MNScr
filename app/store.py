@@ -499,38 +499,91 @@ class Database:
                         logger.warning(f"Item for source '{source_id}' missing both 'id' and 'url', skipping: {item.get('title', 'No Title')}")
                         continue
 
+                # Identidade do evento RSS Prime, lida antes de qualquer dedup.
+                event_key = item.get("event_key")
+                event_revision = item.get("event_revision")
+                if event_revision is None:
+                    event_revision = (item.get("_input_event_ref") or {}).get("revision")
+
+                # A tabela ainda declara `UNIQUE(source_id, external_id)` — a
+                # identidade de antes de existir revisao. Numa revisao nova o
+                # `external_id` se repete (ele vem do id do feed, ou do hash da
+                # URL, e nenhum dos dois muda quando o texto e corrigido), entao
+                # a constraint recusava a linha no INSERT mesmo depois de todo o
+                # dedup ter liberado. E a recusa nao ficava contida no item: a
+                # IntegrityError cai no `except sqlite3.Error` la embaixo, que
+                # faz rollback e devolve lista vazia — ou seja, derrubava com ela
+                # as outras noticias ja aceitas naquela rodada. Elas voltam na
+                # rodada seguinte, porque nada foi commitado, mas a rodada
+                # inteira e perdida por causa de um item.
+                #
+                # Carregar a revisao no `external_id` faz a constraint legada
+                # dizer o que ela deveria dizer: uma linha por VERSAO do item.
+                # `external_id` so e produzido e comparado aqui dentro, entao a
+                # mudanca nao vaza para nenhum outro consumidor.
+                if event_key and event_revision is not None:
+                    ext_id = f"{ext_id}#rev{int(event_revision)}"
+
                 already_seen = False
                 item_url = item.get("url") or ""
                 is_superfeed_like_item = _is_superfeed_like_item(item)
 
+                # Identidade operacional versionada do evento RSS Prime.
+                #
+                # `event_key` diz QUAL assunto; `revision` diz QUAL versao dele.
+                # Quando o item traz os dois, eles SAO a identidade do trabalho, e
+                # a resposta deles e final: os dedups abaixo existem para
+                # reconhecer repeticao do MESMO trabalho, e uma revisao nova nao e
+                # o mesmo trabalho — ela existe justamente porque a materia mudou.
+                #
+                # A precedencia e o ponto. Sem ela a revisao 2 era liberada aqui e
+                # bloqueada logo adiante, por um de dois caminhos que nao entendem
+                # versao: `cluster_signature`, que e hash do conjunto de URLs e
+                # portanto identica entre revisoes que nao mudaram de fonte, e
+                # source_id + external_id, estaveis pelo mesmo motivo. O item
+                # sumia sem erro nenhum — para o pipeline, nada havia chegado.
+                versioned_identity_is_new = False
+                if event_key and event_revision is not None:
+                    cursor.execute(
+                        "SELECT id FROM seen_articles WHERE event_key = ? AND event_revision = ?",
+                        (event_key, int(event_revision)),
+                    )
+                    if cursor.fetchone() is not None:
+                        # Mesma revisao ja aceita: nao pode virar segunda tarefa,
+                        # nem sob concorrencia (o indice unico e a rede final).
+                        already_seen = True
+                    else:
+                        versioned_identity_is_new = True
+
                 # Fallback coberto por Superfeed: bloqueia apenas a URL especifica.
-                if not is_superfeed_like_item and item_url and self.is_url_covered(item_url):
+                if (
+                    not versioned_identity_is_new
+                    and not is_superfeed_like_item
+                    and item_url
+                    and self.is_url_covered(item_url)
+                ):
                     already_seen = True
                     logger.info(
                         f"[SUPERFEED_COVERAGE] Fallback bloqueado porque URL ja foi coberta: {item_url}"
                     )
 
-                # Dedup por identidade versionada do evento RSS Prime.  Uma
-                # revisao nova e trabalho novo; a mesma revisao nao pode gerar
-                # uma segunda tarefa, mesmo sob concorrencia.
-                if not already_seen and item.get("is_cluster") and item.get("event_key"):
-                    event_revision = item.get("event_revision")
-                    if event_revision is None:
-                        event_revision = (item.get("_input_event_ref") or {}).get("revision")
-                    if event_revision is None:
-                        cursor.execute(
-                            "SELECT id FROM seen_articles WHERE event_key = ? AND event_revision IS NULL",
-                            (item["event_key"],),
-                        )
-                    else:
-                        cursor.execute(
-                            "SELECT id FROM seen_articles WHERE event_key = ? AND event_revision = ?",
-                            (item["event_key"], int(event_revision)),
-                        )
+                # Evento sem revisao declarada (feed legado): da para saber que o
+                # assunto ja foi visto, mas nao qual versao dele. Comportamento
+                # preservado — bloqueia por `event_key` com revisao nula.
+                if (
+                    not already_seen
+                    and event_revision is None
+                    and item.get("is_cluster")
+                    and event_key
+                ):
+                    cursor.execute(
+                        "SELECT id FROM seen_articles WHERE event_key = ? AND event_revision IS NULL",
+                        (event_key,),
+                    )
                     already_seen = cursor.fetchone() is not None
 
                 # Dedup estrutural por assinatura de cluster.
-                if not already_seen and item.get("cluster_signature"):
+                if not already_seen and not versioned_identity_is_new and item.get("cluster_signature"):
                     cursor.execute(
                         "SELECT id, status FROM seen_articles WHERE cluster_signature = ?",
                         (item["cluster_signature"],)
@@ -543,7 +596,7 @@ class Database:
                         )
 
                 # Dedup padrão por source_id + external_id
-                if not already_seen:
+                if not already_seen and not versioned_identity_is_new:
                     cursor.execute(
                         "SELECT id FROM seen_articles WHERE source_id = ? AND external_id = ?",
                         (source_id, ext_id)
