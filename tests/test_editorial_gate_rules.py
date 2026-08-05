@@ -183,16 +183,25 @@ def test_missing_prompt_version_does_not_trigger_when_present(policy):
     assert not run("GATE_MISSING_PROMPT_VERSION", make_draft(), policy).triggered
 
 
+@pytest.fixture
+def own_domains(monkeypatch):
+    """A lista de domínios nossos vem de configuração, não do .env da máquina."""
+    import app.config
+
+    monkeypatch.setattr(app.config, "OWN_CMS_DOMAINS", ["cinerie-legado.example"])
+    return app.config.OWN_CMS_DOMAINS
+
+
 @pytest.mark.parametrize(
     "body",
     [
         '<p>x</p><!-- wp:image --><figure></figure><!-- /wp:image -->',
         '<p>x</p><img class="wp-image-1234" src="https://a.example/x.jpg">',
-        '<p>x</p><img src="https://a.example/wp-content/uploads/2026/x.jpg">',
+        '<p>x</p><img src="https://cinerie-legado.example/wp-content/uploads/2026/x.jpg">',
     ],
-    ids=["bloco-gutenberg", "classe-wp-image", "url-wp-content"],
+    ids=["bloco-gutenberg", "classe-wp-image", "url-wp-content-nossa"],
 )
-def test_forbidden_wordpress_markup_triggers(policy, body):
+def test_forbidden_wordpress_markup_triggers(policy, own_domains, body):
     draft = make_draft()
     draft.content.body_html = body
     assert run("GATE_FORBIDDEN_WORDPRESS_MARKUP", draft, policy).triggered
@@ -200,6 +209,27 @@ def test_forbidden_wordpress_markup_triggers(policy, body):
 
 def test_forbidden_wordpress_markup_does_not_trigger_on_clean_html(policy):
     assert not run("GATE_FORBIDDEN_WORDPRESS_MARKUP", make_draft(), policy).triggered
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["screenrant.com", "comicbook.com", "movieweb.com"],
+    ids=["screenrant", "comicbook", "movieweb"],
+)
+def test_upload_url_de_fonte_wordpress_externa_nao_bloqueia(policy, own_domains, host):
+    """A fonte também é WordPress: a imagem dela não é vazamento nosso."""
+    draft = make_draft()
+    draft.content.body_html = f'<p>x</p><img src="https://{host}/wp-content/uploads/2026/08/a.jpg">'
+    result = run("GATE_FORBIDDEN_WORDPRESS_MARKUP", draft, policy)
+    assert not result.triggered
+
+
+def test_evidencia_da_url_de_upload_nomeia_a_url_bloqueada(policy, own_domains):
+    draft = make_draft()
+    draft.content.body_html = '<img src="https://cinerie-legado.example/wp-content/uploads/a.jpg">'
+    result = run("GATE_FORBIDDEN_WORDPRESS_MARKUP", draft, policy)
+    assert result.triggered
+    assert any("cinerie-legado.example/wp-content/uploads/a.jpg" in e for e in result.evidence)
 
 
 @pytest.mark.parametrize(

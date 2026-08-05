@@ -19,8 +19,8 @@ from urllib.parse import urlparse
 from app.editorial.models import (
     _WP_BLOCK_PATTERN,
     _WP_IMAGE_CLASS_PATTERN,
-    _WP_UPLOAD_PATTERN,
     EditorialDraft,
+    own_cms_upload_urls,
 )
 from app.editorial.states import (
     EVIDENCE_CONFLICTING,
@@ -275,8 +275,10 @@ def _find_cms_keys(payload: Any, depth: int = 0) -> List[str]:
 def rule_forbidden_wordpress_markup(draft, policy, context) -> EditorialRuleResult:
     body = draft.content.body_html or ""
     found: List[str] = []
-    if _WP_UPLOAD_PATTERN.search(body):
-        found.append("URL /wp-content/uploads/ no corpo")
+    # Só a URL de upload do NOSSO CMS: a mesma URL vinda da fonte (que também
+    # roda WordPress) é dado de terceiro, não vazamento nosso.
+    for url in own_cms_upload_urls(body):
+        found.append(f"URL /wp-content/uploads/ de dominio proprio: {url}")
     if _WP_IMAGE_CLASS_PATTERN.search(body):
         found.append("classe wp-image-* no corpo")
     if _WP_BLOCK_PATTERN.search(body):

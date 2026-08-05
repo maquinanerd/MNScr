@@ -87,6 +87,44 @@ PAYLOAD_CONFIG: Dict[str, Any] = {
 # de publicação.
 PUBLISHER_DOMAIN = (os.getenv('PUBLISHER_DOMAIN') or '').strip().lower()
 
+
+def _domain_list(raw: str) -> List[str]:
+    """Lista de hosts a partir de uma variável separada por vírgula."""
+    hosts = []
+    for chunk in (raw or '').replace(';', ',').split(','):
+        host = chunk.strip().lower().lstrip('.')
+        if host.startswith('www.'):
+            host = host[4:]
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+# Domínios que são NOSSOS. Servem a uma pergunta só: uma URL encontrada no corpo
+# do draft aponta para o nosso CMS, ou para o site da fonte?
+#
+# A distinção existe porque o legado do MNScr e boa parte das fontes que ele lê
+# (ScreenRant, ComicBook, MovieWeb) rodam o mesmo CMS. Um caminho
+# `/wp-content/uploads/` no corpo é vazamento quando o host é nosso, e é apenas
+# a imagem da fonte quando o host é de terceiro. Sem essa lista a guarda mata a
+# matéria pela FONTE, que foi o que aconteceu no ciclo de 05/08.
+#
+# Sem valor embutido: o domínio legado não volta para o código (é exatamente o
+# que TestSecurity proíbe). Ele é declarado no .env, e a lista vazia é anunciada
+# no startup porque significa guarda desligada.
+#
+# PUBLISHER_DOMAIN entra automaticamente: se ele é o nosso domínio editorial,
+# ele é nosso aqui também.
+OWN_CMS_DOMAINS: List[str] = _domain_list(
+    (os.getenv('MNSCR_OWN_CMS_DOMAINS') or '') + ',' + PUBLISHER_DOMAIN
+)
+
+if not OWN_CMS_DOMAINS:
+    logger.warning(
+        '[CONFIG] MNSCR_OWN_CMS_DOMAINS vazio: a guarda de vazamento de CMS '
+        'proprio nao tem dominio para reconhecer e nao vai bloquear nada.'
+    )
+
 # --- Contrato de entrada (MS-2) ---
 # Contrato canônico do RSS Prime. O feed legado ainda é aceito por um adaptador
 # temporário; quando MNSCR_REQUIRED_INPUT_CONTRACT for fixado em v1, ou quando
