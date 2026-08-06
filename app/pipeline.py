@@ -1747,7 +1747,9 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             duration_ms=int((time.perf_counter() - _article_started_at) * 1000),
                             input_event=_resolve_input_event(art_data),
                         )
-                        draft.seo_source = dict(art_data.get('_seo_source') or {})
+                        draft.seo_source = _persistent_cinerie_seo_source(
+                            art_data.get('_seo_source')
+                        )
 
                         blocking_errors = validate_draft(draft)
                         if blocking_errors:
@@ -2167,6 +2169,22 @@ def _public_url_for_slug(slug, *, base):
         return None
 
     return f"{base_text.rstrip('/')}/{slug_text}"
+
+
+def _persistent_cinerie_seo_source(source: Any) -> Dict[str, Any]:
+    """Persiste só a entrada SEO que o contrato consome, nunca o JSON cru da IA."""
+    from .cinerie.seo import migrate_legacy_seo
+
+    if not isinstance(source, dict):
+        return {}
+    persisted = migrate_legacy_seo(source)
+    schema_type = source.get("schemaTypeRecommendation")
+    if isinstance(schema_type, str) and schema_type.strip():
+        persisted["schemaTypeRecommendation"] = schema_type.strip()
+    alt_texts = source.get("image_alt_texts")
+    if isinstance(alt_texts, (dict, list)):
+        persisted["image_alt_texts"] = alt_texts
+    return persisted
 
 
 def _publish_to_cinerie(draft, art_data):
