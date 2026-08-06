@@ -121,7 +121,7 @@ class TestSecurity:
     def test_key_logging_never_exposes_the_prefix(self):
         source = (REPO_ROOT / "app" / "config.py").read_text(encoding="utf-8")
         assert "key[:15]" not in source
-        assert 'f"  [{idx}] ****{key[-4:]}"' in source
+        assert "key[-4:]" not in source
 
     def test_no_active_reference_to_the_legacy_domain(self):
         offenders = []

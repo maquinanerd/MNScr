@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
@@ -17,7 +17,8 @@ from dotenv import load_dotenv
 #
 # O `.env` continua servindo ao que serve bem: COMPLETAR o que o ambiente não
 # definiu, que é o caso da máquina de desenvolvimento.
-load_dotenv()
+if os.getenv("PYTHON_DOTENV_DISABLED", "").strip().lower() not in ("1", "true", "yes"):
+    load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -169,8 +170,8 @@ CINERIE_PUBLIC_BASE_URL = (os.getenv('CINERIE_PUBLIC_BASE_URL') or '').strip()
 
 if not OWN_CMS_DOMAINS:
     logger.warning(
-        '[CONFIG] MNSCR_OWN_CMS_DOMAINS vazio: a guarda de vazamento de CMS '
-        'proprio nao tem dominio para reconhecer e nao vai bloquear nada.'
+        '[CONFIG_FEATURE_SKIPPED] feature=own_cms_leak_guard '
+        'variable=MNSCR_OWN_CMS_DOMAINS state=empty'
     )
 
 # --- Contrato de entrada (MS-2) ---
@@ -219,7 +220,7 @@ FACTUAL_ASSESSMENT_MODE = (
     os.getenv('MNSCR_FACTUAL_ASSESSMENT_MODE') or 'hybrid'
 ).strip().lower()
 FACTUAL_PROMPT_VERSION = (
-    os.getenv('MNSCR_FACTUAL_PROMPT_VERSION') or 'factual-claim-extraction-v1'
+    os.getenv('MNSCR_FACTUAL_PROMPT_VERSION') or 'factual-claim-extraction-v2'
 ).strip()
 FACTUAL_PROMPT_DIR = (
     os.getenv('MNSCR_FACTUAL_PROMPT_DIR') or 'config/prompts'
@@ -477,9 +478,7 @@ def _load_ai_keys() -> List[str]:
     result = [keys[k] for k in sorted_key_names]
 
     logger.info(f"CARREGADAS {len(result)} chaves de API")
-    for idx, key in enumerate(result, 1):
-        # Nunca registrar o prefixo da chave: apenas os 4 últimos caracteres.
-        logger.info(f"  [{idx}] ****{key[-4:]}")
+    # Valores, prefixos e sufixos nunca entram no log. Nome e estado bastam.
 
     return result
 
@@ -566,6 +565,80 @@ TMDB_CONFIG = {
 }
 
 
+# Tabela operacional auditável. São nomes, nunca valores.
+OPERATION_MODE_REQUIREMENTS = {
+    "local": (
+        "GEMINI_API_KEYS",
+        "MNSCR_OWN_CMS_DOMAINS",
+    ),
+    "cinerie_delivery": (
+        "GEMINI_API_KEYS",
+        "MNSCR_OWN_CMS_DOMAINS",
+        "MNSCR_DELIVERY_MODE",
+        "PAYLOAD_INTERNAL_SERVICE_URL",
+        "MNSCR_PAYLOAD_API_KEY",
+        "MNSCR_PUBLIC_AUTHOR_ID",
+        "CINERIE_PUBLIC_BASE_URL",
+    ),
+    "autopublish": (
+        "GEMINI_API_KEYS",
+        "MNSCR_OWN_CMS_DOMAINS",
+        "MNSCR_DELIVERY_MODE",
+        "PAYLOAD_INTERNAL_SERVICE_URL",
+        "MNSCR_PAYLOAD_API_KEY",
+        "MNSCR_PUBLIC_AUTHOR_ID",
+        "CINERIE_PUBLIC_BASE_URL",
+    ),
+}
+
+
+def operation_mode_config_states() -> Dict[str, bool]:
+    """Estado presença/ausência; nenhum valor sai desta fronteira."""
+    return {
+        "GEMINI_API_KEYS": bool(AI_API_KEYS),
+        "MNSCR_OWN_CMS_DOMAINS": bool(OWN_CMS_DOMAINS),
+        "MNSCR_DELIVERY_MODE": bool(MNSCR_DELIVERY_MODE),
+        "PAYLOAD_INTERNAL_SERVICE_URL": bool(PAYLOAD_INTERNAL_SERVICE_URL),
+        "MNSCR_PAYLOAD_API_KEY": bool(MNSCR_PAYLOAD_API_KEY),
+        "MNSCR_PUBLIC_AUTHOR_ID": bool(MNSCR_PUBLIC_AUTHOR_ID),
+        "CINERIE_PUBLIC_BASE_URL": bool(CINERIE_PUBLIC_BASE_URL),
+    }
+
+
+def current_operation_mode() -> str:
+    if MNSCR_DELIVERY_MODE == "AUTO_PUBLISH":
+        return "autopublish"
+    if MNSCR_DELIVERY_MODE == "DRAFT" and PAYLOAD_INTERNAL_SERVICE_URL:
+        return "cinerie_delivery"
+    return "local"
+
+
+def get_operation_mode_config_issues(
+    *,
+    mode: Optional[str] = None,
+    environment: Optional[str] = None,
+    states: Optional[Dict[str, bool]] = None,
+) -> List[str]:
+    resolved_mode = mode or current_operation_mode()
+    if resolved_mode not in OPERATION_MODE_REQUIREMENTS:
+        return [f"modo operacional desconhecido: {resolved_mode}"]
+    resolved_environment = (environment or MNSCR_ENVIRONMENT).lower()
+    if not resolved_environment.startswith("prod"):
+        return []
+    resolved_states = states or operation_mode_config_states()
+    return [
+        f"{name} é obrigatória em produção no modo {resolved_mode} (state=empty)"
+        for name in OPERATION_MODE_REQUIREMENTS[resolved_mode]
+        if not resolved_states.get(name, False)
+    ]
+
+
+def validate_operation_mode_config(**kwargs: Any) -> None:
+    issues = get_operation_mode_config_issues(**kwargs)
+    if issues:
+        raise ValueError("Configuração operacional inválida:\n- " + "\n- ".join(issues))
+
+
 # --- AI Validator (segunda camada de IA) ---
 AI_VALIDATOR_CONFIG = {
     'enabled': os.getenv('AI_VALIDATOR_ENABLED', 'true').lower() == 'true',
@@ -584,6 +657,7 @@ def get_runtime_config_issues() -> List[str]:
     ``MNSCR_OUTPUT_MODE=wordpress`` is rejected outright.
     """
     issues: List[str] = []
+    issues.extend(get_operation_mode_config_issues())
 
     from app.submitters import OutputModeError, resolve_output_mode
 

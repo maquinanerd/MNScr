@@ -2102,6 +2102,10 @@ def _deliver_draft(draft, art_data):
     from .delivery_service import DeliveryService
 
     if not PAYLOAD_CMS_ENABLED:
+        logger.info(
+            "[CONFIG_FEATURE_SKIPPED] feature=draft_delivery "
+            "variable=PAYLOAD_CMS_ENABLED state=disabled"
+        )
         return None
 
     service = None
@@ -2141,7 +2145,13 @@ def _public_url_for_slug(slug, *, base):
     """
     slug_text = str(slug or "").strip().strip("/")
     base_text = str(base or "").strip()
-    if not slug_text or not base_text:
+    if not slug_text:
+        return None
+    if not base_text:
+        logger.info(
+            "[CONFIG_FEATURE_SKIPPED] feature=internal_link_skipped "
+            "variable=CINERIE_PUBLIC_BASE_URL state=empty"
+        )
         return None
 
     parsed = urlsplit(base_text)
@@ -2149,8 +2159,8 @@ def _public_url_for_slug(slug, *, base):
         # Base mal configurada não vira endereço: o link_store recusaria de
         # qualquer forma, e recusar aqui deixa o motivo mais perto da causa.
         logger.warning(
-            "[LINKS] CINERIE_PUBLIC_BASE_URL invalida (%r): link interno nao sera gravado",
-            base_text,
+            "[CONFIG_FEATURE_SKIPPED] feature=internal_link_skipped "
+            "variable=CINERIE_PUBLIC_BASE_URL state=invalid",
         )
         return None
 
