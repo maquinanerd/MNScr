@@ -22,11 +22,14 @@ def _scanned_sources():
 def _isolate_from_local_dotenv(monkeypatch):
     """Impede que o `.env` da maquina decida o resultado destes testes.
 
-    `app/config.py` chama `load_dotenv(override=True)` no nivel do modulo, e
-    varios testes daqui fazem `importlib.reload(config)` depois de um
-    `monkeypatch.setenv`. O reload reexecuta o `load_dotenv`, que com
-    `override=True` SOBRESCREVE justamente a variavel que o teste acabou de
-    definir — o valor do arquivo vence o valor do teste.
+    `app/config.py` carrega o `.env` no nivel do modulo, e varios testes daqui
+    fazem `importlib.reload(config)` depois de mexer no ambiente. O reload
+    reexecuta o carregamento.
+
+    O caso que sobra depois de `load_dotenv` passar a respeitar o ambiente
+    (`override=False`) e o do `monkeypatch.delenv`: a variavel apagada pelo teste
+    fica AUSENTE, e ausente e exatamente o que o `.env` tem permissao para
+    preencher. O arquivo entao repoe o que o teste quis remover.
 
     Enquanto existiu um `.env` com `GEMINI_KEY_1` real ao alcance da busca, isso
     passou despercebido: a chave do arquivo satisfazia a assercao por acaso. Num

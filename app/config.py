@@ -6,8 +6,18 @@ from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
-# Carrega variáveis de ambiente de um arquivo .env
-load_dotenv(override=True)  # override=True garante que .env sobrescreve variaveis do sistema
+# Carrega variáveis de ambiente de um arquivo .env.
+#
+# `override=False` (o padrão) porque o ambiente REAL manda. Todo orquestrador
+# que roda isto — EasyPanel, Docker, systemd, CI — passa configuração por
+# variável de ambiente, e com `override=True` um `.env` esquecido na imagem
+# vencia silenciosamente todos eles: a troca de chave, banco ou endpoint feita
+# no painel simplesmente não tinha efeito, e o log exibia o valor antigo como se
+# fosse o pedido.
+#
+# O `.env` continua servindo ao que serve bem: COMPLETAR o que o ambiente não
+# definiu, que é o caso da máquina de desenvolvimento.
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
