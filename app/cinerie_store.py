@@ -470,6 +470,41 @@ class CinerieStore:
         row = cursor.fetchone()
         return str(row["payload_article_id"]) if row and row["payload_article_id"] else None
 
+    def has_unmapped_legacy_event(self, event_key: str) -> bool:
+        """Se o evento antecede o mapeamento local de identidade do Cinerie.
+
+        Bancos novos e bancos que ainda nao passaram pela migracao retornam
+        ``False``. A ausencia do marcador nao deve quebrar ferramentas que abrem
+        apenas o store de entrega; quem cria o marcador e ``app.store.Database``.
+        """
+        table = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'seen_articles'"
+        ).fetchone()
+        if table is None:
+            return False
+        columns = {
+            row["name"] for row in self.conn.execute("PRAGMA table_info(seen_articles)")
+        }
+        if "legacy_cinerie_identity_unmapped" in columns:
+            predicate = "legacy_cinerie_identity_unmapped = 1"
+        elif "event_revision" in columns:
+            # Ordem de inicializacao defensiva: CinerieStore pode abrir um banco
+            # de uma versao intermediaria antes de Database aplicar o marcador.
+            predicate = "event_revision IS NULL"
+        else:
+            # Banco verdadeiramente legado: qualquer event_key existente
+            # antecede a identidade por revisao e deve falhar fechado.
+            predicate = "1 = 1"
+        row = self.conn.execute(
+            f"""
+            SELECT 1 FROM seen_articles
+            WHERE event_key = ? AND {predicate}
+            LIMIT 1
+            """,
+            (event_key,),
+        ).fetchone()
+        return row is not None
+
     #: Estados que voltam para a varredura. `COMPLETED`, `BLOCKED`,
     #: `FAILED_PERMANENT` e `AWAITING_HUMAN` ficam de fora de proposito: os dois
     #: primeiros ja terminaram, o terceiro nao melhora com repeticao e o quarto

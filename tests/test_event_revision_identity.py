@@ -13,8 +13,12 @@ revisao ser descartada depois de o dedup versionado ter dito que ela e nova.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
+from app.cinerie_service import CinerieService
+from app.cinerie_store import STATUS_BLOCKED, CinerieStore
 from app.contracts.rssprime_event_v1 import RssPrimeEventV1
 from app.event_store import EventStore
 from app.feeds import cluster_signature
@@ -174,3 +178,90 @@ def test_duas_revisoes_aceitas_viram_dois_trabalhos_apos_reinicio(tmp_path):
         linha = db.get_article_by_event_key(r1["event_key"], revisao)
         assert linha is not None, f"revisao {revisao} nao tem linha propria"
     db.close()
+
+
+def _legacy_database(path: Path) -> None:
+    """Banco anterior a ``event_revision``, com uma revisao historica inequívoca."""
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE seen_articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            url TEXT,
+            status TEXT DEFAULT 'DRAFT_GENERATED',
+            event_key TEXT,
+            UNIQUE(source_id, external_id)
+        );
+        CREATE TABLE rssprime_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_key TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            validation_status TEXT NOT NULL,
+            normalized_payload_json TEXT,
+            UNIQUE(event_key, revision)
+        );
+        INSERT INTO seen_articles
+            (source_id, external_id, url, status, event_key)
+        VALUES
+            ('rssprime_movies', 'legacy-1', 'https://exemplo.test/legacy',
+             'DRAFT_GENERATED', 'evt-legado-cinerie');
+        INSERT INTO rssprime_events
+            (event_key, revision, validation_status, normalized_payload_json)
+        VALUES
+            ('evt-legado-cinerie', 1, 'VALIDATED', '{}');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_migracao_marca_legado_e_backfill_so_quando_revisao_e_inequivoca(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    _legacy_database(db_path)
+
+    db = Database(str(db_path))
+    row = db.conn.execute(
+        """
+        SELECT event_revision, legacy_cinerie_identity_unmapped
+        FROM seen_articles WHERE event_key = 'evt-legado-cinerie'
+        """
+    ).fetchone()
+
+    assert row["event_revision"] == 1
+    assert row["legacy_cinerie_identity_unmapped"] == 1
+    db.close()
+
+
+class _MustNotBeCalled:
+    def __getattr__(self, name):
+        raise AssertionError(f"Cinerie tentou usar {name} apesar da guarda legada")
+
+
+def test_reemissao_rev2_legada_sem_mapeamento_nao_publica_segunda_materia(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    _legacy_database(db_path)
+
+    # O comando de despacho pode abrir CinerieStore sem antes abrir Database.
+    # A guarda precisa falhar fechada mesmo nessa ordem de inicializacao.
+    store = CinerieStore(str(db_path))
+    service = CinerieService(
+        store=store,
+        client=_MustNotBeCalled(),
+        preflight=_MustNotBeCalled(),
+        public_author_id="12",
+        attribution_mode="newsroom",
+    )
+    draft_rev2 = SimpleNamespace(
+        draft_id="draft-legado-rev2",
+        event_key="evt-legado-cinerie",
+        revision=2,
+    )
+
+    result = service.publish_draft(draft_rev2)
+
+    assert result.status == STATUS_BLOCKED
+    assert result.error_code == "LEGACY_CINERIE_IDENTITY_UNMAPPED"
+    assert store.conn.execute("SELECT COUNT(*) FROM cinerie_publications").fetchone()[0] == 0
+    store.close()

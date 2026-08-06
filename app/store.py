@@ -102,10 +102,22 @@ class Database:
     def _ensure_seen_articles_schema(self):
         """Apply lightweight migrations required by the current runtime."""
         cursor = self._get_cursor()
+        # O marcador precisa nascer ANTES de ``event_revision`` ser preenchida:
+        # depois do backfill nao ha como distinguir uma revisao historica de uma
+        # linha criada nativamente pelo runtime novo. Bancos que passaram por uma
+        # versao intermediaria (coluna de revisao presente, mas ainda nula) tambem
+        # sao cobertos de forma conservadora.
+        legacy_marker_was_missing = not self._column_exists(
+            "seen_articles", "legacy_cinerie_identity_unmapped"
+        )
 
         missing_columns = {
             "event_key": "ALTER TABLE seen_articles ADD COLUMN event_key TEXT",
             "event_revision": "ALTER TABLE seen_articles ADD COLUMN event_revision INTEGER",
+            "legacy_cinerie_identity_unmapped": (
+                "ALTER TABLE seen_articles ADD COLUMN "
+                "legacy_cinerie_identity_unmapped INTEGER NOT NULL DEFAULT 0"
+            ),
             "is_cluster": "ALTER TABLE seen_articles ADD COLUMN is_cluster INTEGER DEFAULT 0",
             "cluster_size": "ALTER TABLE seen_articles ADD COLUMN cluster_size INTEGER DEFAULT 1",
             "sources_json": "ALTER TABLE seen_articles ADD COLUMN sources_json TEXT",
@@ -157,6 +169,9 @@ class Database:
                 logger.info(f"Applying SQLite migration: adding seen_articles.{column_name}")
                 cursor.execute(sql)
 
+        if legacy_marker_was_missing:
+            self._mark_and_backfill_legacy_event_revisions()
+
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_seen_articles_event_key ON seen_articles(event_key)"
         )
@@ -185,6 +200,61 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_seen_articles_draft_status ON seen_articles(draft_status)"
         )
         self._backfill_seen_articles_runtime_metadata()
+
+    def _mark_and_backfill_legacy_event_revisions(self) -> None:
+        """Marca identidade Cinerie desconhecida e recupera somente revisao certa.
+
+        Uma linha anterior a ``event_revision`` pode corresponder a um artigo que
+        ja existe no Cinerie, mas nao ha ``payload_article_id`` local para montar
+        um ``update``. O marcador faz a entrega falhar fechada ate essa associacao
+        ser reconciliada. O backfill e separado: ele so escreve a revisao quando o
+        historico aceito contem exatamente uma candidata e nao ha duas linhas
+        legadas disputando a mesma identidade.
+        """
+        cursor = self._get_cursor()
+        if not self._table_exists("rssprime_events"):
+            cursor.execute(
+                """
+                UPDATE seen_articles
+                SET legacy_cinerie_identity_unmapped = 1
+                WHERE event_key IS NOT NULL AND event_revision IS NULL
+                """
+            )
+            return
+
+        cursor.execute(
+            """
+            UPDATE seen_articles
+            SET legacy_cinerie_identity_unmapped = 1,
+                event_revision = CASE
+                    WHEN (
+                        SELECT COUNT(DISTINCT re.revision)
+                        FROM rssprime_events re
+                        WHERE re.event_key = seen_articles.event_key
+                          AND re.validation_status = 'VALIDATED'
+                    ) = 1
+                    AND (
+                        SELECT COUNT(*)
+                        FROM seen_articles sibling
+                        WHERE sibling.event_key = seen_articles.event_key
+                          AND sibling.event_revision IS NULL
+                    ) = 1
+                    THEN (
+                        SELECT MIN(re.revision)
+                        FROM rssprime_events re
+                        WHERE re.event_key = seen_articles.event_key
+                          AND re.validation_status = 'VALIDATED'
+                    )
+                    ELSE NULL
+                END
+            WHERE event_key IS NOT NULL AND event_revision IS NULL
+            """
+        )
+        logger.warning(
+            "[LEGACY_CINERIE_GUARD] %s linha(s) legada(s) exigem reconciliacao "
+            "de identidade antes de nova entrega ao Cinerie.",
+            cursor.rowcount,
+        )
 
     @staticmethod
     def _parse_claim_pid(claimed_by: str | None) -> int | None:

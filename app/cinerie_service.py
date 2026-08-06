@@ -169,6 +169,24 @@ class CinerieService:
     ) -> PublicationAttemptResult:
         draft_id = str(getattr(draft, "draft_id", "") or "")
 
+        # 0. Guarda de migracao. Linhas anteriores a ``event_revision`` podem
+        # representar materia que ja existe no Cinerie sem que o id remoto tenha
+        # sido persistido localmente. Nesse estado, escolher ``publish`` para a
+        # rev2 criaria um segundo artigo. Falha fechada antes de preflight/socket;
+        # quando existe mapeamento local, o fluxo normal resolve para ``update``.
+        if self._legacy_event_is_unmapped(draft):
+            event_key = str(getattr(draft, "event_key", "") or "")
+            logger.error(
+                "[cinerie] evento legado %s sem identidade remota mapeada; "
+                "publicacao bloqueada para evitar segundo artigo",
+                event_key,
+            )
+            return PublicationAttemptResult(
+                status=STATUS_BLOCKED,
+                blocked_reasons=["LEGACY_CINERIE_IDENTITY_UNMAPPED"],
+                error_code="LEGACY_CINERIE_IDENTITY_UNMAPPED",
+            )
+
         # 0. Pre-condicoes LOCAIS. Ver `_local_preconditions`.
         missing = _local_preconditions(draft)
         if missing:
@@ -524,6 +542,21 @@ class CinerieService:
             record=existing,
             preflight=preflight,
         )
+
+    def _legacy_event_is_unmapped(self, draft: Any) -> bool:
+        event_key = str(getattr(draft, "event_key", "") or "").strip()
+        guard = getattr(self.store, "has_unmapped_legacy_event", None)
+        if not event_key or guard is None or not guard(event_key):
+            return False
+        try:
+            from app.cinerie.identity import normalize_cluster_id
+
+            cluster_id = normalize_cluster_id(event_key)
+        except RequestBuildError:
+            return False
+        # Um artigo remoto conhecido torna a revisao segura: `_resolve_intent`
+        # abaixo escolhera `update`, nunca uma segunda publicacao.
+        return self.store.published_article_for_cluster(cluster_id) is None
 
     def _resolve_intent(
         self, draft: Any, intent: Optional[str], target_article_id: Optional[str]
