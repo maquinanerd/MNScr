@@ -17,6 +17,8 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.cinerie_service import CinerieService
 from app.cinerie_store import STATUS_BLOCKED, CinerieStore
 from app.contracts.rssprime_event_v1 import RssPrimeEventV1
@@ -289,3 +291,33 @@ def test_startup_refaz_marcacao_se_schema_foi_persistido_antes_do_backfill(tmp_p
     assert row["event_revision"] == 1
     assert row["legacy_cinerie_identity_unmapped"] == 1
     db.close()
+
+
+def test_schema_incompleto_com_marker_zero_ainda_falha_fechado(tmp_path):
+    db_path = tmp_path / "legacy-marker-zero.db"
+    _legacy_database(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE seen_articles ADD COLUMN event_revision INTEGER")
+    conn.execute(
+        "ALTER TABLE seen_articles ADD COLUMN "
+        "legacy_cinerie_identity_unmapped INTEGER NOT NULL DEFAULT 0"
+    )
+    conn.commit()
+    conn.close()
+
+    store = CinerieStore(str(db_path))
+    assert store.has_unmapped_legacy_event("evt-legado-cinerie")
+    store.close()
+
+
+def test_falha_na_migracao_recusa_database_utilizavel(tmp_path, monkeypatch):
+    db_path = tmp_path / "legacy-falha.db"
+    _legacy_database(db_path)
+
+    def fail(_self):
+        raise sqlite3.OperationalError("falha simulada no backfill")
+
+    monkeypatch.setattr(Database, "_mark_and_backfill_legacy_event_revisions", fail)
+
+    with pytest.raises(sqlite3.OperationalError, match="falha simulada"):
+        Database(str(db_path))

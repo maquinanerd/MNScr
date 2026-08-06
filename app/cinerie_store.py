@@ -486,7 +486,11 @@ class CinerieStore:
             row["name"] for row in self.conn.execute("PRAGMA table_info(seen_articles)")
         }
         if "legacy_cinerie_identity_unmapped" in columns:
-            predicate = "legacy_cinerie_identity_unmapped = 1"
+            predicate = (
+                "(legacy_cinerie_identity_unmapped = 1 OR event_revision IS NULL)"
+                if "event_revision" in columns
+                else "legacy_cinerie_identity_unmapped = 1"
+            )
         elif "event_revision" in columns:
             # Ordem de inicializacao defensiva: CinerieStore pode abrir um banco
             # de uma versao intermediaria antes de Database aplicar o marcador.

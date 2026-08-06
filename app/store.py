@@ -77,6 +77,11 @@ class Database:
                 self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"Database schema check failed: {e}", exc_info=True)
+            if self.conn is not None:
+                self.conn.rollback()
+                self.conn.close()
+                self.conn = None
+            raise
 
     def _get_cursor(self):
         """Returns a cursor for the database connection."""
