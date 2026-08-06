@@ -355,6 +355,7 @@ def parse_claim_response(
             normalized_subject=normalize_for_comparison(item.get("subject") or "") or None,
             predicate=normalize_for_comparison(item.get("predicate") or "") or None,
             normalized_value=normalized_value,
+            semantic_evidence_query=normalize_text(item.get("semantic_evidence_query")) or None,
             source_sentence=normalize_text(item.get("source_sentence") or display_text),
             draft_locations=location_list,
             status=S.UNVERIFIED,
@@ -393,7 +394,30 @@ def merge_claims(
     normalized value came from a rule, not from a model.
     """
     merged: Dict[str, FactualClaim] = {}
-    for claim in list(deterministic) + list(semantic):
+    deterministic_list = list(deterministic)
+    for claim in deterministic_list:
+        merged[claim.claim_id] = claim
+
+    for claim in semantic:
+        semantic_text = normalize_for_comparison(claim.display_text)
+        enriched = False
+        for existing in deterministic_list:
+            source_text = normalize_for_comparison(existing.source_sentence or "")
+            same_sentence = bool(semantic_text and semantic_text in source_text)
+            same_value = (
+                not claim.normalized_value
+                or not existing.normalized_value
+                or claim.normalized_value == existing.normalized_value
+            )
+            if same_sentence and same_value and claim.semantic_evidence_query:
+                existing.semantic_evidence_query = claim.semantic_evidence_query
+                for location in claim.draft_locations:
+                    if location not in existing.draft_locations:
+                        existing.draft_locations.append(location)
+                enriched = True
+        if enriched:
+            continue
+
         existing = merged.get(claim.claim_id)
         if existing is None:
             merged[claim.claim_id] = claim

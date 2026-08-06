@@ -59,6 +59,7 @@ class FactualClaim:
     normalized_subject: Optional[str] = None
     predicate: Optional[str] = None
     normalized_value: Optional[str] = None
+    semantic_evidence_query: Optional[str] = None
     source_sentence: Optional[str] = None
     draft_locations: List[str] = dc_field(default_factory=list)
     status: str = S.UNVERIFIED
@@ -79,6 +80,7 @@ class FactualClaim:
         self.normalized_subject = _clean(self.normalized_subject)
         self.predicate = _clean(self.predicate)
         self.normalized_value = _clean(self.normalized_value)
+        self.semantic_evidence_query = _clean(self.semantic_evidence_query)
 
         if self.source_sentence:
             sentence, truncated = truncate_at_safe_boundary(
@@ -133,6 +135,7 @@ class FactualClaim:
             "normalized_subject": self.normalized_subject,
             "predicate": self.predicate,
             "normalized_value": self.normalized_value,
+            "semantic_evidence_query": self.semantic_evidence_query,
             "display_text": normalize_for_comparison(self.display_text),
             "draft_locations": sorted(self.draft_locations),
             "is_material": bool(self.is_material),
@@ -145,6 +148,7 @@ class FactualClaim:
             "normalized_subject": self.normalized_subject,
             "predicate": self.predicate,
             "normalized_value": self.normalized_value,
+            "semantic_evidence_query": self.semantic_evidence_query,
             "display_text": self.display_text,
             "source_sentence": self.source_sentence,
             "draft_locations": list(self.draft_locations),
@@ -164,6 +168,7 @@ class FactualClaim:
             normalized_subject=payload.get("normalized_subject"),
             predicate=payload.get("predicate"),
             normalized_value=payload.get("normalized_value"),
+            semantic_evidence_query=payload.get("semantic_evidence_query"),
             source_sentence=payload.get("source_sentence"),
             draft_locations=list(payload.get("draft_locations") or []),
             status=payload.get("status", S.UNVERIFIED),
@@ -464,7 +469,9 @@ class FactualCoverage:
     unsupported_material_claims: int = 0
     conflicting_material_claims: int = 0
     unverified_material_claims: int = 0
+    unmeasured_material_claims: int = 0
     coverage_ratio: float = 0.0
+    coverage_measured: bool = True
     source_diversity: int = 0
     primary_evidence_count: int = 0
     review_required: bool = True

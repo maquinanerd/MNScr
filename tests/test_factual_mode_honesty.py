@@ -23,6 +23,7 @@ from __future__ import annotations
 from app.editorial import DraftContent, DraftProvenance, EditorialDraft, SourceReference
 from app.factual import states as S
 from app.factual_builder import build_factual_assessment
+from app.factual_store import FactualStore
 
 PT = (
     "A Marvel confirmou que o novo filme dos Vingadores estreia em 1 de maio de 2026. "
@@ -122,11 +123,33 @@ def test_a_mesma_materia_desaba_quando_a_fonte_muda_de_idioma():
         "o volume de evidencia precisa ser comparavel para o teste isolar o idioma"
     )
     assert mesma_lingua.coverage.coverage_ratio > 0.8
-    assert outra_lingua.coverage.coverage_ratio < 0.5, (
-        "se este limite subir, o matcher aprendeu a cruzar idiomas — reveja o "
-        "numero e a decisao editorial que depende dele"
-    )
+    assert outra_lingua.coverage.coverage_measured is False
+    assert outra_lingua.coverage.unmeasured_material_claims > 0
+    assert outra_lingua.coverage.unsupported_material_claims == 0
+    cegos = [
+        c for c in outra_lingua.material_claims
+        if "CROSS_LINGUAL_MATCH_UNAVAILABLE" in c.warnings
+    ]
+    assert cegos
+    assert all(c.status == S.UNVERIFIED for c in cegos)
 
-    # E o ponto que faz do numero uma armadilha: os claims que o verificador nao
-    # conseguiu ler recebem UNSUPPORTED, o mesmo status de uma alucinacao.
-    assert outra_lingua.coverage.unsupported_material_claims > 0
+
+def test_laudo_persistido_preserva_modos_e_cobertura_nao_medida(tmp_path):
+    avaliacao = build_factual_assessment(
+        _draft(), _material(EN), mode=S.MODE_HYBRID, claim_response=None
+    )
+    store = FactualStore(db_path=str(tmp_path / "factual.db"))
+    try:
+        store.save_assessment(avaliacao)
+        reloaded = store.get_assessment(avaliacao.draft_id)
+    finally:
+        store.close()
+
+    assert reloaded is not None
+    assert reloaded.requested_mode == S.MODE_HYBRID
+    assert reloaded.effective_mode == S.MODE_DETERMINISTIC
+    assert reloaded.coverage.coverage_measured is False
+    assert (
+        reloaded.coverage.unmeasured_material_claims
+        == avaliacao.coverage.unmeasured_material_claims
+    )

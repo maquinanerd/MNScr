@@ -66,6 +66,8 @@ class FactualStore:
                 contract_version TEXT,
                 version TEXT,
                 mode TEXT,
+                requested_mode TEXT,
+                effective_mode TEXT,
                 assessment_hash TEXT NOT NULL,
                 coverage_ratio REAL,
                 total_material_claims INTEGER DEFAULT 0,
@@ -74,6 +76,8 @@ class FactualStore:
                 unsupported_material_claims INTEGER DEFAULT 0,
                 conflicting_material_claims INTEGER DEFAULT 0,
                 unverified_material_claims INTEGER DEFAULT 0,
+                unmeasured_material_claims INTEGER DEFAULT 0,
+                coverage_measured INTEGER DEFAULT 1,
                 source_diversity INTEGER DEFAULT 0,
                 primary_evidence_count INTEGER DEFAULT 0,
                 review_required INTEGER DEFAULT 1,
@@ -96,6 +100,7 @@ class FactualStore:
                 normalized_subject TEXT,
                 predicate TEXT,
                 normalized_value TEXT,
+                semantic_evidence_query TEXT,
                 source_sentence TEXT,
                 status TEXT NOT NULL,
                 confidence REAL,
@@ -166,6 +171,20 @@ class FactualStore:
             """
         )
 
+        additive_columns = {
+            ("factual_assessments", "requested_mode"): "TEXT",
+            ("factual_assessments", "effective_mode"): "TEXT",
+            ("factual_assessments", "unmeasured_material_claims"): "INTEGER DEFAULT 0",
+            ("factual_assessments", "coverage_measured"): "INTEGER DEFAULT 1",
+            ("factual_claims", "semantic_evidence_query"): "TEXT",
+        }
+        for (table, column), declaration in additive_columns.items():
+            existing = {
+                item["name"] for item in self.conn.execute(f"PRAGMA table_info({table})")
+            }
+            if column not in existing:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
         for statement in (
             "CREATE INDEX IF NOT EXISTS idx_fa_draft ON factual_assessments(draft_id)",
             "CREATE INDEX IF NOT EXISTS idx_fa_event ON factual_assessments(event_key, revision)",
@@ -205,24 +224,28 @@ class FactualStore:
                 """
                 INSERT INTO factual_assessments (
                     assessment_id, draft_id, event_key, revision, contract_version,
-                    version, mode, assessment_hash, coverage_ratio,
+                    version, mode, requested_mode, effective_mode, assessment_hash, coverage_ratio,
                     total_material_claims, supported_material_claims,
                     partially_supported_material_claims, unsupported_material_claims,
                     conflicting_material_claims, unverified_material_claims,
+                    unmeasured_material_claims, coverage_measured,
                     source_diversity, primary_evidence_count, review_required,
                     warnings_json, blocking_errors_json, created_at, processing_attempt_id
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     assessment.assessment_id, assessment.draft_id, assessment.event_key,
                     int(assessment.revision), assessment.contract_version,
-                    assessment.version, assessment.mode, assessment.assessment_hash,
+                    assessment.version, assessment.mode, assessment.requested_mode,
+                    assessment.effective_mode, assessment.assessment_hash,
                     coverage.coverage_ratio, coverage.total_material_claims,
                     coverage.supported_material_claims,
                     coverage.partially_supported_material_claims,
                     coverage.unsupported_material_claims,
                     coverage.conflicting_material_claims,
                     coverage.unverified_material_claims,
+                    coverage.unmeasured_material_claims,
+                    1 if coverage.coverage_measured else 0,
                     coverage.source_diversity, coverage.primary_evidence_count,
                     1 if coverage.review_required else 0,
                     _dumps(assessment.warnings), _dumps(assessment.blocking_errors),
@@ -236,15 +259,17 @@ class FactualStore:
                     """
                     INSERT INTO factual_claims (
                         claim_id, assessment_id, draft_id, claim_type, display_text,
-                        normalized_subject, predicate, normalized_value, source_sentence,
+                        normalized_subject, predicate, normalized_value,
+                        semantic_evidence_query, source_sentence,
                         status, confidence, is_material, requires_review, claim_hash,
                         draft_locations_json, warnings_json
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         claim.claim_id, assessment.assessment_id, assessment.draft_id,
                         claim.claim_type, claim.display_text, claim.normalized_subject,
-                        claim.predicate, claim.normalized_value, claim.source_sentence,
+                        claim.predicate, claim.normalized_value,
+                        claim.semantic_evidence_query, claim.source_sentence,
                         claim.status, claim.confidence, 1 if claim.is_material else 0,
                         1 if claim.requires_review else 0, claim.claim_hash,
                         _dumps(claim.draft_locations), _dumps(claim.warnings),
@@ -429,6 +454,7 @@ class FactualStore:
                     "normalized_subject": c["normalized_subject"],
                     "predicate": c["predicate"],
                     "normalized_value": c["normalized_value"],
+                    "semantic_evidence_query": c["semantic_evidence_query"],
                     "source_sentence": c["source_sentence"],
                     "status": c["status"],
                     "confidence": c["confidence"],
@@ -497,7 +523,9 @@ class FactualStore:
             unsupported_material_claims=row["unsupported_material_claims"] or 0,
             conflicting_material_claims=row["conflicting_material_claims"] or 0,
             unverified_material_claims=row["unverified_material_claims"] or 0,
+            unmeasured_material_claims=row["unmeasured_material_claims"] or 0,
             coverage_ratio=row["coverage_ratio"] or 0.0,
+            coverage_measured=bool(row["coverage_measured"]),
             source_diversity=row["source_diversity"] or 0,
             primary_evidence_count=row["primary_evidence_count"] or 0,
             review_required=bool(row["review_required"]),
@@ -509,6 +537,8 @@ class FactualStore:
             revision=row["revision"] or 1, contract_version=row["contract_version"] or "",
             version=row["version"] or S.ASSESSMENT_VERSION_V1,
             mode=row["mode"] or S.MODE_HYBRID,
+            requested_mode=row["requested_mode"] or row["mode"] or S.MODE_HYBRID,
+            effective_mode=row["effective_mode"] or row["mode"] or S.MODE_HYBRID,
             warnings=_loads(row["warnings_json"], []),
             blocking_errors=_loads(row["blocking_errors_json"], []),
             assessment_id=assessment_id, assessment_hash=row["assessment_hash"],

@@ -119,12 +119,16 @@ def compute_coverage(
     unsupported = counts.get(S.UNSUPPORTED, 0)
     conflicting = counts.get(S.CONFLICTING, 0)
     unverified = counts.get(S.UNVERIFIED, 0)
+    unmeasured = sum(
+        1 for claim in material if "CROSS_LINGUAL_MATCH_UNAVAILABLE" in claim.warnings
+    )
+    measured_total = total - unmeasured
 
-    if total == 0:
+    if measured_total == 0:
         ratio = 0.0
         review_required = True
     else:
-        ratio = round((supported + 0.5 * partial) / total, 6)
+        ratio = round((supported + 0.5 * partial) / measured_total, 6)
         review_required = (
             ratio < minimum_ratio
             or unsupported > 0
@@ -139,16 +143,22 @@ def compute_coverage(
         unsupported_material_claims=unsupported,
         conflicting_material_claims=conflicting,
         unverified_material_claims=unverified,
+        unmeasured_material_claims=unmeasured,
         coverage_ratio=ratio,
+        # Uma razão parcial não pode se apresentar como cobertura integral.
+        # O número continua disponível para diagnóstico, mas o laudo declara
+        # explicitamente que há claims fora do denominador medido.
+        coverage_measured=total > 0 and unmeasured == 0,
         source_diversity=count_editorial_origins(evidence),
         primary_evidence_count=sum(1 for e in evidence if e.strength == S.PRIMARY),
         review_required=review_required,
     )
     logger.info(
         "[FACTUAL_COVERAGE_CALCULATED] total=%s supported=%s partial=%s unsupported=%s "
-        "conflicting=%s unverified=%s coverage_ratio=%s source_diversity=%s",
+        "conflicting=%s unverified=%s unmeasured=%s coverage_measured=%s "
+        "coverage_ratio=%s source_diversity=%s",
         total, supported, partial, unsupported, conflicting, unverified,
-        ratio, coverage.source_diversity,
+        unmeasured, coverage.coverage_measured, ratio, coverage.source_diversity,
     )
     return coverage
 

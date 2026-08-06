@@ -665,9 +665,12 @@ def rule_factual_coverage_low(draft, policy, context) -> EditorialRuleResult:
                        "Sem avaliacao factual.", metrics={"has_assessment": False})
     minimum = float(policy.threshold("minimumFactualCoverageRatio", 0.75))
     ratio = assessment.coverage.coverage_ratio
-    triggered = ratio < minimum
+    measured = assessment.coverage.coverage_measured
+    triggered = not measured or ratio < minimum
     return _result(
         "GATE_FACTUAL_COVERAGE_LOW", SEVERITY_WARNING, triggered,
+        "Cobertura factual nao medida: matcher interidioma indisponivel."
+        if not measured else
         f"Cobertura factual de {ratio} abaixo do minimo {minimum}." if triggered else
         f"Cobertura factual de {ratio}.",
         evidence=[
@@ -677,7 +680,7 @@ def rule_factual_coverage_low(draft, policy, context) -> EditorialRuleResult:
         ] if triggered else [],
         affected_fields=["factual_assessment"],
         remediation="Cobertura baixa e sinal de revisao, nao prova de erro.",
-        metrics={"coverage_ratio": ratio, "minimum": minimum},
+        metrics={"coverage_ratio": ratio, "coverage_measured": measured, "minimum": minimum},
     )
 
 
@@ -710,8 +713,11 @@ def rule_unverified_claims_present(draft, policy, context) -> EditorialRuleResul
         if unverified else "Nenhuma afirmacao indeterminada.",
         evidence=[c.display_text for c in unverified[:5]],
         affected_fields=["factual_assessment"],
-        remediation="As fontes citam o assunto mas nao confirmam a afirmacao.",
-        metrics={"unverified_claims": len(unverified)},
+        remediation="Separar limite do matcher de ausencia real de suporte; revisar humanamente.",
+        metrics={
+            "unverified_claims": len(unverified),
+            "unmeasured_claims": assessment.coverage.unmeasured_material_claims,
+        },
     )
 
 

@@ -177,3 +177,44 @@ def test_claim_inventado_pelo_modelo_nao_entra_no_laudo():
     # a camada semantica nao produziu nada aproveitavel — e o modo efetivo diz
     # isso. Um modelo que so alucina nao recebe credito por ter rodado.
     assert avaliacao.effective_mode == S.MODE_DETERMINISTIC
+
+
+def test_hybrid_usa_consulta_semantica_para_casar_claim_pt_com_evidencia_en():
+    draft = _draft()
+    english = [{
+        "url": "https://variety.example/a",
+        "content": (
+            "Marvel confirmed that the film premieres on May 1, 2026. "
+            "The studio invested 250 million dollars in production."
+        ),
+        "title": "Marvel",
+        "source_name": "Variety",
+        "source_domain": "variety.example",
+        "is_primary": True,
+    }]
+    fake = json.dumps({"claims": [{
+        "display_text": "A Marvel confirmou que o filme estreia em 1 de maio de 2026.",
+        "claim_type": "DATE",
+        "subject": "Marvel",
+        "predicate": "date",
+        "normalized_value": "2026-05-01",
+        "semantic_evidence_query": "Marvel confirmed that the film premieres on May 1, 2026.",
+        "confidence": 0.9,
+        "location": ["body:p:1"],
+    }]})
+
+    sem_semantica = build_factual_assessment(
+        draft, english, mode=S.MODE_DETERMINISTIC
+    )
+    com_semantica = build_factual_assessment(
+        draft, english, mode=S.MODE_HYBRID, claim_response=fake
+    )
+
+    assert sem_semantica.coverage.coverage_measured is False
+    assert com_semantica.effective_mode == S.MODE_HYBRID
+    assert (
+        com_semantica.coverage.unmeasured_material_claims
+        < sem_semantica.coverage.unmeasured_material_claims
+    )
+    assert com_semantica.coverage.coverage_ratio > sem_semantica.coverage.coverage_ratio
+    assert any(c.status == S.SUPPORTED for c in com_semantica.material_claims)
