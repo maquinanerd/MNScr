@@ -1747,6 +1747,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             duration_ms=int((time.perf_counter() - _article_started_at) * 1000),
                             input_event=_resolve_input_event(art_data),
                         )
+                        draft.seo_source = dict(art_data.get('_seo_source') or {})
 
                         blocking_errors = validate_draft(draft)
                         if blocking_errors:
@@ -2218,7 +2219,10 @@ def _publish_to_cinerie(draft, art_data):
                 base_seconds=MNSCR_CINERIE_RETRY_BASE_SECONDS,
             ),
         )
-        result = service.publish_draft(draft, seo_source=art_data.get("_seo_source"))
+        result = service.publish_draft(
+            draft,
+            seo_source=getattr(draft, "seo_source", None) or art_data.get("_seo_source"),
+        )
         logger.info("[CINERIE_PUBLICATION] draft_id=%s %s", draft.draft_id, result.safe_log_fields())
         log_cinerie_quota_deferrals([result])
         return result

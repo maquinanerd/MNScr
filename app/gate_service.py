@@ -167,6 +167,7 @@ def draft_from_artifact(payload: Dict[str, Any]) -> EditorialDraft:
         media_candidates=media,
         warnings=list(payload.get("warnings") or []),
         blocking_errors=list(payload.get("blocking_errors") or []),
+        seo_source=dict(payload.get("seo_source") or {}),
         factual_assessment=factual_assessment,
         editorial_gate=editorial_gate,
     )

@@ -320,8 +320,10 @@ def test_rebuild_preserva_laudos_que_compõem_o_payload_cinerie():
     payload = make_draft(draft_id="draft-replay").to_dict()
     payload["editorial_gate"] = gate.to_dict()
     payload["factual_assessment"] = factual.to_dict()
+    payload["seo_source"] = {"seoTitle": "Título SEO persistido"}
 
     rebuilt = draft_from_artifact(payload)
 
     assert rebuilt.editorial_gate.to_dict() == gate.to_dict()
     assert rebuilt.factual_assessment.to_dict() == factual.to_dict()
+    assert rebuilt.seo_source == {"seoTitle": "Título SEO persistido"}

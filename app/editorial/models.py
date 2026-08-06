@@ -287,6 +287,9 @@ class EditorialDraft:
     media_candidates: list[MediaCandidate] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     blocking_errors: list[str] = field(default_factory=list)
+    # Entrada SEO exata usada para montar o contrato Cinerie. Faz parte do
+    # artefato porque retries posteriores precisam reconstruir o mesmo payload.
+    seo_source: dict[str, Any] = field(default_factory=dict)
     # MS-4: the factual picture — claims, evidence, conflicts, coverage. Like
     # the gate verdict it is attached after the body exists and never takes part
     # in ``content_hash``: re-assessing facts must not look like a rewrite.
@@ -307,6 +310,7 @@ class EditorialDraft:
         self.blocking_errors = [
             text for text in (_clean(item) for item in self.blocking_errors or []) if text
         ]
+        self.seo_source = dict(self.seo_source or {})
 
     # -- helpers ------------------------------------------------------------
 

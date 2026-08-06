@@ -168,6 +168,7 @@ class CinerieService:
         entity_links: Sequence[Dict[str, Any]] = (),
     ) -> PublicationAttemptResult:
         draft_id = str(getattr(draft, "draft_id", "") or "")
+        seo_source = seo_source or getattr(draft, "seo_source", None)
 
         # 0. Guarda de migracao. Linhas anteriores a ``event_revision`` podem
         # representar materia que ja existe no Cinerie sem que o id remoto tenha
