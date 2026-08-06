@@ -108,6 +108,9 @@ _worker_pause_requested = threading.Event()
 _worker_idle = threading.Event()
 _worker_stop_requested = threading.Event()
 _worker_idle.set()
+_cinerie_dispatch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cinerie-dispatch")
+_cinerie_dispatch_future = None
+_cinerie_dispatch_guard = threading.Lock()
 
 # --- Environment variables for pipeline control ---
 MAX_ARTICLE_FAIL_COUNT = int(os.getenv('MAX_ARTICLE_FAIL_COUNT', 5))  # Guard: max retries before FAILED_PERMANENT
@@ -119,6 +122,8 @@ BETWEEN_BATCH_DELAY_S = int(os.getenv('BETWEEN_BATCH_DELAY_S', 30))  # 30s entre
 BETWEEN_PUBLISH_DELAY_S = int(os.getenv('BETWEEN_PUBLISH_DELAY_S', 30))  # 30s entre publicaÃ§Ãµes
 ARTICLE_WATCHDOG_TIMEOUT_S = int(os.getenv('ARTICLE_WATCHDOG_TIMEOUT_S', 300))
 CLAIM_STALE_TIMEOUT_S = int(os.getenv('CLAIM_STALE_TIMEOUT_S', ARTICLE_WATCHDOG_TIMEOUT_S * 2))
+CINERIE_DISPATCH_LIMIT = int(os.getenv('MNSCR_CINERIE_DISPATCH_LIMIT', 10))
+CINERIE_DISPATCH_LEASE_SECONDS = int(os.getenv('MNSCR_CINERIE_DISPATCH_LEASE_SECONDS', 900))
 
 # Exit codes are shared with the CLI entrypoint.  In particular, an unfinished
 # backlog is never reported as a successful --once invocation.
@@ -2217,6 +2222,122 @@ def _publish_to_cinerie(draft, art_data):
             service.store.close()
 
 
+def log_cinerie_quota_deferrals(results) -> Dict[str, int]:
+    """Registra o que o servidor adiou, sem criar uma cota local concorrente."""
+    counts: Dict[str, int] = {}
+    deferred_total = 0
+    for result in results:
+        if getattr(result, "outcome", None) != "DEFERRED":
+            continue
+        deferred_total += 1
+        dimensions = [
+            code for code in (getattr(result, "reason_codes", None) or [])
+            if str(code).endswith("_DAILY_LIMIT_REACHED")
+        ] or ["DIMENSION_NOT_DECLARED"]
+        for dimension in dimensions:
+            counts[dimension] = counts.get(dimension, 0) + 1
+
+    fields = " ".join(f"{name}={count}" for name, count in sorted(counts.items()))
+    logger.info(
+        "[CINERIE_QUOTA_DEFERRALS] deferred_total=%s dimensions=%s",
+        deferred_total,
+        fields or "none",
+    )
+    return counts
+
+
+def _load_local_draft(draft_id: str):
+    from .gate_service import draft_from_artifact
+
+    path = Path(LOCAL_DRAFT_DIR) / f"{draft_id}.json"
+    if not path.is_file():
+        return None
+    return draft_from_artifact(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _dispatch_cinerie_pending_once() -> None:
+    """Executa uma passada finita fora da thread de ingestão."""
+    from .cinerie.client import CinerieClient, CinerieConfig
+    from .cinerie.preflight import ContractPreflight
+    from .cinerie_service import CinerieService
+    from .cinerie_store import CinerieStore
+    from .delivery.retry import RetryPolicy
+
+    owner = f"{os.getpid()}:{uuid.uuid4().hex}"
+    store = CinerieStore()
+    lock_acquired = False
+    try:
+        lock_acquired = store.acquire_dispatch_lock(
+            owner=owner,
+            lease_seconds=CINERIE_DISPATCH_LEASE_SECONDS,
+        )
+        if not lock_acquired:
+            logger.info("[CINERIE_DISPATCH] process_lock=busy action=skipped")
+            return
+
+        client = CinerieClient(
+            CinerieConfig(
+                base_url=PAYLOAD_INTERNAL_SERVICE_URL,
+                api_key=MNSCR_PAYLOAD_API_KEY,
+                timeout_seconds=MNSCR_CINERIE_TIMEOUT_SECONDS,
+            )
+        )
+        service = CinerieService(
+            store=store,
+            client=client,
+            public_author_id=MNSCR_PUBLIC_AUTHOR_ID,
+            attribution_mode=MNSCR_ATTRIBUTION_MODE,
+            delivery_mode="AUTO_PUBLISH",
+            preflight=ContractPreflight(
+                client, ttl_seconds=MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS
+            ),
+            retry_policy=RetryPolicy(
+                max_attempts=MNSCR_CINERIE_MAX_ATTEMPTS,
+                base_seconds=MNSCR_CINERIE_RETRY_BASE_SECONDS,
+            ),
+        )
+        results = service.dispatch_pending(
+            worker_id=owner,
+            draft_loader=_load_local_draft,
+            limit=CINERIE_DISPATCH_LIMIT,
+            lease_seconds=CINERIE_DISPATCH_LEASE_SECONDS,
+        )
+        log_cinerie_quota_deferrals(results)
+    except Exception as exc:  # noqa: BLE001 - despacho não derruba ingestão
+        logger.exception("[CINERIE_DISPATCH] status=failed error=%s", type(exc).__name__)
+    finally:
+        if lock_acquired:
+            store.release_dispatch_lock(owner=owner)
+        store.close()
+
+
+def schedule_cinerie_dispatch() -> bool:
+    """Agenda sem bloquear o ciclo; não acumula passadas neste processo."""
+    from .cinerie_service import MODE_AUTO_PUBLISH, resolve_delivery_mode
+
+    try:
+        mode = resolve_delivery_mode(MNSCR_DELIVERY_MODE, environment=MNSCR_ENVIRONMENT)
+    except Exception as exc:  # noqa: BLE001 - startup valida; aqui falha fechado
+        logger.error(
+            "[CINERIE_DISPATCH] action=skipped reason=invalid_delivery_mode error=%s",
+            type(exc).__name__,
+        )
+        return False
+    if mode != MODE_AUTO_PUBLISH:
+        logger.info("[CINERIE_DISPATCH] action=skipped reason=delivery_mode_not_auto_publish")
+        return False
+
+    global _cinerie_dispatch_future
+    with _cinerie_dispatch_guard:
+        if _cinerie_dispatch_future is not None and not _cinerie_dispatch_future.done():
+            logger.info("[CINERIE_DISPATCH] process_lock=local_busy action=skipped")
+            return False
+        _cinerie_dispatch_future = _cinerie_dispatch_executor.submit(
+            _dispatch_cinerie_pending_once
+        )
+    return True
+
+
 def _run_factual_assessment(draft, art_data):
     """Build and persist the factual picture for this draft.
 
@@ -2545,6 +2666,7 @@ def run_pipeline_cycle(*, start_worker: bool = True, skip_pending_guard: bool = 
     """Read feeds and enqueue articles for the worker or a bounded synchronous run."""
     initialize_runtime()
     reconcile_event_tasks()
+    schedule_cinerie_dispatch()
     if start_worker:
         ensure_worker_started()
     # A persistent backlog is data, not proof that a worker is alive.  Queue

@@ -235,6 +235,16 @@ class CinerieStore:
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cinerie_dispatch_locks (
+                lock_name TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                lease_until TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         for statement in (
             "CREATE INDEX IF NOT EXISTS idx_cinerie_pub_draft ON cinerie_publications(draft_id)",
             "CREATE INDEX IF NOT EXISTS idx_cinerie_pub_cluster ON cinerie_publications(source_cluster_id)",
@@ -558,6 +568,45 @@ class CinerieStore:
                 "UPDATE cinerie_publications SET claimed_by = NULL, lease_until = NULL, "
                 "updated_at = ? WHERE request_id = ?",
                 (_utc_now_iso(), request_id),
+            )
+
+    def acquire_dispatch_lock(
+        self,
+        *,
+        owner: str,
+        lease_seconds: int = 900,
+        lock_name: str = "cinerie-dispatch",
+    ) -> bool:
+        """Toma o lock do processo inteiro, inclusive entre containers."""
+        now = _utc_now_iso()
+        lease_until = _iso_from_now(lease_seconds)
+        with self.conn:
+            cursor = self.conn.execute(
+                """
+                INSERT INTO cinerie_dispatch_locks (lock_name, owner, lease_until, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(lock_name) DO UPDATE SET
+                    owner = excluded.owner,
+                    lease_until = excluded.lease_until,
+                    updated_at = excluded.updated_at
+                WHERE cinerie_dispatch_locks.lease_until <= excluded.updated_at
+                   OR cinerie_dispatch_locks.owner = excluded.owner
+                """,
+                (lock_name, owner, lease_until, now),
+            )
+        return cursor.rowcount == 1
+
+    def release_dispatch_lock(
+        self,
+        *,
+        owner: str,
+        lock_name: str = "cinerie-dispatch",
+    ) -> None:
+        """Libera somente o lock que ainda pertence a este processo."""
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM cinerie_dispatch_locks WHERE lock_name = ? AND owner = ?",
+                (lock_name, owner),
             )
 
     def list_by_status(self, status: str, limit: int = 50) -> List[PublicationRecord]:
