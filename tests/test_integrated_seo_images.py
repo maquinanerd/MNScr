@@ -8,12 +8,25 @@ Valida que os dois sistemas funcionam juntos corretamente.
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from app.html_utils import unescape_html_content, validate_and_fix_figures
 from app.seo_title_optimizer import optimize_title
 
 
+@pytest.mark.xfail(
+    reason=(
+        "DEFEITO DE PRODUTO, nao do teste: o fluxo integrado reprova porque "
+        "o otimizador de titulo recusa a otimizacao ao remover tokens "
+        "protegidos de PT-BR (`pode`, `vai`) — ver o WARNING "
+        "`seo_title_optimizer.py:301`. O teste ficava verde porque devolvia "
+        "`return 1` em vez de asseverar, e o pytest descarta o retorno. "
+        "Marcado como falha conhecida para nao esconder de novo."
+    ),
+    strict=False,
+)
 def test_integrated_flow():
     """Teste o fluxo completo de processamento."""
     print("=" * 80)
@@ -111,16 +124,13 @@ def test_integrated_flow():
 
     print()
     print("=" * 80)
-    if all_passed:
-        print("🎉 TODOS OS TESTES PASSARAM!")
-        print()
-        print("RESULTADO FINAL:")
-        print(f"  Título: {optimized_title}")
-        print(f"  Conteúdo: {fixed_content[:200]}...")
-        return 0
-    else:
-        print("❌ Alguns testes falharam")
-        return 1
+    print("RESULTADO FINAL:")
+    print(f"  Título: {optimized_title}")
+    print(f"  Conteúdo: {fixed_content[:200]}...")
+
+    # `assert`, e não `return`: o pytest descarta o valor devolvido, então este
+    # teste ficava verde mesmo devolvendo 1.
+    assert all_passed, "o fluxo integrado de SEO + imagens reprovou"
 
 
 if __name__ == "__main__":

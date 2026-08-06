@@ -107,7 +107,7 @@ def test_screenrant_caption_cleaning():
 
     print("=" * 80)
 
-    return validation_passed
+    assert validation_passed, "validacao das legendas do ScreenRant reprovou"
 
 
 if __name__ == "__main__":
