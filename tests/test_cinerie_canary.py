@@ -65,6 +65,19 @@ def test_canario_recusa_replay_que_aponta_para_outro_artigo():
         )
 
 
+def test_canario_exige_ids_remotos_para_registrar_desfecho():
+    first = _result()
+    first.article_id = None
+    second = _result(idempotent=True)
+    second.article_id = None
+
+    with pytest.raises(RuntimeError, match="articleId"):
+        execute_canary(
+            _Client([first, second]),
+            {"requestId": "req-canary", "idempotencyKey": "mnscr:canary-mnscr-20260806:rev-1"},
+        )
+
+
 def test_canario_para_se_destino_publicar_mesmo_com_modo_draft():
     client = _Client([_result(outcome=O.PUBLISHED), _result(idempotent=True)])
 

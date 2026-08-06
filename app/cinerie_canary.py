@@ -107,6 +107,10 @@ def execute_canary(client: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
         raise RuntimeError("canário retornou PUBLISHED apesar de MNSCR_DELIVERY_MODE=DRAFT")
     if first.outcome != O.ROUTED_TO_REVIEW:
         raise RuntimeError(f"primeiro pedido não foi roteado à revisão: {first.outcome}")
+    if not first.request_id:
+        raise RuntimeError("primeiro pedido não retornou requestId")
+    if not first.article_id:
+        raise RuntimeError("primeiro pedido não retornou articleId")
 
     second = client.submit_publication(payload)
     already_consumed = "ALREADY_CONSUMED" in second.reason_codes
