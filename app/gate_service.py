@@ -138,6 +138,19 @@ def draft_from_artifact(payload: Dict[str, Any]) -> EditorialDraft:
         if item.get("source_url")
     ]
 
+    factual_payload = payload.get("factual_assessment")
+    gate_payload = payload.get("editorial_gate")
+    factual_assessment = None
+    editorial_gate = None
+    if isinstance(factual_payload, dict):
+        from app.factual.models import FactualAssessment
+
+        factual_assessment = FactualAssessment.from_dict(factual_payload)
+    if isinstance(gate_payload, dict):
+        from app.editorial_gate.models import EditorialGateResult
+
+        editorial_gate = EditorialGateResult.from_dict(gate_payload)
+
     return EditorialDraft(
         draft_id=payload.get("draft_id") or "",
         article_id=payload.get("article_id") or "",
@@ -154,6 +167,8 @@ def draft_from_artifact(payload: Dict[str, Any]) -> EditorialDraft:
         media_candidates=media,
         warnings=list(payload.get("warnings") or []),
         blocking_errors=list(payload.get("blocking_errors") or []),
+        factual_assessment=factual_assessment,
+        editorial_gate=editorial_gate,
     )
 
 

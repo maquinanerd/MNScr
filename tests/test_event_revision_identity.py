@@ -265,3 +265,27 @@ def test_reemissao_rev2_legada_sem_mapeamento_nao_publica_segunda_materia(tmp_pa
     assert result.error_code == "LEGACY_CINERIE_IDENTITY_UNMAPPED"
     assert store.conn.execute("SELECT COUNT(*) FROM cinerie_publications").fetchone()[0] == 0
     store.close()
+
+
+def test_startup_refaz_marcacao_se_schema_foi_persistido_antes_do_backfill(tmp_path):
+    db_path = tmp_path / "legacy-interrompido.db"
+    _legacy_database(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE seen_articles ADD COLUMN event_revision INTEGER")
+    conn.execute(
+        "ALTER TABLE seen_articles ADD COLUMN "
+        "legacy_cinerie_identity_unmapped INTEGER NOT NULL DEFAULT 0"
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(str(db_path))
+    row = db.conn.execute(
+        "SELECT event_revision, legacy_cinerie_identity_unmapped "
+        "FROM seen_articles WHERE event_key = ?",
+        ("evt-legado-cinerie",),
+    ).fetchone()
+
+    assert row["event_revision"] == 1
+    assert row["legacy_cinerie_identity_unmapped"] == 1
+    db.close()

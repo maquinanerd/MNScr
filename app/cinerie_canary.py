@@ -114,6 +114,14 @@ def execute_canary(client: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
         raise RuntimeError("repetição não comprovou idempotent:true/ALREADY_CONSUMED")
     if second.idempotency_key and second.idempotency_key != payload.get("idempotencyKey"):
         raise RuntimeError("destino reconciliou chave idempotente diferente da enviada")
+    if first.article_id != second.article_id:
+        raise RuntimeError("replay idempotente retornou articleId diferente do primeiro pedido")
+    expected_request_id = payload.get("requestId")
+    for result in (first, second):
+        if result.request_id and result.request_id != expected_request_id:
+            raise RuntimeError("replay idempotente retornou requestId diferente do pedido")
+        if result.idempotency_key and result.idempotency_key != payload.get("idempotencyKey"):
+            raise RuntimeError("replay idempotente retornou idempotencyKey diferente do pedido")
 
     return {
         "outcome": first.outcome,

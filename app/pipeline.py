@@ -8,6 +8,7 @@ import time
 import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -2242,7 +2243,7 @@ def log_cinerie_quota_deferrals(results) -> Dict[str, int]:
         deferred_total += 1
         dimensions = [
             code for code in (getattr(result, "reason_codes", None) or [])
-            if str(code).endswith("_DAILY_LIMIT_REACHED")
+            if re.fullmatch(r"[A-Z0-9_]{1,80}_DAILY_LIMIT_REACHED", str(code))
         ] or ["DIMENSION_NOT_DECLARED"]
         for dimension in dimensions:
             counts[dimension] = counts.get(dimension, 0) + 1
@@ -2263,6 +2264,53 @@ def _load_local_draft(draft_id: str):
     if not path.is_file():
         return None
     return draft_from_artifact(json.loads(path.read_text(encoding="utf-8")))
+
+
+@contextmanager
+def cinerie_dispatch_lock_heartbeat(
+    db_path: str,
+    owner: str,
+    *,
+    lease_seconds: int,
+):
+    """Renova o lock de processo enquanto uma passada pode estar em I/O remoto."""
+    from .cinerie_store import CinerieStore
+
+    stop = threading.Event()
+    lost = threading.Event()
+    interval = max(0.1, float(lease_seconds) / 3.0)
+
+    def maintain() -> None:
+        heartbeat_store = None
+        try:
+            heartbeat_store = CinerieStore(db_path)
+            while not stop.wait(interval):
+                try:
+                    renewed = heartbeat_store.acquire_dispatch_lock(
+                        owner=owner,
+                        lease_seconds=max(1, lease_seconds),
+                    )
+                except Exception:
+                    logger.exception("[CINERIE_DISPATCH_LOCK] state=heartbeat_failed")
+                    lost.set()
+                    return
+                if not renewed:
+                    lost.set()
+                    return
+        except Exception:
+            logger.exception("[CINERIE_DISPATCH_LOCK] state=heartbeat_start_failed")
+            lost.set()
+        finally:
+            if heartbeat_store is not None:
+                heartbeat_store.close()
+
+    thread = threading.Thread(target=maintain, daemon=True, name="cinerie-lock-heartbeat")
+    thread.start()
+    try:
+        yield lost
+    finally:
+        stop.set()
+        thread.join(timeout=interval + 5.0)
 
 
 def _dispatch_cinerie_pending_once() -> None:
@@ -2306,12 +2354,19 @@ def _dispatch_cinerie_pending_once() -> None:
                 base_seconds=MNSCR_CINERIE_RETRY_BASE_SECONDS,
             ),
         )
-        results = service.dispatch_pending(
-            worker_id=owner,
-            draft_loader=_load_local_draft,
-            limit=CINERIE_DISPATCH_LIMIT,
-            lease_seconds=CINERIE_DISPATCH_LEASE_SECONDS,
-        )
+        with cinerie_dispatch_lock_heartbeat(
+            store.db_path,
+            owner,
+            lease_seconds=max(1, CINERIE_DISPATCH_LEASE_SECONDS),
+        ) as lock_lost:
+            results = service.dispatch_pending(
+                worker_id=owner,
+                draft_loader=_load_local_draft,
+                limit=CINERIE_DISPATCH_LIMIT,
+                lease_seconds=CINERIE_DISPATCH_LEASE_SECONDS,
+            )
+            if lock_lost.is_set():
+                logger.error("[CINERIE_DISPATCH_LOCK] state=lost owner=%s", owner)
         log_cinerie_quota_deferrals(results)
     except Exception as exc:  # noqa: BLE001 - despacho não derruba ingestão
         logger.exception("[CINERIE_DISPATCH] status=failed error=%s", type(exc).__name__)

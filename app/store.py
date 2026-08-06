@@ -102,15 +102,6 @@ class Database:
     def _ensure_seen_articles_schema(self):
         """Apply lightweight migrations required by the current runtime."""
         cursor = self._get_cursor()
-        # O marcador precisa nascer ANTES de ``event_revision`` ser preenchida:
-        # depois do backfill nao ha como distinguir uma revisao historica de uma
-        # linha criada nativamente pelo runtime novo. Bancos que passaram por uma
-        # versao intermediaria (coluna de revisao presente, mas ainda nula) tambem
-        # sao cobertos de forma conservadora.
-        legacy_marker_was_missing = not self._column_exists(
-            "seen_articles", "legacy_cinerie_identity_unmapped"
-        )
-
         missing_columns = {
             "event_key": "ALTER TABLE seen_articles ADD COLUMN event_key TEXT",
             "event_revision": "ALTER TABLE seen_articles ADD COLUMN event_revision INTEGER",
@@ -169,8 +160,11 @@ class Database:
                 logger.info(f"Applying SQLite migration: adding seen_articles.{column_name}")
                 cursor.execute(sql)
 
-        if legacy_marker_was_missing:
-            self._mark_and_backfill_legacy_event_revisions()
+        # É idempotente e precisa rodar mesmo se as colunas já existirem: DDL do
+        # SQLite pode ter sido persistido antes de uma interrupção que ocorreu
+        # entre o ALTER e o backfill. Confiar apenas na existência da coluna
+        # deixaria a guarda em DEFAULT 0 no reinício seguinte.
+        self._mark_and_backfill_legacy_event_revisions()
 
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_seen_articles_event_key ON seen_articles(event_key)"

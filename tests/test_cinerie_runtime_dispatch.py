@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from app import pipeline
 from app.cinerie import outcomes as O
@@ -73,6 +74,24 @@ def test_lock_de_processo_permite_um_unico_dispatcher(tmp_path):
     assert sorted(resultados) == [False, True]
 
 
+def test_heartbeat_mantem_lock_do_dispatcher_durante_passada_longa(tmp_path):
+    caminho = str(tmp_path / "app.db")
+    owner = "worker-longo"
+    primeiro = CinerieStore(caminho)
+    assert primeiro.acquire_dispatch_lock(owner=owner, lease_seconds=1)
+
+    with pipeline.cinerie_dispatch_lock_heartbeat(caminho, owner, lease_seconds=1):
+        time.sleep(1.4)
+        concorrente = CinerieStore(caminho)
+        try:
+            assert not concorrente.acquire_dispatch_lock(owner="worker-2", lease_seconds=1)
+        finally:
+            concorrente.close()
+
+    primeiro.release_dispatch_lock(owner=owner)
+    primeiro.close()
+
+
 def test_observabilidade_conta_adiamentos_por_dimensao(caplog):
     resultados = [
         PublicationAttemptResult(
@@ -96,3 +115,17 @@ def test_observabilidade_conta_adiamentos_por_dimensao(caplog):
     assert "deferred_total=2" in caplog.text
     assert "AUTO_PUBLISH_AUTHOR_DAILY_LIMIT_REACHED=2" in caplog.text
     assert "AUTO_PUBLISH_SECTION_DAILY_LIMIT_REACHED=1" in caplog.text
+
+
+def test_observabilidade_nao_injeta_reason_code_remoto_no_log(caplog):
+    result = PublicationAttemptResult(
+        status="DEFERRED",
+        outcome=O.DEFERRED,
+        reason_codes=["FORGED\nLOG_DAILY_LIMIT_REACHED"],
+    )
+
+    with caplog.at_level(logging.INFO):
+        pipeline.log_cinerie_quota_deferrals([result])
+
+    assert "FORGED" not in caplog.text
+    assert "DIMENSION_NOT_DECLARED=1" in caplog.text

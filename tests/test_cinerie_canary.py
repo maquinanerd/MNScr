@@ -53,6 +53,18 @@ def test_canario_repete_exatamente_o_mesmo_pedido_e_exige_idempotencia():
     assert report["articleId"] == "article-88"
 
 
+def test_canario_recusa_replay_que_aponta_para_outro_artigo():
+    second = _result(idempotent=True)
+    second.article_id = "article-99"
+    client = _Client([_result(), second])
+
+    with pytest.raises(RuntimeError, match="articleId"):
+        execute_canary(
+            client,
+            {"requestId": "req-canary", "idempotencyKey": "mnscr:canary-mnscr-20260806:rev-1"},
+        )
+
+
 def test_canario_para_se_destino_publicar_mesmo_com_modo_draft():
     client = _Client([_result(outcome=O.PUBLISHED), _result(idempotent=True)])
 
