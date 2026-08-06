@@ -125,6 +125,9 @@ class PublicationResult:
     #: Segundos do header ``Retry-After``. Acompanha ``DEFERRED`` e vem do MESMO
     #: instante que ``nextEligibleAt``, entao os dois nunca se contradizem.
     retry_after_seconds: Optional[float] = None
+    #: Contadores/tetos devolvidos pelo destino, quando presentes. O cliente não
+    #: calcula cota local nem transforma ausência em zero.
+    quota_remaining: Optional[Dict[str, Any]] = None
     attempts: int = 1
 
     @property
@@ -173,6 +176,7 @@ class PublicationResult:
             "next_eligible_at": self.next_eligible_at,
             "retry_after_seconds": self.retry_after_seconds,
             "idempotent": self.idempotent,
+            "quota_remaining": self.quota_remaining,
             "attempts": self.attempts,
         }
 
@@ -223,6 +227,11 @@ def parse_result(
     warnings_raw = body.get("warnings")
     warnings = [item for item in warnings_raw if isinstance(item, str)] if isinstance(warnings_raw, list) else []
 
+    quota_raw = body.get("quotaRemaining")
+    if not isinstance(quota_raw, Mapping):
+        quota_raw = body.get("remainingQuota")
+    quota_remaining = dict(quota_raw) if isinstance(quota_raw, Mapping) else None
+
     return PublicationResult(
         outcome=outcome,
         http_status=status,
@@ -239,6 +248,7 @@ def parse_result(
         remote_code=_text(body.get("code")),
         retryable=body.get("retryable") is True,
         retry_after_seconds=retry_after_seconds,
+        quota_remaining=quota_remaining,
         attempts=attempts,
     )
 
