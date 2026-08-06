@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Final, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,31 @@ class ClaimPromptError(Exception):
     """O prompt versionado não pôde ser carregado."""
 
 
+#: Raiz de instalação, a mesma que `contracts/` e a política do gate usam. No
+#: repositório é a raiz do checkout; num wheel instalado é a raiz do
+#: `site-packages`.
+_INSTALL_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
+
+
 def resolve_prompt_path(version: str, prompt_dir: str) -> Path:
-    """Caminho do prompt de uma versão. Não verifica existência."""
-    return Path(prompt_dir) / f"{version.replace('-', '_')}.txt"
+    """Caminho do prompt, procurado no cwd e depois na raiz de instalação.
+
+    `prompt_dir` é relativo ao DIRETÓRIO DE TRABALHO, o que só funciona rodando
+    de dentro do checkout. Um wheel instalado carregava contrato e política e
+    morria aqui, com "Disponíveis: nenhum" — mensagem correta e enganosa ao mesmo
+    tempo, porque o arquivo existe, só não sob o cwd de quem executa.
+
+    O relativo continua vencendo: é ele que permite apontar para um prompt
+    próprio sem reinstalar. A raiz de instalação é a segunda tentativa.
+    """
+    arquivo = f"{version.replace('-', '_')}.txt"
+    base = Path(prompt_dir)
+    candidato = base / arquivo
+    if candidato.exists() or base.is_absolute():
+        return candidato
+
+    instalado = _INSTALL_ROOT / base / arquivo
+    return instalado if instalado.exists() else candidato
 
 
 def load_claim_prompt(version: str, prompt_dir: str) -> str:

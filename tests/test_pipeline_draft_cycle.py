@@ -117,6 +117,18 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "ensure_worker_started", lambda: None)
     monkeypatch.setattr(pipeline, "build_submitter", lambda *a, **k: LocalDraftSubmitter(output_dir=drafts_dir))
     monkeypatch.setattr(pipeline.time, "sleep", lambda *_: None)
+    # Este teste cobre o CICLO DE DRAFT, nao a entrega ao Cinerie — que tem
+    # suite propria, contra servidor de loopback.
+    #
+    # Sem isto, `_publish_to_cinerie` resolve o modo como AUTO_PUBLISH (nada no
+    # ambiente diz o contrario) e dispara o preflight contratual, que e uma
+    # chamada de rede de verdade. O teste passava porque o draft morria ANTES:
+    # com `chdir(tmp_path)`, `config/editorial_gate/` nao existia sob o cwd, a
+    # politica do gate nao carregava e a pre-condicao local barrava a publicacao.
+    # Ou seja, a garantia de "nao usou rede" vinha de um arquivo faltando, e nao
+    # de uma decisao — assim que a resolucao de caminho passou a achar a politica
+    # instalada, a rede apareceu.
+    monkeypatch.setattr(pipeline, "MNSCR_DELIVERY_MODE", "DRAFT")
     monkeypatch.setattr(pipeline, "ls_save_article", lambda **kwargs: None)
     monkeypatch.setattr(pipeline, "ls_get_link_map", lambda: {"posts": []})
 

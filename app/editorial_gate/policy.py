@@ -90,9 +90,31 @@ class EditorialGatePolicy:
         }
 
 
+#: Raiz de instalação: a mesma que `app/cinerie/contract.py` usa para achar
+#: `contracts/`. No repositório é a raiz do checkout; num wheel instalado é a
+#: raiz do `site-packages`.
+_INSTALL_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
+
+
 def policy_path(policy_version: str, policy_dir: Optional[str] = None) -> Path:
+    """Caminho do arquivo de política, procurado em dois lugares.
+
+    `DEFAULT_POLICY_DIR` é relativo ao DIRETÓRIO DE TRABALHO, o que funciona
+    quando se roda de dentro do checkout e falha em qualquer outro lugar — um
+    wheel instalado carregava o contrato e morria aqui, porque `config/` não fica
+    sob o cwd de quem executa.
+
+    O caminho relativo continua vencendo: é ele que permite a um operador apontar
+    para uma política própria sem reinstalar nada. A raiz de instalação entra só
+    como segunda tentativa, quando o relativo não existe.
+    """
     base = Path(policy_dir or DEFAULT_POLICY_DIR)
-    return base / f"{policy_version}.json"
+    candidato = base / f"{policy_version}.json"
+    if candidato.exists() or base.is_absolute():
+        return candidato
+
+    instalado = _INSTALL_ROOT / base / f"{policy_version}.json"
+    return instalado if instalado.exists() else candidato
 
 
 def load_policy(

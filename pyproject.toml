@@ -40,12 +40,24 @@ dev = [
     "ruff>=0.8.0",
 ]
 
+# A CLI passa a ter nome proprio: sem isto, so `python -m app.main` funciona,
+# e um wheel instalado nao oferece comando nenhum.
+[project.scripts]
+mnscr = "app.entrypoint:main"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+# `contracts` e `config` entram como pacotes-namespace porque o runtime os
+# resolve por `Path(__file__).parents[2]`, que num wheel instalado aponta
+# para a raiz do site-packages. Sem eles o pacote instala e NAO roda: o
+# primeiro `local_identity()` morre com ContractArtifactError.
+include = ["app*", "contracts*", "config*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.txt", "*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
