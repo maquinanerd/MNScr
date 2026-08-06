@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.cinerie import outcomes as O
-from app.cinerie.outcomes import PublicationResult
+from app.cinerie.outcomes import PublicationResult, parse_result
 from app.cinerie_canary import execute_canary, synthetic_payload, validate_canary_environment
 
 
@@ -82,3 +82,20 @@ def test_payload_sintetico_e_deterministico_e_claramente_marcado():
     assert first["idempotencyKey"] == "mnscr:canary-mnscr-20260806:rev-1"
     assert "CANÁRIO SINTÉTICO" in first["title"]
     assert first["qa"]["passed"] is False
+
+
+def test_teto_restante_aceita_so_dimensoes_curtas_e_numericas():
+    result = parse_result(
+        {
+            "outcome": O.ROUTED_TO_REVIEW,
+            "quotaRemaining": {
+                "author": 4,
+                "forged\nlog": "segredo",
+                "nested": {"payload": "nao registrar"},
+            },
+        },
+        202,
+    )
+
+    assert result is not None
+    assert result.quota_remaining == {"author": 4}

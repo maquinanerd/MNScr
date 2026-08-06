@@ -41,6 +41,7 @@ tecnica. Ali o reenvio automatico para de vez.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Final, FrozenSet, List, Mapping, Optional, Tuple
 
@@ -230,7 +231,16 @@ def parse_result(
     quota_raw = body.get("quotaRemaining")
     if not isinstance(quota_raw, Mapping):
         quota_raw = body.get("remainingQuota")
-    quota_remaining = dict(quota_raw) if isinstance(quota_raw, Mapping) else None
+    quota_remaining = None
+    if isinstance(quota_raw, Mapping):
+        sanitized_quota = {
+            str(key): value
+            for key, value in list(quota_raw.items())[:20]
+            if re.fullmatch(r"[A-Za-z0-9_]{1,64}", str(key))
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        }
+        quota_remaining = sanitized_quota or None
 
     return PublicationResult(
         outcome=outcome,
