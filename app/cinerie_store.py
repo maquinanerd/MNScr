@@ -500,6 +500,13 @@ class CinerieStore:
         - `retry_count` NAO e tocado aqui. Tomar posse nao e tentar; quem conta
           tentativa e quem envia. Sem isso um `DEFERRED` seria aposentado por
           excesso de tentativas antes de a cota sequer virar.
+        - `delivery_status` tambem NAO e tocado. Posse e estado de entrega sao
+          coisas diferentes: o estado diz o que aconteceu com o pedido, a posse
+          diz quem esta cuidando dele agora. Sobrescrever o estado com
+          `IN_PROGRESS` ao reivindicar apagava justamente o motivo pelo qual o
+          item precisava de atencao — um `DEFERRED` devolvido deixava de se saber
+          adiado, e um `NEEDS_RECONCILIATION` deixava de pedir reconciliacao.
+          Quem marca `IN_PROGRESS` e quem de fato envia.
         """
         agora = _utc_now_iso()
         # Marca unica desta reivindicacao: e ela que permite reler exatamente as
@@ -511,7 +518,7 @@ class CinerieStore:
             self.conn.execute(
                 f"""
                 UPDATE cinerie_publications
-                   SET claimed_by = ?, lease_until = ?, delivery_status = ?, updated_at = ?
+                   SET claimed_by = ?, lease_until = ?, updated_at = ?
                  WHERE id IN (
                        SELECT id FROM cinerie_publications
                         WHERE delivery_status IN ({",".join("?" * len(self.CLAIMABLE_STATUSES))})
@@ -523,7 +530,7 @@ class CinerieStore:
                  )
                 """,
                 (
-                    marca, vencimento, STATUS_IN_PROGRESS, agora,
+                    marca, vencimento, agora,
                     *self.CLAIMABLE_STATUSES,
                     STATUS_IN_PROGRESS, agora,
                     STATUS_DEFERRED, agora,

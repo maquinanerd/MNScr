@@ -150,3 +150,54 @@ def _cliente_impaciente(server):
     from tests.test_cinerie_delivery import make_client
 
     return make_client(server, timeout=0.4)
+
+
+# ===========================================================================
+# Varredura
+# ===========================================================================
+
+
+def test_despacho_toma_posse_antes_de_agir(server, store):
+    """A varredura reivindica; ela nao pode agir sobre o que nao possui."""
+    server.script = [ScriptedResponse(status=201, body=published_body(article_id="a-1"), delay_seconds=2.0)]
+    servico = make_service(server, store, client=_cliente_impaciente(server))
+    draft = make_draft()
+    pendente = servico.publish_draft(draft)
+    assert pendente.status == STATUS_NEEDS_RECONCILIATION
+
+    server.script = [ScriptedResponse(status=200, body=published_body(article_id="a-1", idempotent=True))]
+    resultados = servico.dispatch_pending(
+        worker_id="varredor", draft_loader=lambda _id: draft, limit=10
+    )
+
+    assert [r.status for r in resultados] == [STATUS_COMPLETED]
+    assert store.get_by_request_id(pendente.request_id).payload_article_id == "a-1"
+
+
+def test_draft_que_nao_carrega_devolve_a_posse_em_vez_de_falhar(server, store):
+    """Problema de leitura local nao pode consumir tentativa da materia.
+
+    Se o draft sumiu do disco, o item nao esta errado — ele so nao pode ser
+    remontado AGORA. Marcar falha gastaria uma tentativa por um motivo que nao
+    tem nada a ver com o pedido, e um item com posse presa nunca mais seria
+    varrido.
+    """
+    server.script = [ScriptedResponse(status=201, body=published_body(), delay_seconds=2.0)]
+    servico = make_service(server, store, client=_cliente_impaciente(server))
+    pendente = servico.publish_draft(make_draft())
+
+    chamadas_antes = server.publication_count
+    resultados = servico.dispatch_pending(
+        worker_id="varredor", draft_loader=lambda _id: None, limit=10
+    )
+
+    assert resultados == []
+    assert server.publication_count == chamadas_antes, "nada podia ter sido enviado"
+
+    registro = store.get_by_request_id(pendente.request_id)
+    assert registro.delivery_status == STATUS_NEEDS_RECONCILIATION, (
+        "o estado nao podia mudar por um draft que nao carregou"
+    )
+    # E o mais importante: a posse voltou, entao a proxima varredura pega de novo.
+    tomado_de_novo = store.claim_pending(worker_id="outro", limit=10, lease_seconds=300)
+    assert [r.request_id for r in tomado_de_novo] == [pendente.request_id]

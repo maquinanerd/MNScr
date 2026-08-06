@@ -550,6 +550,88 @@ class CinerieService:
             return INTENT_UPDATE, article_id
         return INTENT_PUBLISH, None
 
+    def dispatch_pending(
+        self,
+        *,
+        worker_id: str,
+        draft_loader: Any,
+        limit: int = 10,
+        lease_seconds: int = 300,
+    ) -> List[PublicationAttemptResult]:
+        """Varre o que ficou para tras e leva cada item ao proximo estado.
+
+        A varredura toma POSSE antes de agir (``claim_pending``), porque o
+        prejuizo de duas instancias trabalhando a mesma linha nao e artigo
+        duplicado — a chave idempotente cuida disso — e sim COTA, consumida por
+        chave e so reposta a meia-noite do fuso da redacao.
+
+        O corpo do pedido nao vive no store: guardar ali uma copia do draft
+        criaria uma segunda verdade que envelhece. Ele e recarregado por
+        ``draft_loader(draft_id)``, e a identidade remontada e conferida contra a
+        gravada antes de qualquer envio.
+
+        Draft que nao carrega nao vira falha: a posse e DEVOLVIDA e o item volta
+        para a proxima varredura. Consumir a tentativa por um problema de leitura
+        local puniria a materia por algo que nao tem a ver com ela.
+        """
+        claimed = self.store.claim_pending(
+            worker_id=worker_id, limit=limit, lease_seconds=lease_seconds
+        )
+        results: List[PublicationAttemptResult] = []
+
+        for record in claimed:
+            draft = None
+            try:
+                draft = draft_loader(record.draft_id)
+            except Exception as exc:  # noqa: BLE001 - varredura nao morre por um item
+                logger.error(
+                    "[cinerie] draft %s nao carregou para despacho: %s",
+                    record.draft_id, type(exc).__name__,
+                )
+
+            if draft is None:
+                self.store.release_claim(record.request_id)
+                logger.warning(
+                    "[cinerie] despacho adiado: draft %s indisponivel; posse devolvida",
+                    record.draft_id,
+                )
+                continue
+
+            # `reconcile_ambiguous` serve aos dois casos: quando o desfecho e
+            # desconhecido ele PERGUNTA, e quando o item so precisa seguir ele
+            # reenvia o pedido identico — que, por ser identico, e inofensivo se
+            # ja tiver sido aplicado.
+            try:
+                self.reconcile_ambiguous(record.request_id, draft=draft)
+            except Exception as exc:  # noqa: BLE001 - idem
+                self.store.release_claim(record.request_id)
+                logger.exception(
+                    "[cinerie] despacho de %s falhou (%s); posse devolvida",
+                    record.request_id, type(exc).__name__,
+                )
+                continue
+
+            atualizado = self.store.get_by_request_id(record.request_id)
+            if atualizado is not None:
+                results.append(
+                    PublicationAttemptResult(
+                        status=atualizado.delivery_status,
+                        request_id=atualizado.request_id,
+                        idempotency_key=atualizado.idempotency_key,
+                        outcome=atualizado.payload_outcome,
+                        article_id=atualizado.payload_article_id,
+                        reason_codes=list(atualizado.reason_codes or []),
+                        next_eligible_at=atualizado.next_eligible_at,
+                        record=atualizado,
+                    )
+                )
+
+        logger.info(
+            "[CINERIE_DISPATCH] worker=%s tomadas=%s despachadas=%s",
+            worker_id, len(claimed), len(results),
+        )
+        return results
+
     def reconcile_ambiguous(
         self,
         request_id: str,
