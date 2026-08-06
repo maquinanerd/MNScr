@@ -28,6 +28,7 @@ exatamente o que a matriz de ``schemaTypeRecommendation`` existe para impedir.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Dict, Final, List, Optional, Tuple
@@ -102,6 +103,36 @@ def _next_id(index: int) -> str:
     aleatorio faria a mesma materia reprocessada apontar para "outro" bloco.
     """
     return f"b{index}"
+
+
+def _paragraph_texts(node: Any, *, limit: int) -> List[str]:
+    """Um ``<p>`` que carrega varios paragrafos vira varios blocos.
+
+    A materia publicada em 05/08 saiu como UM bloco de ~2.755 caracteres, com os
+    intertitulos como texto solto e quebra dupla dentro dele. O prompt pede
+    ``<h2>`` e paragrafos separados; naquela geracao o modelo devolveu tudo
+    dentro de um ``<p>`` so, e o conversor embarcou fielmente o que recebeu.
+
+    A divisao precisa acontecer ANTES da limpeza. ``_clean_block_text`` chama
+    ``get_text(" ")``, que troca as quebras por espaco — quem tentar separar
+    depois nao encontra mais nada para separar. (Foi o primeiro jeito que tentei,
+    e era um no-op silencioso.)
+
+    Nao ha adivinhacao de intertitulo: transformar texto solto em ``heading``
+    exigiria decidir por heuristica que uma linha curta e um titulo, e errar isso
+    publica hierarquia FALSA — pior para SEO do que um paragrafo a mais. O que se
+    recupera aqui e so o que o texto declara sem ambiguidade: onde um paragrafo
+    termina.
+    """
+    bruto = node.get_text("\n", strip=True)
+    partes = [parte for parte in re.split(r"\n\s*\n", bruto or "") if parte.strip()]
+
+    textos: List[str] = []
+    for parte in partes:
+        limpo = plain_text(collapse(parte), max_length=limit)
+        if limpo and find_forbidden_markup(limpo) is None:
+            textos.append(limpo)
+    return textos
 
 
 def _clean_block_text(node: Any, *, limit: int) -> Optional[str]:
@@ -191,9 +222,8 @@ def html_to_blocks(body_html: str) -> BlockConversion:
             result.warnings.append(f"BLOCO_DESCARTADO:{name}")
             continue
 
-        text = _clean_block_text(node, limit=paragraph_limit)
-        if text:
-            emit({"type": BLOCK_PARAGRAPH, "text": text})
+        for pedaco in _paragraph_texts(node, limit=paragraph_limit):
+            emit({"type": BLOCK_PARAGRAPH, "text": pedaco})
 
     # Texto solto fora de qualquer tag: o parser o deixa como nó de nivel raiz e
     # ele seria perdido em silencio.
