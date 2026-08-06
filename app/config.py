@@ -2,6 +2,7 @@ import logging
 import os
 import re
 from typing import Any, Dict, List
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -89,10 +90,38 @@ PUBLISHER_DOMAIN = (os.getenv('PUBLISHER_DOMAIN') or '').strip().lower()
 
 
 def _domain_list(raw: str) -> List[str]:
-    """Lista de hosts a partir de uma variável separada por vírgula."""
-    hosts = []
+    """Lista de HOSTS a partir de uma variável separada por vírgula.
+
+    Aceita host puro ou URL inteira, porque URL inteira é o que uma pessoa
+    realmente cola: a pendência manda copiar o valor de ``WORDPRESS_SITE_URL``,
+    que vem na forma ``https://www.<dominio>/``.
+
+    Antes esta função só aparava espaços, ponto inicial e ``www.``. Uma URL
+    passava inteira e virava uma entrada que jamais casaria com o host extraído
+    de uma URL do corpo — e o modo de falhar era o pior possível: a lista ficava
+    NÃO-VAZIA, então o aviso de startup, que existe justamente para denunciar
+    guarda desligada, não disparava. Lista com lixo silencia o próprio alarme, e
+    por isso é mais perigosa que lista vazia.
+    """
+    hosts: List[str] = []
     for chunk in (raw or '').replace(';', ',').split(','):
-        host = chunk.strip().lower().lstrip('.')
+        candidate = chunk.strip()
+        if not candidate:
+            continue
+
+        # `urlsplit` só enxerga o host quando há esquema. Sem ele, uma entrada
+        # como `exemplo.com.br/x` seria lida inteira como caminho.
+        if '://' not in candidate:
+            candidate = f'//{candidate}'
+        try:
+            # `hostname` já devolve minúsculo e descarta usuário, senha e porta.
+            host = urlsplit(candidate).hostname or ''
+        except ValueError:
+            # URL que nem parseia não vira entrada: entrada fantasma silenciaria
+            # o aviso de lista vazia.
+            continue
+
+        host = host.strip().lower().lstrip('.')
         if host.startswith('www.'):
             host = host[4:]
         if host and host not in hosts:
@@ -118,6 +147,15 @@ def _domain_list(raw: str) -> List[str]:
 OWN_CMS_DOMAINS: List[str] = _domain_list(
     (os.getenv('MNSCR_OWN_CMS_DOMAINS') or '') + ',' + PUBLISHER_DOMAIN
 )
+
+# Base pública do Cinerie, usada só para transformar o `canonicalSlug` devolvido
+# pela publicação num endereço que o link_store aceite.
+#
+# Vazia por padrão, e vazia significa "não grave link interno". É a escolha
+# segura: o link_store alimenta o <a href> da próxima matéria, então um endereço
+# chutado vira link quebrado publicado. Melhor não ter link do que ter link
+# errado — e o motivo aparece no log, em vez de ficar mudo.
+CINERIE_PUBLIC_BASE_URL = (os.getenv('CINERIE_PUBLIC_BASE_URL') or '').strip()
 
 if not OWN_CMS_DOMAINS:
     logger.warning(

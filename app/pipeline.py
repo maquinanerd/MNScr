@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -25,6 +25,7 @@ from .config import (
     BLOCKED_SOURCE_IDS,
     BLOCKED_TOPICS,
     CATEGORY_ALIASES,
+    CINERIE_PUBLIC_BASE_URL,
     EDITORIAL_GATE_ENABLED,
     FACTUAL_ASSESSMENT_ENABLED,
     FACTUAL_ASSESSMENT_MODE,
@@ -1833,15 +1834,25 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         # --- PUBLICACAO GOVERNADA NO CINERIE (AUTO_PUBLISH) ---
                         # Canal separado do envio de rascunho: outro contrato,
                         # outro endpoint, outro escopo.
-                        _publish_to_cinerie(draft, art_data)
+                        publicacao = _publish_to_cinerie(draft, art_data)
 
                         # Link store: alimenta sugestoes de links internos futuros.
                         #
-                        # Em modo local nao ha o que alimentar: `artifact_path` e
-                        # um caminho de arquivo e `draft_id` nao e endereco de
-                        # nada. Gravar qualquer um dos dois transformaria a
-                        # proxima materia em portadora de um link falso.
-                        if INTERNAL_LINKING_ENABLED:
+                        # O unico endereco publico desta materia e o que o
+                        # Cinerie devolveu na publicacao (`canonicalSlug`).
+                        # `artifact_path` e um caminho de arquivo e `draft_id`
+                        # nao e endereco de nada — gravar qualquer um dos dois
+                        # transformaria a proxima materia em portadora de um
+                        # link falso, e a barreira do link_store os recusaria de
+                        # qualquer forma, deixando o link interno morto com um
+                        # WARNING por artigo como unico sinal.
+                        slug_publicado = getattr(
+                            getattr(publicacao, "record", None), "canonical_slug", None
+                        )
+                        url_publica = _public_url_for_slug(
+                            slug_publicado, base=CINERIE_PUBLIC_BASE_URL
+                        )
+                        if INTERNAL_LINKING_ENABLED and url_publica:
                             from .cluster_engine import score_event
                             event = score_event({
                                 "title":   title,
@@ -1850,9 +1861,16 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             })
                             ls_save_article(
                                 title=title,
-                                url=result.artifact_path or draft.draft_id,
+                                url=url_publica,
                                 category=art_data['category'],
                                 entity=event.get("entity", ""),
+                            )
+                        elif INTERNAL_LINKING_ENABLED:
+                            logger.info(
+                                "[LINKS] link_store ignorado draft_id=%s motivo=%s: "
+                                "sem endereco publico para esta materia",
+                                draft.draft_id,
+                                "sem_canonical_slug" if not slug_publicado else "base_publica_ausente",
                             )
                         else:
                             logger.info(
@@ -2101,6 +2119,37 @@ def _deliver_draft(draft, art_data):
     finally:
         if service is not None:
             service.close()
+
+
+def _public_url_for_slug(slug, *, base):
+    """Endereço público a partir do ``canonicalSlug`` devolvido pela publicação.
+
+    O link_store existe para virar ``<a href>`` no corpo da próxima matéria,
+    então o que entra ali precisa ser endereço de verdade. O pipeline oferecia
+    ``result.artifact_path or draft.draft_id`` — um caminho em disco e um
+    identificador —, a barreira do link_store recusava os dois, e o link interno
+    simplesmente nunca existia, com um WARNING por artigo como único sinal.
+
+    Faltando slug ou base, devolve ``None`` em vez de chutar. Endereço errado é
+    pior que endereço nenhum: ele vira link quebrado publicado na matéria
+    seguinte.
+    """
+    slug_text = str(slug or "").strip().strip("/")
+    base_text = str(base or "").strip()
+    if not slug_text or not base_text:
+        return None
+
+    parsed = urlsplit(base_text)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        # Base mal configurada não vira endereço: o link_store recusaria de
+        # qualquer forma, e recusar aqui deixa o motivo mais perto da causa.
+        logger.warning(
+            "[LINKS] CINERIE_PUBLIC_BASE_URL invalida (%r): link interno nao sera gravado",
+            base_text,
+        )
+        return None
+
+    return f"{base_text.rstrip('/')}/{slug_text}"
 
 
 def _publish_to_cinerie(draft, art_data):
