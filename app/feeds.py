@@ -4,14 +4,55 @@ import json
 import logging
 import re
 import time
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as _ET_stdlib  # noqa: F401 - só para o tipo ParseError
+import zlib
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
 from urllib.parse import unquote, urlparse
 
+# `defusedxml`, e não `xml.etree` direto: sitemap é documento de terceiro, e o
+# parser da stdlib expande entidade. Um documento hostil vira consumo de memória
+# (billion laughs) ou leitura de arquivo local (XXE) sem nada no caminho para
+# impedir. A API é a mesma; muda só o que ele se recusa a fazer.
+import defusedxml.ElementTree as ET
 import feedparser
 import requests
+
+from .safe_http import safe_get
+
+#: Teto dos bytes recebidos de um feed ou sitemap.
+SITEMAP_MAX_BYTES = 8 * 1024 * 1024
+
+#: Teto do XML já descomprimido. Separado porque a compressão é justamente o que
+#: permite caber um documento enorme dentro do primeiro teto.
+SITEMAP_MAX_DECOMPRESSED_BYTES = 32 * 1024 * 1024
+
+#: Profundidade máxima de índice de sitemap.
+#:
+#: A recursão não tinha limite: um índice que aponta para si mesmo — ou dois que
+#: apontam um para o outro — recursava até estourar a pilha. O contador de itens
+#: não segurava isso, porque um índice sem `<url>` nenhum não incrementa nada e a
+#: condição de parada nunca chegava.
+SITEMAP_MAX_DEPTH = 3
+
+
+def _gunzip_limitado(bruto: bytes, teto: int) -> bytes:
+    """Descomprime com teto, abortando assim que o limite é ultrapassado.
+
+    `gzip.decompress` expande tudo antes de devolver, então ele não tem como
+    recusar: quando a função retorna, a memória já foi consumida. Aqui a
+    expansão é incremental e para no teto.
+    """
+    descompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    saida = bytearray()
+    for inicio in range(0, len(bruto), 64 * 1024):
+        saida.extend(
+            descompressor.decompress(bruto[inicio : inicio + 64 * 1024], teto - len(saida) + 1)
+        )
+        if len(saida) > teto:
+            raise ValueError(f"conteudo descomprimido passou de {teto} bytes")
+    return bytes(saida)
 
 logger = logging.getLogger(__name__)
 
@@ -314,17 +355,33 @@ class FeedReader:
         self.session.headers.update({'User-Agent': user_agent})
 
     def _fetch_content(self, url: str) -> Optional[bytes]:
+        """Busca feed ou sitemap com destino verificado e corpo limitado.
+
+        A URL aqui nem sempre é de configuração: o `<loc>` de um índice de
+        sitemap vem do documento buscado, ou seja, de fora. Sem verificação o
+        pipeline vira procurador de quem escreveu aquele XML — em VM de nuvem o
+        alvo clássico é `169.254.169.254`, que serve credencial de instância.
+        """
         try:
-            response = self.session.get(url, timeout=20)
-            response.raise_for_status()
+            resposta = safe_get(
+                url,
+                headers=dict(self.session.headers),
+                max_bytes=SITEMAP_MAX_BYTES,
+            )
+            if resposta.status_code >= 400:
+                logger.error(f"Feed/sitemap {url} respondeu {resposta.status_code}")
+                return None
 
-            content = response.content
-            ctype = response.headers.get("Content-Type", "").lower()
+            content = resposta.content
+            ctype = (resposta.headers.get("Content-Type") or "").lower()
 
-            # Decompress if it's a gzipped file
+            # Arquivo `.gz` é CONTEÚDO comprimido, não `Content-Encoding`: o
+            # `safe_get` já tratou o segundo, e este caso continua por conta
+            # daqui. O teto é o mesmo do descomprimido, senão um `sitemap.xml.gz`
+            # de 20 KB reintroduz a bomba que a outra ponta acabou de barrar.
             if "gzip" in ctype or url.endswith(".gz"):
                 try:
-                    content = gzip.decompress(content)
+                    content = _gunzip_limitado(content, SITEMAP_MAX_DECOMPRESSED_BYTES)
                 except (gzip.BadGzipFile, OSError) as e:
                     logger.warning(
                         f"Content from {url} seems to be gzipped but failed to decompress. "
@@ -344,7 +401,8 @@ class FeedReader:
         xml_bytes: bytes,
         limit: int = 50,
         allow_regex: Optional[str] = None,
-        deny_regex: Optional[str] = None
+        deny_regex: Optional[str] = None,
+        _depth: int = 0,
     ) -> List[Dict[str, Any]]:
         """
         Parses a sitemap.xml (or sitemapindex.xml) and returns a list of article-like dicts.
@@ -362,6 +420,15 @@ class FeedReader:
 
         # Handle sitemap index by fetching and parsing child sitemaps
         if root.tag.endswith("sitemapindex"):
+            if _depth >= SITEMAP_MAX_DEPTH:
+                logger.warning(
+                    "[SITEMAP] profundidade maxima (%s) atingida; indice ignorado. "
+                    "Um indice que aponta para si mesmo recursaria sem fim, e o "
+                    "contador de itens nao segura isso: indice sem <url> nao "
+                    "incrementa nada.",
+                    SITEMAP_MAX_DEPTH,
+                )
+                return []
             logger.info("Detected sitemap index. Fetching child sitemaps.")
             child_sitemap_urls = [
                 sm.findtext("ns:loc", NS)
@@ -377,7 +444,8 @@ class FeedReader:
                 if child_bytes:
                     # Recursive call to parse the child sitemap, passing regexes
                     items.extend(self._parse_sitemap(
-                        child_bytes, limit=limit, allow_regex=allow_regex, deny_regex=deny_regex
+                        child_bytes, limit=limit, allow_regex=allow_regex, deny_regex=deny_regex,
+                        _depth=_depth + 1,
                     ))
                     time.sleep(0.2)  # Be polite
 
