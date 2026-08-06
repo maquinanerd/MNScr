@@ -20,7 +20,13 @@ dependencies = [
     "python-slugify>=8.0.4",
     "requests>=2.32.4",
     "trafilatura>=2.0.0",
-    "urllib3==2.5.0",
+    # Piso, nao pino: `urllib3==2.5.0` e `cryptography` 49.0.0 carregam
+    # advisories conhecidos. Um pino exato impede o proprio conserto — foi ele
+    # que segurou o lock na versao vulneravel mesmo com correcao publicada.
+    "urllib3>=2.7.0",
+    # Transitiva por `google-auth`, declarada aqui so para levantar o piso: sem
+    # a declaracao, o resolvedor nao tem motivo para sair da versao vulneravel.
+    "cryptography>=50.0.0",
     "charset-normalizer==3.4.4",
 ]
 
