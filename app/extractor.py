@@ -10,6 +10,10 @@ import requests
 from bs4 import BeautifulSoup
 
 from .config import USER_AGENT
+from .safe_http import UnsafeUrlError, safe_get
+
+#: Teto de bytes de uma pagina de artigo.
+ARTICLE_MAX_BYTES = 8 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -463,18 +467,68 @@ def _html_word_count_without_x_embeds(content_html: str) -> int:
 
 # --- New helper functions from user prompt ---
 def _get(url, timeout=25, tries=2):
+    """Busca a pagina do artigo com destino verificado e corpo limitado.
+
+    A URL vem do feed, ou seja, de fora. `requests.get(..., allow_redirects=True)`
+    entregava o redirect sem exame nenhum: a primeira URL podia ser inocente e o
+    `Location` apontar para a rede interna. Ver `app/safe_http.py`.
+
+    `UnsafeUrlError` NAO e retentavel — insistir num destino proibido nao muda a
+    resposta, so repete a tentativa de alcancar a rede interna.
+    """
     last_err = None
     for _ in range(tries):
         try:
-            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout, allow_redirects=True)
-            if 200 <= r.status_code < 300 and "text/html" in r.headers.get("Content-Type",""):
-                return r
+            resultado = safe_get(
+                url,
+                headers={"User-Agent": USER_AGENT},
+                read_timeout=timeout,
+                max_bytes=ARTICLE_MAX_BYTES,
+            )
+            tipo = (resultado.headers.get("Content-Type") or "")
+            if 200 <= resultado.status_code < 300 and "text/html" in tipo:
+                return _RespostaCompativel(resultado)
+        except UnsafeUrlError:
+            raise
         except Exception as e:
             last_err = e
         time.sleep(0.6)
     if last_err:
         raise last_err
     raise RuntimeError(f"HTTP error fetching {url}")
+
+
+class _RespostaCompativel:
+    """Casca com a forma de `requests.Response` que o resto do modulo espera.
+
+    Trocar o cliente nao deveria obrigar a reescrever quem consome o resultado;
+    aqui so os tres atributos usados a jusante sao expostos.
+    """
+
+    __slots__ = ("_resultado",)
+
+    def __init__(self, resultado):
+        self._resultado = resultado
+
+    @property
+    def content(self) -> bytes:
+        return self._resultado.content
+
+    @property
+    def text(self) -> str:
+        return self._resultado.content.decode("utf-8", errors="replace")
+
+    @property
+    def status_code(self) -> int:
+        return self._resultado.status_code
+
+    @property
+    def headers(self) -> dict:
+        return self._resultado.headers
+
+    @property
+    def url(self) -> str:
+        return self._resultado.url
 
 def _clean_text(s):
     if not s:
