@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from types import SimpleNamespace
 
 from app import pipeline
 from app.cinerie import outcomes as O
@@ -129,3 +130,43 @@ def test_observabilidade_nao_injeta_reason_code_remoto_no_log(caplog):
 
     assert "FORGED" not in caplog.text
     assert "DIMENSION_NOT_DECLARED=1" in caplog.text
+
+
+def test_primeiro_deferred_e_contado_no_caminho_de_entrega(monkeypatch):
+    from app import cinerie_service as service_module
+    from app import cinerie_store as store_module
+    from app.cinerie import client as client_module
+    from app.cinerie import preflight as preflight_module
+    from app.delivery import retry as retry_module
+
+    deferred = PublicationAttemptResult(
+        status="DEFERRED",
+        outcome=O.DEFERRED,
+        reason_codes=["AUTO_PUBLISH_AUTHOR_DAILY_LIMIT_REACHED"],
+    )
+    observed = []
+
+    class _Store:
+        def close(self):
+            return None
+
+    class _Service:
+        def __init__(self, *, store, **_kwargs):
+            self.store = store
+
+        def publish_draft(self, _draft, **_kwargs):
+            return deferred
+
+    monkeypatch.setattr(pipeline, "MNSCR_DELIVERY_MODE", "AUTO_PUBLISH")
+    monkeypatch.setattr(service_module, "resolve_delivery_mode", lambda *_a, **_k: "AUTO_PUBLISH")
+    monkeypatch.setattr(service_module, "CinerieService", _Service)
+    monkeypatch.setattr(store_module, "CinerieStore", _Store)
+    monkeypatch.setattr(client_module, "CinerieClient", lambda *_a, **_k: object())
+    monkeypatch.setattr(client_module, "CinerieConfig", lambda **_k: object())
+    monkeypatch.setattr(preflight_module, "ContractPreflight", lambda *_a, **_k: object())
+    monkeypatch.setattr(retry_module, "RetryPolicy", lambda **_k: object())
+    monkeypatch.setattr(pipeline, "log_cinerie_quota_deferrals", lambda results: observed.extend(results))
+
+    pipeline._publish_to_cinerie(SimpleNamespace(draft_id="draft-1"), {})
+
+    assert observed == [deferred]

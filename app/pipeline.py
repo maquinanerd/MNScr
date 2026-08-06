@@ -2220,6 +2220,7 @@ def _publish_to_cinerie(draft, art_data):
         )
         result = service.publish_draft(draft, seo_source=art_data.get("_seo_source"))
         logger.info("[CINERIE_PUBLICATION] draft_id=%s %s", draft.draft_id, result.safe_log_fields())
+        log_cinerie_quota_deferrals([result])
         return result
     except Exception as exc:  # noqa: BLE001 - o draft local nunca pode ser perdido
         logger.exception(
