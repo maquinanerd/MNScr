@@ -114,7 +114,7 @@ class TitleValidator:
 
         # 4. Verificar acentuação
         if re.search(r'\bgratis\b', title, re.IGNORECASE):
-            self.errors.append("❌ Acentuação: 'grátis' ou 'de graça' (preferir 'de graça' em tom neutro).")
+            self.warnings.append("⚠️ Acentuação: 'grátis' ou 'de graça' (preferir 'de graça' em tom neutro).")
 
         # 5. Verificar regência
         if re.search(r'\bficou de lado\b', title, re.IGNORECASE):
@@ -126,7 +126,11 @@ class TitleValidator:
             self.warnings.append(f"⚠️ Caixa-alta excessiva ({uppercase_count} letras maiúsculas). Reservar para nomes próprios.")
 
         # 7. Verificar sensacionalismo (expandido)
-        sensationalism = re.findall(r'\b(?:surpreendente|impressionante|explode|bomba|nerfado|morto|mata|matou)\b', title, re.IGNORECASE)
+        sensationalism = re.findall(
+            r'\b(?:surpreendentes?|impressionantes?|explode(?:m)?|bomba|morto|mata|matou)\b',
+            title,
+            re.IGNORECASE,
+        )
         if sensationalism:
             self.errors.append(f"❌ Sensacionalismo detectado: {', '.join(set(sensationalism))}. Use termos factuais.")
 
@@ -156,12 +160,12 @@ class TitleValidator:
             self.warnings.append("⚠️ Termo vazio: 'sucesso surpreendente'. Use apenas 'sucesso'.")
 
         # 13. Verificar gíria agressiva (avisar, não bloquear)
-        gíria = re.findall(r'\b(?:nerfado|nerf)\b', title, re.IGNORECASE)
+        gíria = re.findall(r'\b(?:nerfad[ao]s?|nerf)\b', title, re.IGNORECASE)
         if gíria:
             self.warnings.append("⚠️ Gíria agressiva detectada: 'nerfado'. Use 'ajustado' ou 'modificado'.")
 
         # 13.5 Verificar "ficou de lado" (regência - avisar)
-        if re.search(r'\bficou de lado\b', title, re.IGNORECASE):
+        if re.search(r'\bfic(?:a|ou) de lado\b', title, re.IGNORECASE):
             self.warnings.append("⚠️ Regência: 'ficou de lado' é pouco claro. Use 'ficou de fora', 'saiu', 'foi removido'.")
 
         # 14. Verificar múltiplas interrogações ou exclamações (bloquear)

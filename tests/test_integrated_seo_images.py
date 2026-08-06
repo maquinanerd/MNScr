@@ -8,25 +8,12 @@ Valida que os dois sistemas funcionam juntos corretamente.
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).parent))
 
 from app.html_utils import unescape_html_content, validate_and_fix_figures
-from app.seo_title_optimizer import optimize_title
+from app.seo_title_optimizer import ACTION_VERBS, optimize_title
 
 
-@pytest.mark.xfail(
-    reason=(
-        "DEFEITO DE PRODUTO, nao do teste: o fluxo integrado reprova porque "
-        "o otimizador de titulo recusa a otimizacao ao remover tokens "
-        "protegidos de PT-BR (`pode`, `vai`) — ver o WARNING "
-        "`seo_title_optimizer.py:301`. O teste ficava verde porque devolvia "
-        "`return 1` em vez de asseverar, e o pytest descarta o retorno. "
-        "Marcado como falha conhecida para nao esconder de novo."
-    ),
-    strict=False,
-)
 def test_integrated_flow():
     """Teste o fluxo completo de processamento."""
     print("=" * 80)
@@ -106,8 +93,7 @@ def test_integrated_flow():
     checks = {
         "Título sem clickbait": "Você não vai acreditar" not in optimized_title,
         "Título entre 50-70 chars": 50 <= len(optimized_title) <= 70,
-        "Título com verbo de ação": any(verb in optimized_title.lower() for verb in
-                                         ['anuncia', 'lança', 'critica', 'vence', 'fecha']),
+        "Título com verbo de ação": any(verb in optimized_title.lower() for verb in ACTION_VERBS),
         "HTML desescapado": "&lt;" not in fixed_content and "&gt;" not in fixed_content,
         "Figuras com estrutura correta": "<figure><img" in fixed_content,
         "Imagens com alt text": 'alt=' in fixed_content,

@@ -26,7 +26,8 @@ ACTION_VERBS = {
     'assina', 'acusa', 'investiga', 'aprova', 'rejeita', 'promete', 'ameaça',
     'realiza', 'completa', 'inaugura', 'publica', 'exibe', 'produz', 'dirige',
     'estreia', 'arrecada', 'conquista', 'bate', 'muda', 'transforma', 'rompe',
-    'estabelece', 'garante', 'expõe', 'convida', 'proíbe', 'libera', 'quebra'
+    'estabelece', 'garante', 'expõe', 'convida', 'proíbe', 'libera', 'quebra',
+    'planeja',
 }
 
 # Palavras vagas que reduzem qualidade
@@ -266,10 +267,26 @@ def optimize_title(
     optimized = remove_clickbait(optimized)
     if optimized != original_for_clickbait:
         report['changes_made'].append('Removido padrão de clickbait')
+    # A proteção começa depois da remoção do prefixo proibido. O "vai" de
+    # "você não vai acreditar" pertence ao clickbait, não à afirmação editorial.
+    protected_baseline = optimized
 
     # 3. Remove vague words
     words = optimized.split()
-    cleaned_words = [w for w in words if w.lower() not in VAGUE_WORDS]
+    # Verbos e auxiliares protegidos carregam modalidade factual ("pode" não é
+    # o mesmo que "vai"). Preserve-os e remova apenas vagueza que não muda o
+    # compromisso factual da frase.
+    cleaned_words = [
+        w for w in words
+        if w.lower() not in VAGUE_WORDS or w.lower() in PROTECTED_PT_BR_TOKENS
+    ]
+    protected_vague = sorted(
+        {w.lower() for w in words} & VAGUE_WORDS & PROTECTED_PT_BR_TOKENS
+    )
+    if protected_vague:
+        report['changes_made'].append(
+            f"Preservado verbo/auxiliar modal: {', '.join(protected_vague)}"
+        )
     if len(cleaned_words) < len(words):
         optimized = ' '.join(cleaned_words)
         report['changes_made'].append('Removidas palavras vagas')
@@ -296,7 +313,7 @@ def optimize_title(
     optimized = optimized.replace(''', "'").replace(''', "'")
     optimized = optimized.replace('"', '"').replace('"', '"')
 
-    removed_protected = _removed_protected_tokens(original_title, optimized)
+    removed_protected = _removed_protected_tokens(protected_baseline, optimized)
     if removed_protected:
         logger.warning(
             "Title optimization rejected: removed protected PT-BR token(s): %s",

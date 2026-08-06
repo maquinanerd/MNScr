@@ -7,25 +7,9 @@ Demonstra funcionamento do TitleValidator.
 
 import sys
 
-import pytest
-
 from app.title_validator import TitleValidator
 
 
-@pytest.mark.xfail(
-    reason=(
-        "DEFEITO DE PRODUTO, nao do teste: 5 dos casos de titulo saem com "
-        "severidade menor que a esperada — ha titulo que deveria ser ERRO "
-        "saindo como AVISO, e titulo que deveria ser ERRO ou AVISO saindo "
-        "como VALIDO. Ou seja, materia com erro de regencia ou acentuacao "
-        "passa pela regra editorial. Isto ficou INVISIVEL enquanto a funcao "
-        "devolvia `failed == 0` em vez de asseverar: o pytest descarta o "
-        "retorno, entao a suite ficava verde com 5 casos reprovando. "
-        "Marcado como falha conhecida para nao esconder de novo — corrigir "
-        "as regras de portugues e trabalho proprio, com decisao editorial."
-    ),
-    strict=False,
-)
 def test_titles():
     """Testa uma bateria de títulos bons e ruins."""
 

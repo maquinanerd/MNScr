@@ -349,6 +349,16 @@ def unescape_html_content(content: str) -> str:
     """
     if not content:
         return content
+    # A IA às vezes coloca uma figura HTML inteira, escapada, dentro de `src`.
+    # Desescapar tudo primeiro transforma `&quot;` em aspas aninhadas e destrói
+    # a fronteira do atributo antes que o parser possa recuperar a URL. Extraia
+    # a URL enquanto a estrutura ainda é inequívoca; a validação de esquema e a
+    # normalização da figura continuam em `validate_and_fix_figures`.
+    nested_src = re.compile(
+        r'src="&lt;(?:figure|img)\b.*?src=&quot;(https?://[^&"<>\s]+)&quot;.*?"',
+        re.IGNORECASE | re.DOTALL,
+    )
+    content = nested_src.sub(lambda match: f'src="{match.group(1)}"', content)
     return html.unescape(content)
 
 # =========================
