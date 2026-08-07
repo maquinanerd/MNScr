@@ -535,6 +535,17 @@ def _clean_text(s):
         return ""
     return re.sub(r"[ \t]+", " ", html.unescape(s)).strip()
 
+def _collapse_ws(s: str) -> str:
+    """Espacos em branco viram UM espaco. Complemento de `get_text(" ")`.
+
+    `get_text(" ")` poe um separador entre cada pedaco de texto; onde a marcacao
+    ja tinha espaco, sobram dois. Colapsar depois e o que deixa a legenda com o
+    espacamento que o leitor veria.
+    """
+    if not s:
+        return ""
+    return re.sub(r"\s+", " ", str(s)).strip()
+
 def _warn_trafilatura_unavailable(context: str) -> None:
     global _TRAFILATURA_WARNING_EMITTED
     if _TRAFILATURA_IMPORT_ERROR and not _TRAFILATURA_WARNING_EMITTED:
@@ -874,7 +885,12 @@ def _clean_english_captions(soup: BeautifulSoup, domain: str, base_url: str = ""
     """
     captured: Dict[str, str] = {}
     for figcaption in soup.find_all('figcaption'):
-        caption_text = figcaption.get_text(strip=True)
+        # COM separador. Sem ele o BeautifulSoup emenda os pedacos: a legenda
+        # `<span>'Made in Korea' Season 2</span><span>Disney/Hulu</span>` saia
+        # como `Season 2Disney/Hulu`, duas palavras coladas, e essa legenda vira
+        # texto publicado (`alt` da imagem, credito). Ver
+        # `collect_image_captions_from_article`, que ja fazia certo.
+        caption_text = _collapse_ws(figcaption.get_text(" ", strip=True))
         if caption_text and _is_likely_english_caption(caption_text):
             captured.update(_capture_figure_caption(figcaption, caption_text, base_url))
             logger.info(f"INFO ({domain}): Removendo legenda em inglês: {caption_text[:60]}")
@@ -1028,7 +1044,10 @@ class ContentExtractor:
             fig = soup.new_tag('figure')
             img = soup.new_tag('img', src=img_url)
             cap = soup.new_tag('figcaption')
-            caption_text = div.get_text(strip=True)
+            # Mesmo defeito de `_clean_english_captions`: o `div` costuma ter
+            # legenda e credito em elementos irmaos, e sem separador os dois
+            # saem colados — aqui direto no `alt` da imagem.
+            caption_text = _collapse_ws(div.get_text(" ", strip=True))
             if caption_text:
                 cap.string = caption_text
                 img['alt'] = caption_text

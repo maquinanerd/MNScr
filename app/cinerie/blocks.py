@@ -23,6 +23,12 @@ registra o que ficou de fora.
 **Lista vira um paragrafo por item.** O contrato nao tem bloco de lista. Um
 ``ItemList`` fabricado a partir de ``<li>`` seria structured data falso, que e
 exatamente o que a matriz de ``schemaTypeRecommendation`` existe para impedir.
+
+**Video do YouTube vira bloco proprio.** Quando o corpo chega aqui, o embed ja
+foi normalizado para um paragrafo com a URL nua (``html_utils
+.strip_credits_and_normalize_youtube``), e ate agora esse paragrafo saia como
+``paragraph`` — uma URL crua no meio do texto. O contrato tem ``video``, e o
+Cinerie sabe montar o player; o que faltava era emitir.
 """
 
 from __future__ import annotations
@@ -31,9 +37,10 @@ import logging
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Dict, Final, List, Optional, Tuple
+from typing import Any, Dict, Final, List, Optional, Sequence, Tuple
 
 from .contract import load_schema
+from .identity import is_stable_id
 from .text import collapse, find_forbidden_markup, plain_text
 
 logger = logging.getLogger(__name__)
@@ -42,9 +49,27 @@ BLOCK_PARAGRAPH: Final[str] = "paragraph"
 BLOCK_HEADING: Final[str] = "heading"
 BLOCK_QUOTE: Final[str] = "quote"
 BLOCK_DIVIDER: Final[str] = "divider"
+BLOCK_VIDEO: Final[str] = "video"
+BLOCK_SOURCE_LIST: Final[str] = "sourceList"
+
+PROVIDER_YOUTUBE: Final[str] = "youtube"
 
 #: Niveis de heading aceitos. ``h1`` e do titulo da pagina; o corpo comeca em h2.
 _HEADING_LEVELS: Final[Dict[str, int]] = {"h1": 2, "h2": 2, "h3": 3, "h4": 4, "h5": 4, "h6": 4}
+
+#: Id do bloco de video. Nao e posicional de proposito: ``b7`` viraria ``b8`` na
+#: revisao que ganhasse um paragrafo antes dele, e o CMS leria isso como "outro
+#: bloco". Um id fixo sobrevive a reescrita do corpo inteiro.
+_VIDEO_BLOCK_ID: Final[str] = "vid1"
+
+#: Id do bloco de fontes. Mesmo motivo do video: ele e sempre o ultimo, e o
+#: numero do ultimo muda a cada paragrafo que entra ou sai.
+SOURCE_LIST_BLOCK_ID: Final[str] = "srcs"
+
+#: Marca do paragrafo de credito que ``html_utils.append_source_credit_block``
+#: deixa no fim do corpo. Ele existe porque ate agora nao havia bloco de fontes;
+#: quando o ``sourceList`` sai, ele e a MESMA informacao em texto morto.
+_CREDIT_LINE_CLASS: Final[str] = "mn-source-credit-line"
 
 
 @lru_cache(maxsize=1)
@@ -90,10 +115,158 @@ class BlockConversion:
     warnings: List[str] = field(default_factory=list)
     dropped_images: List[str] = field(default_factory=list)
     truncated: bool = False
+    #: Id do paragrafo "Fonte: X" quando o corpo trouxe um. Quem monta o pedido
+    #: usa isso para troca-lo pelo ``sourceList`` — e so quando o ``sourceList``
+    #: realmente sair, para nao apagar a atribuicao e nao por nada no lugar.
+    credit_block_id: Optional[str] = None
 
     @property
     def is_empty(self) -> bool:
         return not self.blocks
+
+
+#: Um id de video do YouTube tem exatamente 11 caracteres deste alfabeto. E a
+#: unica validacao possivel sem ir a rede — e ja basta para nao emitir um player
+#: apontando para o que o extrator confundiu com id.
+_YOUTUBE_ID: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+#: As formas de URL do YouTube que sobrevivem ate aqui. A normalizacao anterior
+#: entrega ``watch?v=``; as outras estao aqui porque o conversor tambem roda
+#: sobre corpo que nao passou por ela (replay, teste, artefato antigo).
+_YOUTUBE_URL_PATTERNS: Final[Tuple[re.Pattern[str], ...]] = (
+    re.compile(r"^https?://(?:www\.|m\.)?youtube(?:-nocookie)?\.com/watch\?(?:[^#]*&)?v=([^&#\s]+)", re.I),
+    re.compile(r"^https?://(?:www\.)?youtu\.be/([^?&#/\s]+)", re.I),
+    re.compile(r"^https?://(?:www\.|m\.)?youtube(?:-nocookie)?\.com/embed/([^?&#/\s]+)", re.I),
+    re.compile(r"^https?://(?:www\.|m\.)?youtube(?:-nocookie)?\.com/shorts/([^?&#/\s]+)", re.I),
+)
+
+
+def youtube_video_id(value: str) -> Optional[str]:
+    """Id do video em uma URL do YouTube, ou ``None``.
+
+    ``None`` cobre dois casos que o chamador trata igual — descartar com aviso:
+    a URL nao e do YouTube, ou o que veio no lugar do id nao tem a forma de um.
+    """
+    text = collapse(value)
+    if not text:
+        return None
+    for pattern in _YOUTUBE_URL_PATTERNS:
+        match = pattern.match(text)
+        if match is None:
+            continue
+        candidate = match.group(1).strip()
+        return candidate if _YOUTUBE_ID.match(candidate) else None
+    return None
+
+
+def _video_block(video_id: str) -> Dict[str, Any]:
+    """Bloco ``video`` a partir de um id ja validado.
+
+    ``externalId`` so entra quando o id CABE no formato do contrato. Os dois
+    alfabetos quase coincidem — ``stableId`` e ``[A-Za-z0-9][A-Za-z0-9._:-]*`` e
+    aceita ``_`` e ``-`` —, mas ele exige que o PRIMEIRO caractere seja
+    alfanumerico, e um id do YouTube pode comecar por ``-`` ou ``_``. Mandar um
+    desses reprovaria o pedido INTEIRO por causa de um campo opcional; a
+    ``url``, que nao tem esse formato, carrega o video sozinha.
+    """
+    block: Dict[str, Any] = {
+        "type": BLOCK_VIDEO,
+        "provider": PROVIDER_YOUTUBE,
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+    }
+    if is_stable_id(video_id):
+        block["externalId"] = video_id
+    return block
+
+
+#: Um paragrafo que E o video: so a URL, nada mais. Um paragrafo que MENCIONA o
+#: YouTube no meio de uma frase continua sendo texto.
+_YOUTUBE_HOST: Final[re.Pattern[str]] = re.compile(
+    r"^https?://(?:www\.|m\.)?(?:youtube(?:-nocookie)?\.com|youtu\.be)/\S*$", re.I
+)
+
+
+def _looks_like_youtube(value: str) -> bool:
+    return bool(_YOUTUBE_HOST.match(collapse(value)))
+
+
+def _attach_video(result: BlockConversion, videos: List[str]) -> None:
+    """Poe o video depois do primeiro ``h2``, ou no fim quando nao ha nenhum.
+
+    Depois do primeiro intertitulo porque e onde o leitor ja sabe do que a
+    materia trata e ainda nao chegou ao fim — e porque a posicao e DEDUZIVEL do
+    corpo, e nao um numero escolhido a mao que a proxima materia desmente.
+    Sem ``h2``, o fim e o unico lugar que nao corta o texto ao meio.
+
+    Um video por materia. O segundo nao entra: dois players na mesma pagina
+    disputam a atencao e o Cinerie desenha os dois do mesmo tamanho.
+    """
+    if not videos:
+        return
+    if len(videos) > 1:
+        logger.info(
+            "[BLOCKS] %s videos no corpo; publicado o primeiro (%s), ignorados %s",
+            len(videos), videos[0], ", ".join(videos[1:]),
+        )
+        result.warnings.append(f"VIDEOS_EXCEDENTES:{len(videos) - 1}")
+
+    block = _video_block(videos[0])
+    block["id"] = _VIDEO_BLOCK_ID
+
+    posicao = len(result.blocks)
+    for index, existente in enumerate(result.blocks):
+        if existente.get("type") == BLOCK_HEADING and existente.get("level") == 2:
+            posicao = index + 1
+            break
+    result.blocks.insert(posicao, block)
+
+
+def attach_source_list(result: BlockConversion, source_ids: Sequence[str]) -> Optional[str]:
+    """Fecha a materia com ``sourceList``, no lugar do paragrafo "Fonte: X".
+
+    Os ids vem de ``externalSources`` do MESMO pedido e sao conferidos aqui um a
+    um: ``sourceRefs`` que aponta para fonte que nao esta na lista e um link
+    quebrado publicado — e o contrato nao tem como pegar isso, porque ele so
+    conhece o formato do id, nao a lista.
+
+    O paragrafo de credito so sai quando o bloco entra. Se nao houver nenhuma
+    fonte referenciavel, o texto continua la: perder a atribuicao seria pior do
+    que exibi-la sem link, que e exatamente o estado que este bloco veio
+    corrigir.
+
+    Devolve o id do bloco emitido, ou ``None`` quando nao houve o que emitir.
+    """
+    refs: List[str] = []
+    for candidate in source_ids or []:
+        text = collapse(candidate)
+        if text and is_stable_id(text) and text not in refs:
+            refs.append(text)
+    # Teto lido do contrato, nao redigitado: `sourceRefs` e array, entao o
+    # limite mora em `maxItems` (e nao em `maxLength`, que e de campo de texto).
+    variant = _block_variants().get(BLOCK_SOURCE_LIST) or {}
+    max_items = variant.get("properties", {}).get("sourceRefs", {}).get("maxItems")
+    if isinstance(max_items, int) and max_items > 0:
+        refs = refs[:max_items]
+
+    if not refs:
+        result.warnings.append("FONTES_SEM_ID_ESTAVEL")
+        return None
+
+    if result.credit_block_id is not None:
+        result.blocks[:] = [
+            block for block in result.blocks if block.get("id") != result.credit_block_id
+        ]
+        result.credit_block_id = None
+    elif len(result.blocks) + 1 > max_blocks():
+        # Sem paragrafo de credito para trocar, o bloco e um a mais; num corpo
+        # ja no teto ele empurraria a materia para fora do contrato.
+        result.warnings.append("SOURCE_LIST_NAO_COUBE")
+        return None
+
+    result.blocks.append(
+        {"id": SOURCE_LIST_BLOCK_ID, "type": BLOCK_SOURCE_LIST, "sourceRefs": refs}
+    )
+    return SOURCE_LIST_BLOCK_ID
 
 
 def _next_id(index: int) -> str:
@@ -105,6 +278,64 @@ def _next_id(index: int) -> str:
     return f"b{index}"
 
 
+#: Tags que o navegador desenha em linha PROPRIA. Elas — e so elas — merecem uma
+#: fronteira quando o texto e achatado.
+_BLOCK_LEVEL_TAGS: Final[frozenset] = frozenset(
+    {
+        "address", "article", "aside", "blockquote", "br", "dd", "div", "dl", "dt",
+        "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
+        "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table",
+        "tbody", "td", "tfoot", "th", "thead", "tr", "ul",
+    }
+)
+
+
+def node_text(node: Any) -> str:
+    """Texto visivel do no, com o espacamento que o NAVEGADOR desenharia.
+
+    ``get_text(separador)`` do BeautifulSoup nao serve para texto que vai ser
+    publicado, e erra nos dois sentidos:
+
+    - **Sem separador** ele emenda. ``<span>Season 2</span><span>Disney/Hulu
+      </span>`` vira ``Season 2Disney/Hulu`` — duas palavras coladas, do jeito
+      que apareceu no log de hoje na legenda da Hollywood Reporter.
+    - **Com separador** ele separa demais. ``<b>Rothman</b>.`` vira
+      ``Rothman .``, com espaco antes do ponto, porque o separador entra entre
+      TODOS os pedacos, inclusive onde a marcacao nao tinha espaco nenhum.
+
+    A regra certa e a do navegador: entre dois trechos em LINHA (``<b>``,
+    ``<a>``, ``<span>``) nao ha fronteira nenhuma — o espaco, quando existe,
+    esta no proprio texto e e preservado. Fronteira so entra onde a tag e de
+    bloco, e ai como ``\\n``, que ``collapse`` depois vira um espaco e que
+    ``_paragraph_texts`` usa para achar onde um paragrafo termina.
+    """
+    from bs4 import Comment, NavigableString
+
+    pedacos: List[str] = []
+
+    def visitar(atual: Any) -> None:
+        if isinstance(atual, Comment):
+            # Comentario nao e texto visivel; sem esta guarda ele sai publicado,
+            # porque `Comment` e subclasse de `NavigableString`.
+            return
+        if isinstance(atual, NavigableString):
+            pedacos.append(str(atual))
+            return
+        name = (getattr(atual, "name", "") or "").lower()
+        if name in ("script", "style", "noscript"):
+            return
+        de_bloco = name in _BLOCK_LEVEL_TAGS
+        if de_bloco:
+            pedacos.append("\n")
+        for filho in getattr(atual, "children", []):
+            visitar(filho)
+        if de_bloco:
+            pedacos.append("\n")
+
+    visitar(node)
+    return "".join(pedacos)
+
+
 def _paragraph_texts(node: Any, *, limit: int) -> List[str]:
     """Um ``<p>`` que carrega varios paragrafos vira varios blocos.
 
@@ -113,10 +344,9 @@ def _paragraph_texts(node: Any, *, limit: int) -> List[str]:
     ``<h2>`` e paragrafos separados; naquela geracao o modelo devolveu tudo
     dentro de um ``<p>`` so, e o conversor embarcou fielmente o que recebeu.
 
-    A divisao precisa acontecer ANTES da limpeza. ``_clean_block_text`` chama
-    ``get_text(" ")``, que troca as quebras por espaco — quem tentar separar
-    depois nao encontra mais nada para separar. (Foi o primeiro jeito que tentei,
-    e era um no-op silencioso.)
+    A divisao precisa acontecer ANTES da limpeza: ``collapse`` troca as quebras
+    por espaco, e quem tentar separar depois nao encontra mais nada para separar.
+    (Foi o primeiro jeito que tentei, e era um no-op silencioso.)
 
     Nao ha adivinhacao de intertitulo: transformar texto solto em ``heading``
     exigiria decidir por heuristica que uma linha curta e um titulo, e errar isso
@@ -124,8 +354,8 @@ def _paragraph_texts(node: Any, *, limit: int) -> List[str]:
     recupera aqui e so o que o texto declara sem ambiguidade: onde um paragrafo
     termina.
     """
-    bruto = node.get_text("\n", strip=True)
-    partes = [parte for parte in re.split(r"\n\s*\n", bruto or "") if parte.strip()]
+    bruto = node_text(node)
+    partes = [parte for parte in re.split(r"\n[ \t]*\n", bruto or "") if parte.strip()]
 
     textos: List[str] = []
     for parte in partes:
@@ -136,10 +366,10 @@ def _paragraph_texts(node: Any, *, limit: int) -> List[str]:
 
 
 def _clean_block_text(node: Any, *, limit: int) -> Optional[str]:
-    text = plain_text(node.get_text(" ", strip=True), max_length=limit)
+    text = plain_text(node_text(node), max_length=limit)
     if not text:
         return None
-    # Cinto e suspensorio: `get_text` ja remove tags, mas um texto que contenha
+    # Cinto e suspensorio: `node_text` ja remove tags, mas um texto que contenha
     # `<script` como TEXTO literal ainda seria recusado la.
     if find_forbidden_markup(text) is not None:
         return None
@@ -147,12 +377,130 @@ def _clean_block_text(node: Any, *, limit: int) -> Optional[str]:
 
 
 def _quote_attribution(node: Any) -> Optional[str]:
+    """Autor declarado em ``<cite>``/``<footer>`` — e retirado do corpo da citacao.
+
+    Extrair sem retirar deixava o nome duas vezes na materia: dentro do texto da
+    citacao e no campo ``attribution``, que o Cinerie desenha logo abaixo.
+    """
     for tag in ("cite", "footer"):
         found = node.find(tag)
         if found is not None:
-            text = collapse(found.get_text(" ", strip=True))
+            text = collapse(node_text(found))
+            found.extract()
             if text:
                 return plain_text(text, max_length=block_field_limit(BLOCK_QUOTE, "attribution", 500))
+    return None
+
+
+#: Verbos que marcam fala ATRIBUIDA. Lista fechada de proposito: e ela que
+#: separa "alguem disse isto" de uma expressao entre aspas, e um verbo generico
+#: a mais transformaria qualquer aspa em citacao.
+_SPEECH_VERBS: Final[str] = (
+    r"disse|afirmou|declarou|explicou|contou|revelou|acrescentou|completou|comentou|"
+    r"ressaltou|destacou|refor[cç]ou|admitiu|garantiu|concluiu|lembrou|observou|"
+    r"defendeu|resumiu|brincou|adiantou"
+)
+
+#: Nome proprio: 1 a 4 palavras comecando em maiuscula, com as particulas do
+#: portugues no meio (``Jorg Hillebrand``, ``Destin Daniel Cretton``).
+_PROPER_NAME: Final[str] = (
+    r"[A-ZÀ-Ý][\wÀ-ÿ'’-]*(?:\s+(?:d[aeo]s?|e|van|von|de la)\s+[A-ZÀ-Ý][\wÀ-ÿ'’-]*"
+    r"|\s+[A-ZÀ-Ý][\wÀ-ÿ'’-]*){0,3}"
+)
+
+_OPEN_QUOTE: Final[str] = r"[\"“„]"
+_CLOSE_QUOTE: Final[str] = r"[\"”“]"
+
+#: ``"...", afirmou Rothman.`` — a forma esmagadoramente mais comum no corpo
+#: gerado. O ponto e a virgula ganham ``\s*`` porque a marcacao inline pode ter
+#: deixado espaco antes deles.
+_QUOTE_AFTER: Final[re.Pattern[str]] = re.compile(
+    rf"{_OPEN_QUOTE}(?P<texto>[^\"“”„]{{40,4000}}){_CLOSE_QUOTE}"
+    rf"\s*,?\s*(?:{_SPEECH_VERBS})\s+(?P<autor>{_PROPER_NAME})\s*\.",
+)
+
+#: ``Rothman afirmou: "..."`` — a forma invertida.
+_QUOTE_BEFORE: Final[re.Pattern[str]] = re.compile(
+    rf"(?P<autor>{_PROPER_NAME})\s+(?:{_SPEECH_VERBS})\s*:\s*"
+    rf"{_OPEN_QUOTE}(?P<texto>[^\"“”„]{{40,4000}}){_CLOSE_QUOTE}\s*\.?",
+)
+
+#: Teto de citacoes promovidas por materia. Acima disso a materia deixa de ser
+#: uma reportagem com uma fala em destaque e vira uma transcricao fatiada.
+_MAX_PROMOTED_QUOTES: Final[int] = 2
+
+#: Fim de frase. O que vier depois do ultimo destes, antes da citacao, e a
+#: clausula que APRESENTA a fala — nao um paragrafo por si.
+_SENTENCE_END: Final[re.Pattern[str]] = re.compile(r"[.!?…](?=[^.!?…]*$)")
+
+#: Ate onde a clausula de apresentacao pode ir. Acima disso o "resto" nao e uma
+#: clausula: e texto da materia, e a divisao estava errada desde o comeco.
+_MAX_LEAD_IN: Final[int] = 120
+
+
+def _trim_lead_in(before: str) -> Optional[str]:
+    """Corta a clausula que apresenta a citacao, ou desiste da promocao.
+
+    ``Em comunicado oficial, a Universal declarou: "..."`` deixava para tras o
+    paragrafo ``Em comunicado oficial, a`` — uma frase cortada no artigo, que
+    foi publicada assim na materia 21. O pedaco entre o ultimo ponto final e a
+    citacao pertence a atribuicao, e a atribuicao ja esta no bloco.
+
+    ``None`` significa "nao promova": o pedaco e grande demais para ser uma
+    clausula de apresentacao, entao ele e conteudo, e cortar perderia texto.
+    """
+    texto = collapse(before)
+    if not texto:
+        return ""
+    # O lookahead de `_SENTENCE_END` ja garante que o unico casamento e o ULTIMO
+    # fim de frase; nao ha laco a fazer aqui.
+    match = _SENTENCE_END.search(texto)
+    corte = match.end() if match is not None else 0
+    if len(collapse(texto[corte:])) > _MAX_LEAD_IN:
+        return None
+    return collapse(texto[:corte])
+
+
+@dataclass
+class _QuoteSplit:
+    """Um paragrafo partido em: o que vem antes, a citacao, o que vem depois."""
+
+    before: str
+    text: str
+    attribution: str
+    after: str
+
+
+def split_promotable_quote(paragraph: str) -> Optional[_QuoteSplit]:
+    """A citacao com autor declarado dentro de um paragrafo, se houver uma.
+
+    Duas condicoes, e as duas sao do TEXTO — nada e inferido:
+
+    1. ha um trecho entre aspas com corpo de frase (40 caracteres ou mais), e
+    2. encostado nele ha um verbo de fala e um nome proprio.
+
+    Sem as duas, a resposta e ``None`` e a citacao continua no paragrafo. E o
+    desfecho certo para ``a frase traduzida e "Hair today, Gorn tomorrow"`` (sem
+    verbo de fala) e para ``afirmou o executivo`` (sem nome): promover ali seria
+    inventar quem falou, e uma atribuicao errada e pior do que nenhuma.
+    """
+    for pattern in (_QUOTE_AFTER, _QUOTE_BEFORE):
+        match = pattern.search(paragraph)
+        if match is None:
+            continue
+        texto = collapse(match.group("texto"))
+        autor = collapse(match.group("autor")).rstrip(" ,.;:")
+        if not texto or not autor:
+            continue
+        before = _trim_lead_in(paragraph[: match.start()])
+        if before is None:
+            continue
+        return _QuoteSplit(
+            before=before,
+            text=texto,
+            attribution=autor,
+            after=collapse(paragraph[match.end():]),
+        )
     return None
 
 
@@ -180,6 +528,53 @@ def html_to_blocks(body_html: str) -> BlockConversion:
         payload["id"] = _next_id(counter)
         result.blocks.append(payload)
 
+    videos: List[str] = []
+    quotes_promoted = 0
+
+    def emit_paragraph(text: str) -> None:
+        """Paragrafo — ou a citacao que ele carrega, promovida a bloco proprio.
+
+        Promover e PARTIR, nao duplicar: o que vem antes e o que vem depois da
+        fala continuam como paragrafo. Repetir o texto nos dois lugares
+        publicaria a mesma frase duas vezes na mesma pagina.
+        """
+        nonlocal quotes_promoted
+
+        if quotes_promoted >= _MAX_PROMOTED_QUOTES:
+            emit({"type": BLOCK_PARAGRAPH, "text": text})
+            return
+        split = split_promotable_quote(text)
+        if split is None:
+            emit({"type": BLOCK_PARAGRAPH, "text": text})
+            return
+
+        quotes_promoted += 1
+        if split.before:
+            emit({"type": BLOCK_PARAGRAPH, "text": plain_text(split.before, max_length=paragraph_limit)})
+        result.blocks.append(
+            {
+                "id": f"q{quotes_promoted}",
+                "type": BLOCK_QUOTE,
+                "text": plain_text(split.text, max_length=quote_limit),
+                "attribution": plain_text(
+                    split.attribution, max_length=block_field_limit(BLOCK_QUOTE, "attribution", 500)
+                ),
+            }
+        )
+        if split.after:
+            emit({"type": BLOCK_PARAGRAPH, "text": plain_text(split.after, max_length=paragraph_limit)})
+
+    def collect_video(url: str, *, origem: str) -> None:
+        """Guarda o video valido; descarta o invalido com aviso, nunca meio bloco."""
+        video_id = youtube_video_id(url)
+        if video_id is None:
+            result.warnings.append(f"VIDEO_DESCARTADO:{origem}")
+            logger.warning("[BLOCKS] video descartado origem=%s url=%r", origem, url[:120])
+            return
+        if video_id in videos:
+            return
+        videos.append(video_id)
+
     for node in root.find_all(recursive=False) or []:
         name = (node.name or "").lower()
 
@@ -190,10 +585,12 @@ def html_to_blocks(body_html: str) -> BlockConversion:
             continue
 
         if name == "blockquote":
+            # Atribuicao primeiro: ela RETIRA o `<cite>` do no, e o texto lido
+            # depois ja sai sem o nome repetido dentro da citacao.
+            attribution = _quote_attribution(node)
             text = _clean_block_text(node, limit=quote_limit)
             if text:
                 block: Dict[str, Any] = {"type": BLOCK_QUOTE, "text": text}
-                attribution = _quote_attribution(node)
                 if attribution:
                     block["attribution"] = attribution
                 emit(block)
@@ -216,21 +613,57 @@ def html_to_blocks(body_html: str) -> BlockConversion:
                 src = collapse(image.get("src"))
                 if src:
                     result.dropped_images.append(src)
+            # Uma `<figure>` que so envolvia o embed guarda o video, nao a
+            # imagem. So o que PARECE YouTube entra: um iframe de outro provedor
+            # dentro de uma figure nao e video descartado, e sim nao-video.
+            for frame in node.find_all("iframe"):
+                src = collapse(frame.get("src"))
+                if _looks_like_youtube(src):
+                    collect_video(src, origem="iframe-figure")
+            for wrapped in node.find_all("p"):
+                texto = collapse(node_text(wrapped))
+                if _looks_like_youtube(texto):
+                    collect_video(texto, origem="p-figure")
             continue
 
-        if name in ("script", "style", "iframe", "object", "embed", "noscript"):
+        if name == "iframe":
+            src = collapse(node.get("src"))
+            if _looks_like_youtube(src):
+                collect_video(src, origem="iframe")
+            else:
+                result.warnings.append(f"BLOCO_DESCARTADO:{name}")
+            continue
+
+        if name in ("script", "style", "object", "embed", "noscript"):
             result.warnings.append(f"BLOCO_DESCARTADO:{name}")
             continue
 
+        if _CREDIT_LINE_CLASS in (node.get("class") or []):
+            # O paragrafo "Fonte: X" e a MESMA informacao que `sourceList` leva
+            # em forma clicavel. Ele fica marcado e so sai quando o bloco de
+            # fontes entrar de fato — ver `attach_source_list`.
+            text = _clean_block_text(node, limit=paragraph_limit)
+            if text:
+                emit({"type": BLOCK_PARAGRAPH, "text": text})
+                result.credit_block_id = result.blocks[-1]["id"]
+            continue
+
         for pedaco in _paragraph_texts(node, limit=paragraph_limit):
-            emit({"type": BLOCK_PARAGRAPH, "text": pedaco})
+            if _looks_like_youtube(pedaco):
+                collect_video(pedaco, origem="paragrafo")
+                continue
+            emit_paragraph(pedaco)
 
     # Texto solto fora de qualquer tag: o parser o deixa como nó de nivel raiz e
-    # ele seria perdido em silencio.
-    if not result.blocks:
-        text = plain_text(root.get_text(" ", strip=True), max_length=paragraph_limit)
+    # ele seria perdido em silencio. `videos` entra na condicao porque um corpo
+    # que so tem o video nao esta vazio — sem isso a URL voltava como paragrafo
+    # ao lado do proprio bloco de video.
+    if not result.blocks and not videos:
+        text = plain_text(node_text(root), max_length=paragraph_limit)
         if text and find_forbidden_markup(text) is None:
             emit({"type": BLOCK_PARAGRAPH, "text": text})
+
+    _attach_video(result, videos)
 
     if result.dropped_images:
         result.warnings.append(
@@ -283,7 +716,12 @@ __all__ = [
     "BLOCK_HEADING",
     "BLOCK_PARAGRAPH",
     "BLOCK_QUOTE",
+    "BLOCK_SOURCE_LIST",
+    "BLOCK_VIDEO",
+    "PROVIDER_YOUTUBE",
+    "SOURCE_LIST_BLOCK_ID",
     "BlockConversion",
+    "attach_source_list",
     "block_field_limit",
     "blocks_summary",
     "has_rating",
@@ -291,4 +729,7 @@ __all__ = [
     "has_structured_steps",
     "html_to_blocks",
     "max_blocks",
+    "node_text",
+    "split_promotable_quote",
+    "youtube_video_id",
 ]

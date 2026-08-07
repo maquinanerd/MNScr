@@ -20,7 +20,15 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Final, List, Mapping, Optional, Sequence
 
-from .blocks import BlockConversion, has_rating, has_structured_list, has_structured_steps, html_to_blocks
+from .blocks import (
+    BlockConversion,
+    attach_source_list,
+    blocks_summary,
+    has_rating,
+    has_structured_list,
+    has_structured_steps,
+    html_to_blocks,
+)
 from .contract import ContractIdentity, local_identity
 from .errors import RequestBuildError
 from .fallbacks import derive_summary
@@ -74,6 +82,7 @@ class BuiltRequest:
         return self.seo.auto_publishable and bool(self.payload.get("qa", {}).get("passed"))
 
     def safe_log_fields(self) -> Dict[str, Any]:
+        total, por_tipo = blocks_summary(self.payload.get("blocks", []))
         fields = self.identity.safe_log_fields()
         fields.update(
             {
@@ -81,7 +90,11 @@ class BuiltRequest:
                 "contract_version": self.contract.contract_version,
                 "schema_hash": self.contract.truncated_hash(),
                 "publication_intent": self.intent,
-                "block_count": len(self.payload.get("blocks", [])),
+                "block_count": total,
+                # O total sozinho nao diz o que mudou: uma materia com video e
+                # outra sem podem ter a mesma contagem. O inventario por tipo e
+                # o que deixa a auditoria ver que tipo de bloco saiu de fato.
+                "blocks_by_type": por_tipo,
             }
         )
         return fields
@@ -413,6 +426,12 @@ def build_publication_request(
             "corpo acima do limite de blocos do contrato; truncar publicaria a materia pela metade"
         )
 
+    # As fontes precisam existir ANTES do corpo fechar: `sourceList` referencia
+    # `externalSources` por id, e o unico jeito de garantir que a referencia
+    # resolve e monta-la a partir da lista que vai no MESMO pedido.
+    external_sources = _sources_from_draft(draft)
+    attach_source_list(conversion, [entry["id"] for entry in external_sources])
+
     resolved_content_type = resolve_content_type(
         content_type or (getattr(content, "category_suggestions", None) or [None])[0]
     )
@@ -483,7 +502,7 @@ def build_publication_request(
         "title": article_title,
         "summary": summary,
         "blocks": conversion.blocks,
-        "externalSources": _sources_from_draft(draft),
+        "externalSources": external_sources,
         "entityLinks": _normalize_entity_links(entity_links),
         "media": media_entries,
         "seo": seo.to_contract(),
