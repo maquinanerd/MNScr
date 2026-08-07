@@ -626,24 +626,30 @@ def rule_material_claim_unsupported(draft, policy, context) -> EditorialRuleResu
 
 
 def rule_critical_fact_conflict(draft, policy, context) -> EditorialRuleResult:
-    """Sources contradict each other on something the reader would act on."""
-    if not bool(policy.threshold("blockCriticalFactConflicts", True)):
-        return _result(
-            "GATE_CRITICAL_FACT_CONFLICT", SEVERITY_BLOCKING, False,
-            "Bloqueio de conflito critico desabilitado pela politica.",
-        )
+    """Sources contradict each other on something the reader would act on.
+
+    ``blockCriticalFactConflicts=false`` downgrades this to ORIENTATION, not
+    silence: the same decision already made for the SEO thresholds. Turning the
+    threshold off must not stop the rule from evaluating — it only changes
+    ``BLOCKING`` to ``WARNING``, so a real conflict still shows up in
+    ``qa.warnings`` instead of quietly disappearing from the verdict.
+    """
+    blocks = bool(policy.threshold("blockCriticalFactConflicts", True))
+    severity = SEVERITY_BLOCKING if blocks else SEVERITY_WARNING
+
     assessment = _assessment_of(draft, context)
     if assessment is None:
         return _result(
-            "GATE_CRITICAL_FACT_CONFLICT", SEVERITY_BLOCKING, False,
+            "GATE_CRITICAL_FACT_CONFLICT", severity, False,
             "Sem avaliacao factual para inspecionar.",
-            metrics={"has_assessment": False},
+            metrics={"has_assessment": False, "blocking_enabled": blocks},
         )
 
     critical = assessment.critical_conflicts
     return _result(
-        "GATE_CRITICAL_FACT_CONFLICT", SEVERITY_BLOCKING, bool(critical),
-        f"{len(critical)} conflito(s) critico(s) entre fontes." if critical else
+        "GATE_CRITICAL_FACT_CONFLICT", severity, bool(critical),
+        (f"{len(critical)} conflito(s) critico(s) entre fontes."
+         + ("" if blocks else " Politica trata como orientacao, nao bloqueio.")) if critical else
         "Nenhum conflito critico.",
         evidence=[
             f"{c.conflict_type} {c.subject or '-'}: {' vs '.join(c.values[:2])}"
@@ -653,6 +659,7 @@ def rule_critical_fact_conflict(draft, policy, context) -> EditorialRuleResult:
         remediation="Nao resolver automaticamente: um humano decide qual versao vale.",
         metrics={
             "critical_conflicts": len(critical),
+            "blocking_enabled": blocks,
             "total_conflicts": len(assessment.conflicts),
         },
     )

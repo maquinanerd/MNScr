@@ -13,6 +13,7 @@ de screen-db ou de internet.
 """
 
 import json
+import re
 
 import pytest
 
@@ -88,6 +89,27 @@ SOURCES = [
         "url": "https://deadline.example/b",
         "domain": "deadline.example",
         "content": "A estreia acontece em 29 de julho de 2026 segundo o estudio.",
+    },
+]
+
+#: As MESMAS duas fontes, discordando da data de estreia. Copia fiel de
+#: `tests/fixtures/factual/sources_conflicting.json`, que e o cenario ja provado
+#: como gerador de conflito CRITICO em `test_factual_integration`; inventar um
+#: par de textos novo aqui arriscaria um conflito que nao dispara, e o teste
+#: passaria por vacuidade em vez de por acerto.
+CONFLICTING_SOURCES = [
+    {
+        "url": "https://variety.example/a",
+        "domain": "variety.example",
+        "content": "O estudio confirmou que a estreia acontece em 29 de julho de 2026 conforme anunciado.",
+    },
+    {
+        "url": "https://deadline.example/b",
+        "domain": "deadline.example",
+        "content": (
+            "A estreia foi remarcada e acontece agora em 05 de agosto de 2026 segundo o estudio. "
+            "A producao custa R$ 4,1 milhoes de acordo com o estudio responsavel."
+        ),
     },
 ]
 
@@ -1017,6 +1039,138 @@ def test_body_carries_sources_and_provenance(server, store):
     assert body["externalSources"][0]["role"] == "primary"
     assert body["provenance"]["inputHash"] == "a" * 64
     assert body["sourcePayloadHash"] == "b" * 64
+
+
+def test_external_sources_ids_are_domain_derived_not_feed_derived(server, store):
+    """Duas fontes do MESMO cluster nao podem dividir o mesmo id.
+
+    ``source_id`` em ``SourceReference`` e o id do FEED que trouxe a materia
+    (ex.: ``rssprime_tv``) — o MESMO para todas as fontes de um cluster. Antes da
+    correcao, ``_sources_from_draft`` reaproveitava esse valor como ``id`` de
+    ``externalSources``, e duas fontes de dominios diferentes saiam com o
+    MESMO id. O id agora vem do dominio registravel, que e unico por veiculo.
+    """
+    draft = make_draft()
+    draft.sources = [
+        SourceReference(
+            url="https://variety.example/tv/god-of-war",
+            source_id="rssprime_tv",
+            domain="variety.example",
+            is_primary=True,
+            extraction_status="OK",
+        ),
+        SourceReference(
+            url="https://deadline.example/tv/god-of-war",
+            source_id="rssprime_tv",
+            domain="deadline.example",
+            extraction_status="OK",
+        ),
+    ]
+    draft.factual_assessment = build_factual_assessment(draft, SOURCES, mode="deterministic")
+    draft.editorial_gate = EditorialGate().evaluate(
+        draft, context={"output_mode": "local", "factual_assessment": draft.factual_assessment}
+    )
+
+    server.script = [ScriptedResponse(201, published_body())]
+    make_service(server, store).publish_draft(draft)
+    entries = server.last_request.body["externalSources"]
+
+    assert len(entries) == 2
+    ids = [entry["id"] for entry in entries]
+    assert len(set(ids)) == 2, f"ids deveriam ser unicos por dominio, veio {ids}"
+    assert ids[0] == "variety.example"
+    assert ids[1] == "deadline.example"
+    assert entries[0]["role"] == "primary"
+    assert entries[1]["role"] == "secondary"
+    for entry in entries:
+        assert entry["url"].startswith("https://")
+        assert entry["name"]
+
+
+def test_external_source_name_is_human_readable_for_known_outlets(server, store):
+    """``variety.com`` vira ``Variety``, nao o hostname cru."""
+    draft = make_draft()
+    draft.sources = [
+        SourceReference(
+            url="https://www.variety.com/2026/film/news/example-story",
+            source_id="rssprime_movies",
+            domain="www.variety.com",
+            name="variety",
+            is_primary=True,
+            extraction_status="OK",
+        ),
+    ]
+    draft.factual_assessment = build_factual_assessment(draft, SOURCES, mode="deterministic")
+    draft.editorial_gate = EditorialGate().evaluate(
+        draft, context={"output_mode": "local", "factual_assessment": draft.factual_assessment}
+    )
+
+    server.script = [ScriptedResponse(201, published_body())]
+    make_service(server, store).publish_draft(draft)
+    entries = server.last_request.body["externalSources"]
+
+    assert entries[0]["id"] == "variety.com"
+    assert entries[0]["name"] == "Variety"
+
+
+def test_external_sources_pass_the_contract_schema(server, store):
+    """O bloco montado e valido contra `editorial-publication-request-v1`.
+
+    `id`, `name`, `url` e `role` sao TODOS obrigatorios no contrato, e `id` tem
+    formato imposto (`^[A-Za-z0-9][A-Za-z0-9._:-]*$`). Conferir campo a campo,
+    como os dois testes acima fazem, nao prova que o SCHEMA aceita — e o schema
+    e quem recusa o pedido inteiro do outro lado.
+    """
+    from app.cinerie.validation import validate_request
+
+    server.script = [ScriptedResponse(201, published_body())]
+    make_service(server, store).publish_draft(make_draft())
+    body = server.last_request.body
+
+    report = validate_request(body, identity=local_identity())
+    assert report.ok, f"payload invalido contra o schema: {report.summary()}"
+
+    entries = body["externalSources"]
+    assert entries, "externalSources vazio nao exercita o schema"
+    for entry in entries:
+        assert set(entry) >= {"id", "name", "url", "role"}
+        assert re.match(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$", entry["id"]), entry["id"]
+        assert entry["role"] in ("primary", "secondary")
+    assert [e["role"] for e in entries].count("primary") == 1
+
+
+def test_critical_conflict_reaches_qa_warnings_and_qa_still_passes(server, store):
+    """Sob a v2, o conflito viaja como AVISO no payload — e `qa.passed` continua true.
+
+    Este e o teste de ponta a ponta da decisao: nao basta a regra do gate virar
+    WARNING localmente, o que importa e o que CHEGA ao Cinerie. Se o conflito
+    caisse em `qa.blockingErrors`, `qa.passed` viraria false e o servidor
+    devolveria `qa_not_passed` — que e exatamente o sintoma que se quer eliminar.
+    """
+    from app.editorial_gate.policy import load_policy
+
+    draft = make_draft()
+    # O titulo precisa AFIRMAR a data para haver o que contradizer: sem uma
+    # afirmacao datada no draft, as duas fontes discordam entre si sem que o
+    # draft esteja de nenhum dos lados, e nao ha conflito critico a reportar.
+    draft.content.title = "Estudio confirma estreia em 29 de julho de 2026"
+    draft.factual_assessment = build_factual_assessment(draft, CONFLICTING_SOURCES, mode="deterministic")
+    draft.editorial_gate = EditorialGate(
+        load_policy("mnscr-editorial-gate-v2", "config/editorial_gate")
+    ).evaluate(
+        draft, context={"output_mode": "local", "factual_assessment": draft.factual_assessment}
+    )
+    assert draft.factual_assessment.critical_conflicts, (
+        "o cenario precisa ter conflito critico, senao o teste passa por vacuidade"
+    )
+
+    server.script = [ScriptedResponse(201, published_body())]
+    make_service(server, store).publish_draft(draft)
+    qa = server.last_request.body["qa"]
+
+    assert qa["passed"] is True, f"blockingErrors: {qa['blockingErrors']}"
+    assert qa["blockingErrors"] == []
+    assert any("GATE" in w or "CONFLIT" in w.upper() for w in qa["warnings"]), qa["warnings"]
 
 
 def test_generated_at_is_the_pipeline_time_not_now(server, store):

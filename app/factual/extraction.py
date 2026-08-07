@@ -157,15 +157,22 @@ def _subject_of(sentence: str) -> Optional[str]:
 
     Deliberately shallow — real entity resolution is MS-5. This only needs to be
     stable enough to tell "the same subject" from "a different subject".
+
+    A match needs at least two ALPHABETIC characters, not just two characters:
+    the capture class also admits digits, apostrophes and hyphens, so a token
+    like "A2" or "A-" would otherwise pass a bare length check while still
+    being a one-letter article wearing a longer disguise.
     """
     match = re.match(
-        r"\s*((?:[A-ZÁÉÍÓÚÂÊÔÃÕÇ][\w'’\-]*)(?:\s+(?:de|da|do|dos|das|of|the)?\s*"
+        r"\s*((?:[A-ZÁÉÍÓÚÂÊÔÃÕÇ][\w'’\-]+)(?:\s+(?:de|da|do|dos|das|of|the)?\s*"
         r"[A-ZÁÉÍÓÚÂÊÔÃÕÇ][\w'’\-]*){0,4})",
         sentence,
     )
     if not match:
         return None
     subject = normalize_text(match.group(1))
+    if sum(1 for ch in subject if ch.isalpha()) < 2:
+        return None
     return subject or None
 
 

@@ -27,14 +27,14 @@ from app.factual_store import FactualStore
 
 PT = (
     "A Marvel confirmou que o novo filme dos Vingadores estreia em 1 de maio de 2026. "
-    'O diretor afirmou que "esta e a maior producao que ja fizemos". '
+    'O diretor afirmou, para a imprensa, que "esta e a maior producao que ja fizemos". '
     "As filmagens comecaram em marco de 2025 e duraram 8 meses. "
     "A serie foi renovada para uma terceira temporada."
 )
 
 EN = (
     "Marvel confirmed the new Avengers film premieres on May 1, 2026. "
-    'The director said "this is the biggest production we have ever made". '
+    'The director said, for the press, that "this is the biggest production we have ever made". '
     "Filming began in March 2025 and lasted 8 months. "
     "The series was renewed for a third season."
 )
@@ -114,6 +114,13 @@ def test_a_mesma_materia_desaba_quando_a_fonte_muda_de_idioma():
     Este teste nao exige que o defeito esteja corrigido; ele o PRENDE. Se alguem
     ensinar o matcher a cruzar idiomas, ele falha e obriga a revisar o numero
     aqui, em vez de deixar a melhora passar despercebida.
+
+    NOTA (correcao do sujeito de 1 letra): a frase de atribuicao ganhou "para a
+    imprensa"/"for the press" para que ``_language()`` bata >=2 marcadores e
+    classifique a frase como PT/EN de verdade. Antes da correcao, o sujeito
+    "O" (de "O diretor...") virava "o" e casava por coincidencia como substring
+    em qualquer evidencia — o que mascarava esta mesma frase atras do bug de
+    sujeito, e nao atras do defeito que este teste prende.
     """
     draft = _draft()
     mesma_lingua = build_factual_assessment(draft, _material(PT), mode=S.MODE_DETERMINISTIC)

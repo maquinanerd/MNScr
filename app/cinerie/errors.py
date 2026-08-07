@@ -159,6 +159,30 @@ class OperationalError(TransportError):
         self.retry_after_seconds = retry_after_seconds
 
 
+class MediaIngestError(CinerieError):
+    """A ingestao de midia editorial (``/api/internal/editorial-media``) falhou.
+
+    Nunca deve derrubar a publicacao da materia: o chamador trata esta excecao
+    como aviso e publica sem imagem. ``retryable`` aqui e so metadado — nada
+    neste modulo re-tenta sozinho.
+    """
+
+    code = "MEDIA_INGEST_FAILED"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        remote_code: Optional[str] = None,
+        issues: Optional[Sequence[str]] = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.remote_code = remote_code
+        self.issues: List[str] = list(issues or [])
+        self.retryable = retryable
+
+
 class NonRetryableServerError(TransportError):
     """503 SEM ``retryable: true``. Nao se repete as cegas."""
 

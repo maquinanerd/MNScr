@@ -84,6 +84,36 @@ ARTICLE_RESPONSE_SCHEMA = {
 }
 
 
+#: Schema for semantic claim extraction (factual_claim_extraction_v2 prompt).
+#: Distinct from ARTICLE_RESPONSE_SCHEMA — forcing the article schema here
+#: makes the model write a second article instead of listing claims.
+CLAIMS_RESPONSE_SCHEMA = {
+    "type": "object",
+    "required": ["claims"],
+    "properties": {
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["display_text", "claim_type", "location"],
+                "properties": {
+                    "display_text": {"type": "string"},
+                    "claim_type": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "predicate": {"type": "string"},
+                    "value": {"type": "string"},
+                    "semantic_evidence_query": {"type": "string"},
+                    "location": {"type": "string"},
+                    "source_sentence": {"type": "string"},
+                    "is_material": {"type": "boolean"},
+                    "confidence": {"type": "number"},
+                },
+            },
+        }
+    },
+}
+
+
 def _gemini_log_prefix(model: str = "") -> str:
     """Returns log prefix that reflects the actual model being used."""
     if model.startswith("gemini-3.1"):

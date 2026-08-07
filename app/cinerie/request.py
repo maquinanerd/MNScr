@@ -86,6 +86,97 @@ class BuiltRequest:
         return fields
 
 
+#: Nomes legiveis para os veiculos mais comuns nos feeds do MNScr. Sem esta
+#: tabela, o nome exibido no Cinerie seria o que a extracao rotulou —
+#: inconsistente entre minusculo cru ("variety") e hostname ("comicbook.com"),
+#: as vezes na mesma materia, para fontes diferentes do mesmo cluster.
+_KNOWN_OUTLET_NAMES: Final[Dict[str, str]] = {
+    "variety.com": "Variety",
+    "hollywoodreporter.com": "Hollywood Reporter",
+    "screenrant.com": "ScreenRant",
+    "comicbook.com": "ComicBook",
+    "deadline.com": "Deadline",
+    "ign.com": "IGN",
+    "gamespot.com": "GameSpot",
+    "polygon.com": "Polygon",
+    "collider.com": "Collider",
+    "movieweb.com": "MovieWeb",
+    "thewrap.com": "TheWrap",
+    "indiewire.com": "IndieWire",
+    "empireonline.com": "Empire",
+    "totalfilm.com": "Total Film",
+    "gamesradar.com": "GamesRadar+",
+    "nintendo.com": "Nintendo",
+    "playstation.com": "PlayStation",
+    "xbox.com": "Xbox",
+    "marvel.com": "Marvel",
+    "dc.com": "DC",
+}
+
+
+def _registrable_domain(url_or_domain: str) -> str:
+    """``variety.com`` a partir de uma URL ou de um domain ja resolvido.
+
+    Mesma nocao de "origem editorial" usada em ``factual.coverage`` — sem
+    ``www.`` e sem subdominio regional, para nao contar a mesma fonte duas
+    vezes so porque o link mudou de subdominio.
+    """
+    from urllib.parse import urlparse
+
+    text = str(url_or_domain or "").strip()
+    if not text:
+        return ""
+    host = text.lower()
+    if "://" in host or "/" in host:
+        try:
+            host = (urlparse(text).hostname or "").lower()
+        except ValueError:
+            host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    parts = host.split(".")
+    if len(parts) > 2:
+        host = ".".join(parts[-2:])
+    return host
+
+
+def _display_name_for(domain: str, fallback: Optional[str]) -> str:
+    """Nome legivel: tabela conhecida primeiro, senao o rotulo recebido.
+
+    Nao inventa nome para dominio desconhecido alem de capitalizar o rotulo que
+    ja veio da extracao — title-case de um hostname cru e melhor do que
+    minusculo cru, mas nao e uma sugestao editorial nova.
+    """
+    known = _KNOWN_OUTLET_NAMES.get(domain)
+    if known:
+        return known
+    text = collapse(fallback or domain or "")
+    if not text:
+        return domain or ""
+    # Um rotulo inteiramente minusculo ou identico ao dominio cru e provavelmente
+    # um hostname passando por nome; um rotulo com maiuscula ja escolhida (ex.
+    # "ComicBook") e preservado como veio, para nao decidir por cima de uma
+    # escolha editorial ja feita.
+    if text == text.lower() or text == domain:
+        return text.title()
+    return text
+
+
+def _domain_source_id(domain: str, *, url: str, index: int) -> str:
+    """Id estavel da fonte, derivado do DOMINIO — nao do source_id do feed.
+
+    ``SourceReference.source_id`` e o id do FEED que trouxe a materia (ex.
+    ``rssprime_tv``), o MESMO para todas as fontes de um mesmo cluster. Usa-lo
+    aqui faria duas fontes diferentes ("variety.com", "comicbook.com") dividirem
+    o mesmo id de ``externalSources``, o que nao identifica nada. O dominio
+    registravel e estavel entre materias do MESMO veiculo e ja bate no formato
+    ``stableId`` do contrato (letras, digitos e ponto).
+    """
+    if domain and is_stable_id(domain):
+        return domain
+    return build_source_id(url, index=index)
+
+
 def _sources_from_draft(draft: Any) -> List[Dict[str, Any]]:
     """Fontes externas com id estavel, nome e papel.
 
@@ -102,11 +193,10 @@ def _sources_from_draft(draft: Any) -> List[Dict[str, Any]]:
         if not url or url in seen:
             continue
         seen.add(url)
-        source_id = collapse(getattr(source, "source_id", "")) or build_source_id(url, index=index)
-        if not is_stable_id(source_id):
-            source_id = build_source_id(url, index=index)
+        domain = _registrable_domain(getattr(source, "domain", None) or url)
+        source_id = _domain_source_id(domain, url=url, index=index)
         name = plain_text(
-            getattr(source, "name", None) or getattr(source, "domain", None) or url,
+            _display_name_for(domain, getattr(source, "name", None)) or url,
             max_length=500,
         )
         entry: Dict[str, Any] = {
@@ -130,6 +220,21 @@ def _sources_from_draft(draft: Any) -> List[Dict[str, Any]]:
     return sources
 
 
+def primary_source_display_name(draft: Any) -> Optional[str]:
+    """Nome legivel da fonte PRIMARIA do cluster, ou ``None`` sem uma.
+
+    Publico de proposito: a ingestao de midia (``media_selection.py``) precisa
+    do MESMO nome que ``_sources_from_draft`` ja resolveu para ``credit`` e
+    ``rightsHolder`` da foto baterem com o que aparece em ``externalSources``.
+    """
+    for source in getattr(draft, "sources", []) or []:
+        if not getattr(source, "is_primary", False):
+            continue
+        domain = _registrable_domain(getattr(source, "domain", None) or getattr(source, "url", ""))
+        return _display_name_for(domain, getattr(source, "name", None)) or None
+    return None
+
+
 def _qa_from_draft(draft: Any, *, seo: SeoProposal, extra_warnings: Sequence[str]) -> Dict[str, Any]:
     """O QA do pipeline, consolidado.
 
@@ -137,6 +242,11 @@ def _qa_from_draft(draft: Any, *, seo: SeoProposal, extra_warnings: Sequence[str
     nem a validacao tecnica, nem o SEO. ``passed=false`` nao recusa o pedido — o
     Cinerie o encaminha para revisao humana —, mas precisa vir acompanhado do
     motivo, e o contrato recusa um QA que reprova sem dizer o que quebrou.
+
+    ``GATE_REVIEW_REQUIRED`` (so avisos, nenhuma regra BLOCKING acionada) nao
+    reprova mais o QA — mesma decisao ja tomada para os avisos de SEO alguns
+    paragrafos abaixo (``seo.warnings`` nunca entra em ``blocking``). Um gate
+    que so tem orientacao para dar nao e um gate que bloqueou nada.
     """
     blocking: List[str] = [str(item) for item in (getattr(draft, "blocking_errors", None) or [])]
     warnings: List[str] = [str(item) for item in (getattr(draft, "warnings", None) or [])]
@@ -145,16 +255,22 @@ def _qa_from_draft(draft: Any, *, seo: SeoProposal, extra_warnings: Sequence[str
     gate_outcome = collapse(getattr(gate, "outcome", "")) if gate is not None else ""
     if gate is None:
         blocking.append("EDITORIAL_GATE_AUSENTE")
-    elif gate_outcome != "GATE_CLEAR":
+    elif gate_outcome == "GATE_BLOCKED":
         blocking.append(f"EDITORIAL_GATE:{gate_outcome}")
+    elif gate_outcome != "GATE_CLEAR":
+        # GATE_REVIEW_REQUIRED (ou qualquer futuro estado que nao seja
+        # bloqueante nem limpo): o motivo fica visivel, mas como orientacao.
+        warnings.append(f"EDITORIAL_GATE:{gate_outcome}")
 
+    # O detalhe de CADA regra do gate (inclusive conflito factual critico) ja
+    # esta em `gate.blocking_rules`/`gate.warning_rules`, que e o que decidiu
+    # `gate_outcome` acima sob a politica ATIVA. Reinspecionar
+    # `assessment.critical_conflicts` aqui, sem olhar a politica, reprovaria o
+    # QA mesmo quando `blockCriticalFactConflicts=false` — dobrando o bloqueio
+    # por fora da politica versionada que deveria ser a unica fonte da decisao.
     assessment = getattr(draft, "factual_assessment", None)
     if assessment is None:
         blocking.append("AVALIACAO_FACTUAL_AUSENTE")
-    else:
-        critical = list(getattr(assessment, "critical_conflicts", None) or [])
-        if critical:
-            blocking.append(f"CONFLITO_FACTUAL_CRITICO:{len(critical)}")
 
     blocking.extend(str(item) for item in seo.blocking)
     warnings.extend(str(item) for item in seo.warnings)
@@ -428,5 +544,6 @@ __all__ = [
     "ROLE_SECONDARY",
     "blocking_findings",
     "build_publication_request",
+    "primary_source_display_name",
     "resolve_content_type",
 ]

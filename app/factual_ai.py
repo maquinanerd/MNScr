@@ -21,6 +21,8 @@ import logging
 from pathlib import Path
 from typing import Any, Final, List, Optional
 
+from .ai_client_gemini import CLAIMS_RESPONSE_SCHEMA
+
 logger = logging.getLogger(__name__)
 
 #: Delimitadores que o prompt usa para cercar o conteúdo não confiável.
@@ -189,7 +191,7 @@ def request_claim_extraction(
         draft_id, resolved_version, resolved_max,
     )
     try:
-        raw, tokens = client.generate_text(prompt)
+        raw, tokens = client.generate_text(prompt, response_schema=CLAIMS_RESPONSE_SCHEMA)
     except Exception as exc:  # noqa: BLE001 - a avaliação factual nunca custa o draft
         logger.warning(
             "[CLAIM_EXTRACTION_FAILED] draft_id=%s erro=%s: seguindo com claims deterministicos",

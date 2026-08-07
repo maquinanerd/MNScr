@@ -318,6 +318,15 @@ MNSCR_CINERIE_TIMEOUT_SECONDS = float(os.getenv('MNSCR_CINERIE_TIMEOUT_SECONDS',
 MNSCR_CINERIE_MAX_ATTEMPTS = int(os.getenv('MNSCR_CINERIE_MAX_ATTEMPTS', 3))
 MNSCR_CINERIE_RETRY_BASE_SECONDS = float(os.getenv('MNSCR_CINERIE_RETRY_BASE_SECONDS', 2))
 
+#: Ingestao de midia editorial (`/api/internal/editorial-media`), rota
+#: SEPARADA da publicacao de texto. Chave tambem separada de proposito: o
+#: Cinerie exige uma conta tecnica com o escopo `editorial_media_ingest`, e so
+#: ele — nunca a mesma de `MNSCR_PAYLOAD_API_KEY`.
+MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED = (
+    os.getenv('MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED', 'false').strip().lower() == 'true'
+)
+MNSCR_CINERIE_MEDIA_API_KEY = (os.getenv('MNSCR_CINERIE_MEDIA_API_KEY') or '').strip()
+
 #: `development` | `production`. Decide se um modo de entrega ausente bloqueia.
 MNSCR_ENVIRONMENT = (os.getenv('MNSCR_ENVIRONMENT') or 'development').strip().lower()
 
@@ -394,6 +403,11 @@ def get_cinerie_config_issues() -> List[str]:
         issues.append('MNSCR_CINERIE_TIMEOUT_SECONDS precisa ser positivo')
     if MNSCR_CINERIE_MAX_ATTEMPTS < 1:
         issues.append('MNSCR_CINERIE_MAX_ATTEMPTS precisa ser >= 1')
+    if MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED and not MNSCR_CINERIE_MEDIA_API_KEY:
+        issues.append(
+            'MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED=true exige MNSCR_CINERIE_MEDIA_API_KEY '
+            '(conta tecnica com escopo editorial_media_ingest, separada de MNSCR_PAYLOAD_API_KEY)'
+        )
 
     return issues
 

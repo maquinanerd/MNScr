@@ -13,6 +13,7 @@ credencial, e uma mensagem de erro costuma ser o lugar menos vigiado do sistema.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from dataclasses import dataclass
@@ -29,12 +30,20 @@ from .errors import (
     ConfigurationError,
     EndpointUnavailableError,
     InvalidRemoteResponseError,
+    MediaIngestError,
     NonRetryableServerError,
     OperationalError,
     PermissionError_,
     RateLimitedError,
     RequestTooLargeError,
     ServerError,
+)
+from .media_client import (
+    MAX_MEDIA_BYTES,
+    MAX_MEDIA_REQUEST_BYTES,
+    MEDIA_INGEST_PATH,
+    MediaIngestResult,
+    sniff_ingestible_mime,
 )
 from .outcomes import OPERATIONAL_ERROR, PublicationResult, parse_result
 
@@ -151,9 +160,9 @@ class CinerieClient:
 
     # -- transporte --------------------------------------------------------
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self, *, api_key: Optional[str] = None) -> Dict[str, str]:
         return {
-            "Authorization": f"{AUTH_SCHEME} {self.config.api_key}",
+            "Authorization": f"{AUTH_SCHEME} {api_key or self.config.api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -164,6 +173,8 @@ class CinerieClient:
         path: str,
         *,
         body: Optional[Mapping[str, Any]] = None,
+        max_body_bytes: Optional[int] = None,
+        api_key: Optional[str] = None,
     ) -> Tuple[int, Any, Mapping[str, str]]:
         url = self.config.url_for(path)
         caller = self._session if self._session is not None else requests
@@ -171,9 +182,10 @@ class CinerieClient:
         # Serializa UMA vez e mede o que sera realmente enviado. Medir o dict, ou
         # medir uma segunda serializacao, mediria outra coisa.
         encoded = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
-        if encoded is not None and len(encoded) > MAX_REQUEST_BYTES:
+        cap = MAX_REQUEST_BYTES if max_body_bytes is None else max_body_bytes
+        if encoded is not None and len(encoded) > cap:
             raise RequestTooLargeError(
-                f"corpo de {len(encoded)} bytes acima do teto de {MAX_REQUEST_BYTES} "
+                f"corpo de {len(encoded)} bytes acima do teto de {cap} "
                 f"do Cinerie; nada foi enviado"
             )
 
@@ -181,7 +193,7 @@ class CinerieClient:
             response = caller.request(
                 method,
                 url,
-                headers=self._headers(),
+                headers=self._headers(api_key=api_key),
                 data=encoded,
                 timeout=self.config.timeout_seconds,
                 verify=self.config.verify_tls,
@@ -250,6 +262,98 @@ class CinerieClient:
         # duplicaria. Vai para reconciliacao.
         raise InvalidRemoteResponseError(
             f"resposta HTTP {status} sem desfecho reconhecivel do Cinerie"
+        )
+
+    # -- ingestao de midia ---------------------------------------------------
+
+    def ingest_editorial_media(
+        self,
+        *,
+        article_id: str,
+        source_url: str,
+        source_name: str,
+        rights_holder: str,
+        credit: str,
+        alt: str,
+        content_bytes: bytes,
+        caption: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> MediaIngestResult:
+        """``POST /api/internal/editorial-media``. Levanta ``MediaIngestError`` em qualquer recusa.
+
+        Rota SEPARADA de ``submit_publication`` — outro caminho, outra conta
+        tecnica (escopo ``editorial_media_ingest``, e so ele). ``api_key``
+        aceita um override deliberado: misturar a credencial de midia na MESMA
+        ``CinerieConfig`` da publicacao alargaria o raio de estrago de uma
+        chave vazada sem ganho nenhum.
+
+        Nunca levanta nada alem de ``MediaIngestError`` — quem chama trata
+        qualquer falha como aviso e publica a materia sem foto.
+        """
+        if not content_bytes:
+            raise MediaIngestError("nenhum byte de imagem recebido", remote_code="image_empty")
+        if len(content_bytes) > MAX_MEDIA_BYTES:
+            raise MediaIngestError(
+                f"imagem com {len(content_bytes)} bytes acima do teto de {MAX_MEDIA_BYTES}",
+                remote_code="image_too_large",
+            )
+        content_type = sniff_ingestible_mime(content_bytes)
+        if content_type is None:
+            raise MediaIngestError(
+                "assinatura de bytes nao corresponde a jpeg/png/webp", remote_code="bytes_mismatch"
+            )
+        if not (api_key or self.config.api_key):
+            raise MediaIngestError(
+                "credencial de midia ausente (MNSCR_CINERIE_MEDIA_API_KEY)",
+                remote_code="missing_media_api_key",
+            )
+
+        body: Dict[str, Any] = {
+            "articleId": str(article_id),
+            "sourceUrl": source_url,
+            "sourceName": source_name,
+            "rightsHolder": rights_holder,
+            "credit": credit,
+            "alt": alt,
+            "contentType": content_type,
+            "contentBase64": base64.b64encode(content_bytes).decode("ascii"),
+        }
+        if caption:
+            body["caption"] = caption
+
+        try:
+            status, parsed, _ = self._request(
+                "POST",
+                MEDIA_INGEST_PATH,
+                body=body,
+                max_body_bytes=MAX_MEDIA_REQUEST_BYTES,
+                api_key=api_key,
+            )
+        except (CinerieConnectionError, CinerieTimeoutError) as exc:
+            raise MediaIngestError(str(exc), remote_code=exc.code, retryable=True) from exc
+        except RequestTooLargeError as exc:
+            raise MediaIngestError(str(exc), remote_code="payload_too_large") from exc
+        except InvalidRemoteResponseError as exc:
+            raise MediaIngestError(str(exc), remote_code="invalid_response") from exc
+
+        if status in (200, 201):
+            if not isinstance(parsed, Mapping):
+                raise MediaIngestError("resposta 2xx sem corpo reconhecivel", remote_code="invalid_response")
+            outcome = str(parsed.get("outcome") or "").strip()
+            media_id = str(parsed.get("mediaId") or "").strip()
+            content_hash = str(parsed.get("contentHash") or "").strip()
+            if not outcome or not media_id:
+                raise MediaIngestError("resposta 2xx sem outcome/mediaId", remote_code="invalid_response")
+            return MediaIngestResult(outcome=outcome, media_id=media_id, content_hash=content_hash)
+
+        remote_code = parsed.get("error") if isinstance(parsed, Mapping) else None
+        issues = parsed.get("issues") if isinstance(parsed, Mapping) else None
+        issues_list = [str(i) for i in issues] if isinstance(issues, list) else []
+        raise MediaIngestError(
+            f"Cinerie recusou a ingestao de midia (HTTP {status}, {remote_code or 'sem codigo'})",
+            remote_code=str(remote_code) if remote_code else None,
+            issues=issues_list,
+            retryable=(status == 503),
         )
 
     # -- classificacao -----------------------------------------------------
@@ -322,5 +426,6 @@ __all__ = [
     "CinerieConfig",
     "MAX_REQUEST_BYTES",
     "MAX_RESPONSE_BYTES",
+    "MEDIA_INGEST_PATH",
     "PUBLICATIONS_PATH",
 ]

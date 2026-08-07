@@ -33,6 +33,8 @@ from .config import (
     LOCAL_DRAFT_DIR,
     MNSCR_ATTRIBUTION_MODE,
     MNSCR_CINERIE_MAX_ATTEMPTS,
+    MNSCR_CINERIE_MEDIA_API_KEY,
+    MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED,
     MNSCR_CINERIE_RETRY_BASE_SECONDS,
     MNSCR_CINERIE_TIMEOUT_SECONDS,
     MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS,
@@ -2187,6 +2189,71 @@ def _persistent_cinerie_seo_source(source: Any) -> Dict[str, Any]:
     return persisted
 
 
+def _ingest_hero_media_best_effort(draft, result, client) -> None:
+    """Tenta anexar a imagem de destaque ao acervo do Cinerie. Nunca falha a materia.
+
+    LIMITE CONHECIDO, deliberado: esta funcao apenas INGERE a foto (obtem um
+    ``mediaId``). Ela nao resubmete a materia com ``media=[{mediaId,
+    intendedUse:"hero"}]`` para de fato apontar a capa — a rota de ingestao,
+    por contrato, nao faz isso sozinha (ver `app.cinerie.media_client`).
+    Resubmeter exigiria incrementar `sourceRevision` so por causa da foto, o
+    que tambem alimenta a reconciliacao de eventos; ver o relatorio da tarefa
+    para a decisao de arquitetura que falta antes de fechar esse laco.
+
+    ``client`` e o MESMO ``CinerieClient`` ja usado para publicar o texto —
+    so a credencial de midia e separada, passada por ``api_key`` na propria
+    chamada.
+
+    NADA ESCAPA DAQUI, e a razao e a POSICAO da chamada, nao a educacao do
+    codigo chamado. Quem chama esta funcao e ``_publish_to_cinerie``, DENTRO do
+    mesmo ``try`` que trata falha de publicacao — e o ``except`` de la devolve
+    ``None``. Uma excecao que vazasse desta funcao seria lida como "a
+    publicacao falhou" DEPOIS de o Cinerie ja ter aceitado a materia: o
+    ``article_id`` real seria descartado, o `CinerieStore` nao registraria o
+    desfecho e a materia publicada viraria uma falha no relatorio. Hoje
+    ``ingest_hero_image`` ja engole tudo; este bloco existe para que a garantia
+    nao dependa de o outro modulo continuar se comportando.
+    """
+    if not MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED:
+        return
+    article_id = getattr(result, "article_id", None)
+    if not article_id:
+        return
+    if not MNSCR_CINERIE_MEDIA_API_KEY:
+        logger.warning(
+            "[CINERIE_MEDIA] MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED=true mas "
+            "MNSCR_CINERIE_MEDIA_API_KEY ausente; publicando sem hero"
+        )
+        return
+
+    try:
+        from .cinerie.media_selection import ingest_hero_image
+        from .cinerie.request import primary_source_display_name
+
+        media_result = ingest_hero_image(
+            article_id=str(article_id),
+            image_candidates=getattr(draft, "media_candidates", None) or [],
+            source_name=primary_source_display_name(draft) or "",
+            client=client,
+            media_api_key=MNSCR_CINERIE_MEDIA_API_KEY,
+            alt_fallback=getattr(getattr(draft, "content", None), "title", None),
+        )
+    except Exception as exc:  # noqa: BLE001 - imagem NUNCA custa a materia publicada
+        logger.warning(
+            "[CINERIE_MEDIA] ingestao levantou %s para article_id=%s: %s; "
+            "a materia publicada segue valida, sem hero",
+            type(exc).__name__, article_id, exc,
+        )
+        return
+
+    if media_result is not None:
+        logger.warning(
+            "[CINERIE_MEDIA] mediaId=%s obtido para article_id=%s, mas a capa NAO foi "
+            "apontada nesta rodada (resubmissao com media[] nao implementada; ver relatorio)",
+            media_result.media_id, article_id,
+        )
+
+
 def _publish_to_cinerie(draft, art_data):
     """Pede publicacao governada ao Cinerie, quando o modo e AUTO_PUBLISH.
 
@@ -2243,6 +2310,7 @@ def _publish_to_cinerie(draft, art_data):
         )
         logger.info("[CINERIE_PUBLICATION] draft_id=%s %s", draft.draft_id, result.safe_log_fields())
         log_cinerie_quota_deferrals([result])
+        _ingest_hero_media_best_effort(draft, result, client)
         return result
     except Exception as exc:  # noqa: BLE001 - o draft local nunca pode ser perdido
         logger.exception(
