@@ -594,24 +594,31 @@ def rule_material_claim_unsupported(draft, policy, context) -> EditorialRuleResu
 
     UNSUPPORTED means "no source we received sustains this", never "this is
     false".
+
+    ``blockUnsupportedMaterialClaimsInCriticalLocations=false`` downgrades this
+    to ORIENTATION, not silence — the same correction already made in
+    ``rule_critical_fact_conflict``. Returning ``triggered=False`` when the
+    threshold is off made the rule GO MUTE: the offending claims vanished from
+    the verdict entirely, so nobody could see what the gate had stopped
+    blocking. Turning a threshold off must change the SEVERITY, never whether
+    the rule looks.
     """
-    if not bool(policy.threshold("blockUnsupportedMaterialClaimsInCriticalLocations", True)):
-        return _result(
-            "GATE_MATERIAL_CLAIM_UNSUPPORTED", SEVERITY_BLOCKING, False,
-            "Bloqueio de afirmacao sem suporte desabilitado pela politica.",
-        )
+    blocks = bool(policy.threshold("blockUnsupportedMaterialClaimsInCriticalLocations", True))
+    severity = SEVERITY_BLOCKING if blocks else SEVERITY_WARNING
+
     assessment = _assessment_of(draft, context)
     if assessment is None:
         return _result(
-            "GATE_MATERIAL_CLAIM_UNSUPPORTED", SEVERITY_BLOCKING, False,
+            "GATE_MATERIAL_CLAIM_UNSUPPORTED", severity, False,
             "Sem avaliacao factual para inspecionar.",
-            metrics={"has_assessment": False},
+            metrics={"has_assessment": False, "blocking_enabled": blocks},
         )
 
     offenders = assessment.unsupported_in_critical_locations
     return _result(
-        "GATE_MATERIAL_CLAIM_UNSUPPORTED", SEVERITY_BLOCKING, bool(offenders),
-        f"{len(offenders)} afirmacao(oes) material(is) sem suporte em posicao critica."
+        "GATE_MATERIAL_CLAIM_UNSUPPORTED", severity, bool(offenders),
+        (f"{len(offenders)} afirmacao(oes) material(is) sem suporte em posicao critica."
+         + ("" if blocks else " Politica trata como orientacao, nao bloqueio."))
         if offenders else "Nenhuma afirmacao critica sem suporte.",
         evidence=[
             f"{', '.join(c.draft_locations)}: {c.display_text}" for c in offenders[:5]
@@ -621,7 +628,10 @@ def rule_material_claim_unsupported(draft, policy, context) -> EditorialRuleResu
             "Sem suporte nao significa falso: ou a fonte nao foi recebida, ou a "
             "afirmacao precisa sair da manchete."
         ),
-        metrics={"unsupported_critical_claims": len(offenders)},
+        metrics={
+            "unsupported_critical_claims": len(offenders),
+            "blocking_enabled": blocks,
+        },
     )
 
 

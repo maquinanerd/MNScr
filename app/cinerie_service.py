@@ -241,11 +241,16 @@ class CinerieService:
             ensure_valid(built.payload, identity=self.identity)
         except (RequestBuildError, SchemaValidationError, BlockedByPolicyError) as exc:
             paths = getattr(exc, "paths", []) or []
+            details = getattr(exc, "details", []) or []
+            # O caminho sozinho nao basta para consertar: `seo.focusKeyphrase`
+            # invalido pode ser campo vazio, nulo ou so com espacos. `details`
+            # traz a FORMA do valor recebido, limitada em `describe_value`.
             logger.error(
-                "[cinerie] pedido invalido para o draft %s (%s): campos %s",
+                "[cinerie] pedido invalido para o draft %s (%s): campos %s; detalhes %s",
                 draft_id,
                 exc.code,
                 paths[:8],
+                details[:8] or "-",
             )
             return PublicationAttemptResult(
                 status=STATUS_BLOCKED,

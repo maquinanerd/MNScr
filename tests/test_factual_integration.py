@@ -180,22 +180,37 @@ def test_policy_v2_critical_conflict_is_a_warning_not_a_block(policy_v2):
     Decisao do dono do produto: conflito factual e ORIENTACAO, nao regra de
     bloqueio. A regra continua rodando e reportando — so nao para a materia.
 
-    A afirmacao e sobre ESTA regra, nao sobre o veredito do gate inteiro. O
-    fixture `sources_conflicting.json` tambem dispara
-    `GATE_MATERIAL_CLAIM_UNSUPPORTED`, que a v2 mantem BLOQUEANTE de proposito
-    (`blockUnsupportedMaterialClaimsInCriticalLocations: true`): afirmacao
-    material sem suporte em posicao critica e outro problema, com outra
-    decisao. Exigir `outcome != GATE_BLOCKED` aqui faria este teste passar a
-    depender daquela regra continuar desligada — e a primeira forma de
-    "corrigi-lo" seria desligar uma regra que ninguem pediu para desligar.
+    O fixture `sources_conflicting.json` tambem dispara
+    `GATE_MATERIAL_CLAIM_UNSUPPORTED`. Ela tambem parou de bloquear na v2, pela
+    MESMA medicao que motivou a primeira: coverage_ratio=0.0 com supported=0 de
+    7 claims em execucao real. Um casador que nao confirma nada faz as duas
+    regras reprovarem incondicionalmente em vez de medir risco.
+
+    A lista vazia e verificada por inteiro de proposito: se qualquer tranca for
+    religada sem passar pela decisao registrada no JSON da politica, esta linha
+    falha em vez de passar.
     """
     draft = make_draft()
     result = evaluate(draft, policy_v2, assess(draft, fixture("sources_conflicting.json")))
     blocking_codes = [r.rule_code for r in result.blocking_rules]
     assert "GATE_CRITICAL_FACT_CONFLICT" not in blocking_codes
-    # E o que sobra bloqueando e SO a outra regra, nomeada — se um dia o conflito
-    # voltar a bloquear por outro caminho, esta linha falha em vez de passar.
-    assert blocking_codes == ["GATE_MATERIAL_CLAIM_UNSUPPORTED"]
+    assert blocking_codes == []
+
+
+def test_policy_v2_unsupported_claim_still_shows_as_a_warning(policy_v2):
+    """A segunda regra rebaixada tambem continua FALANDO.
+
+    Antes, `blockUnsupportedMaterialClaimsInCriticalLocations=false` fazia a
+    regra devolver `triggered=false` e sair do veredito inteira — o sinal sumia
+    junto com a tranca. Este teste prende o comportamento correto: rebaixar a
+    severidade, nunca calar.
+    """
+    draft = make_draft()
+    result = evaluate(draft, policy_v2, assess(draft, fixture("sources_conflicting.json")))
+    rule = next(r for r in result.rules if r.rule_code == "GATE_MATERIAL_CLAIM_UNSUPPORTED")
+    assert rule.triggered is True
+    assert rule.severity == "WARNING"
+    assert rule.evidence, "as afirmacoes sem suporte precisam continuar nomeadas"
 
 
 def test_policy_v2_critical_conflict_still_shows_as_a_warning(policy_v2):

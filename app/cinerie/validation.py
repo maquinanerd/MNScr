@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Mapping, Sequence
 from .contract import ContractIdentity, load_schema, local_identity
 from .errors import ForbiddenFieldError, SchemaValidationError
 from .forbidden import find_forbidden_key
-from .refinements import ContractIssue, check_request
+from .refinements import ContractIssue, check_request, describe_value
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,11 @@ class ValidationReport:
     def paths(self) -> List[str]:
         return [issue.path for issue in self.issues]
 
+    @property
+    def details(self) -> List[str]:
+        """Caminho, regra violada e a forma do valor recebido — um por problema."""
+        return [str(issue) for issue in self.issues[:MAX_REPORTED_ISSUES]]
+
     def summary(self) -> str:
         if self.ok:
             return "pedido valido"
@@ -78,7 +83,13 @@ def _schema_issues(payload: Any) -> List[ContractIssue]:
             message = error.message
         else:
             message = f"{error.validator}: {error.validator_value!r}"
-        issues.append(ContractIssue(path=path, message=message))
+        # A FORMA do valor recusado acompanha o caminho. Sem ela,
+        # `seo.focusKeyphrase: minLength: 1` nao distingue campo vazio de campo
+        # nulo de campo so com espacos — tres causas com tres consertos
+        # diferentes. `describe_value` limita o que sai (ver `refinements`).
+        issues.append(
+            ContractIssue(path=path, message=message, received=describe_value(error.instance))
+        )
     return issues
 
 
@@ -154,11 +165,13 @@ def ensure_valid(
             f"campo recusado pelo contrato do Cinerie ({report.forbidden_group}): "
             f"{report.summary()}",
             paths=report.paths,
+            details=report.details,
         )
 
     raise SchemaValidationError(
         "pedido invalido para editorial-publication-request-v1: " + report.summary(),
         paths=report.paths,
+        details=report.details,
     )
 
 

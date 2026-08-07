@@ -24,8 +24,15 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Final, FrozenSet, List, Mapping, Optional, Sequence
 
+from .fallbacks import (
+    body_texts,
+    derive_focus_keyphrase,
+    derive_meta_description,
+    derive_seo_title,
+    derive_slug,
+)
 from .policy import AUTO_PUBLISH_INELIGIBLE, BLOCKING, WARNING, seo_policy
-from .slug import normalize_slug, slug_issue
+from .slug import slug_issue
 from .text import (
     collapse,
     contains_keyphrase,
@@ -309,9 +316,23 @@ def _check_focus_keyphrase(
     return findings
 
 
-def _check_stuffing(proposal: "SeoProposal") -> List[SeoFinding]:
-    policy = seo_policy()
-    occurrences = count_occurrences(
+#: Sugestoes sociais, na ordem em que sao descartadas quando a frase-chave
+#: repete demais — da menos informativa para a mais — com o campo obrigatorio
+#: que o CMS usa quando ela nao vem.
+#:
+#: Todas sao OPCIONAIS no contrato, e essa e a razao de o descarte ser barato:
+#: sem ``openGraphTitleSuggestion`` o Cinerie usa ``seo.title``, que continua no
+#: pedido. Nada que o leitor veria se perde.
+_SOCIAL_SUGGESTIONS: Final[tuple[tuple[str, str, str], ...]] = (
+    ("twitter_title", "seo.twitterTitleSuggestion", "title"),
+    ("open_graph_title", "seo.openGraphTitleSuggestion", "title"),
+    ("twitter_description", "seo.twitterDescriptionSuggestion", "meta_description"),
+    ("open_graph_description", "seo.openGraphDescriptionSuggestion", "meta_description"),
+)
+
+
+def _keyphrase_occurrences(proposal: "SeoProposal") -> int:
+    return count_occurrences(
         proposal.focus_keyphrase,
         [
             proposal.title,
@@ -323,16 +344,78 @@ def _check_stuffing(proposal: "SeoProposal") -> List[SeoFinding]:
             *[item.get("alt") for item in proposal.image_alt_suggestions],
         ],
     )
-    if occurrences > policy.max_keyphrase_repetition:
-        return [
+
+
+def _relieve_stuffing(proposal: "SeoProposal") -> List[SeoFinding]:
+    """Desfaz a repeticao excedente descartando sugestao social redundante.
+
+    Detectar nao bastava, e a execucao real mostrou o preco: o MNScr media 4
+    repeticoes contra o maximo de 3, registrava o achado como
+    ``AUTO_PUBLISH_INELIGIBLE`` — um aviso — e mandava assim mesmo. O Cinerie
+    respondeu ``422 BLOCKED / SEO_KEYWORD_STUFFING`` e a materia morreu. Saber do
+    defeito e enviar mesmo assim e pior do que nao saber: gasta a tentativa e
+    ainda registra uma recusa na auditoria do outro lado.
+
+    A repeticao vinha inteira de duplicata: ``openGraphTitleSuggestion`` e
+    ``twitterTitleSuggestion`` eram o titulo copiado letra por letra. Descartar
+    uma copia identica de um campo que continua no pedido nao perde informacao
+    nenhuma — o CMS ja cai no titulo quando a sugestao nao vem.
+
+    Duas passadas, e a ordem e o argumento: primeiro saem as sugestoes
+    REDUNDANTES (texto igual ao do campo-base), que nao custam nada; so se ainda
+    faltar e que sai sugestao com texto proprio, e essa perda aparece no aviso
+    com o campo nomeado. O texto editorial nunca e reescrito: campo opcional e
+    removido por inteiro ou fica como veio.
+    """
+    policy = seo_policy()
+    limit = policy.max_keyphrase_repetition
+    findings: List[SeoFinding] = []
+
+    if _keyphrase_occurrences(proposal) <= limit:
+        return []
+
+    for only_redundant in (True, False):
+        for attribute, field_name, base_attribute in _SOCIAL_SUGGESTIONS:
+            if _keyphrase_occurrences(proposal) <= limit:
+                break
+            value = getattr(proposal, attribute)
+            if not value:
+                continue
+            base = getattr(proposal, base_attribute)
+            redundant = normalize_keyphrase(value) == normalize_keyphrase(base)
+            if only_redundant and not redundant:
+                continue
+            setattr(proposal, attribute, None)
+            findings.append(
+                SeoFinding(
+                    WARNING,
+                    "SUGESTAO_SOCIAL_DESCARTADA",
+                    field_name,
+                    (
+                        f"copia identica de {base_attribute}; removida para respeitar o "
+                        f"maximo de {limit} repeticoes da frase-chave"
+                        if redundant
+                        else f"sugestao propria removida: {limit} repeticoes da frase-chave "
+                        "e o teto do Cinerie, e as copias redundantes ja tinham saido"
+                    ),
+                )
+            )
+
+    remaining = _keyphrase_occurrences(proposal)
+    if remaining > limit:
+        # Sobraram so campos obrigatorios repetindo a frase-chave. Aqui nao ha o
+        # que descartar sem reescrever texto editorial, e reescrever nao e
+        # trabalho desta camada.
+        findings.append(
             SeoFinding(
                 AUTO_PUBLISH_INELIGIBLE,
                 "KEYWORD_STUFFING",
                 "seo",
-                f"{occurrences} repeticoes da focus keyphrase (maximo {policy.max_keyphrase_repetition})",
+                f"{remaining} repeticoes da focus keyphrase mesmo apos descartar as "
+                f"sugestoes opcionais (maximo {limit})",
             )
-        ]
-    return []
+        )
+    return findings
 
 
 def build_seo_proposal(
@@ -347,6 +430,10 @@ def build_seo_proposal(
     schema_type: Optional[str] = None,
     article_section: Optional[str] = None,
     lead_text: str = "",
+    body_blocks: Sequence[Mapping[str, Any]] = (),
+    subtitle: str = "",
+    summary: str = "",
+    cluster_id: str = "",
     extra: Optional[Mapping[str, Any]] = None,
     media_ids: Sequence[str] = (),
     alt_texts: Optional[Mapping[str, str]] = None,
@@ -360,15 +447,56 @@ def build_seo_proposal(
     neutral = migrate_legacy_seo(extra or {})
     findings: List[SeoFinding] = []
 
-    seo_title = plain_text(neutral.get("title") or title, max_length=policy.title.max)
-    seo_meta = plain_text(
-        neutral.get("metaDescription") or meta_description,
-        max_length=policy.meta_description.max,
+    paragraphs = body_texts(body_blocks)
+    lead = lead_text or (paragraphs[0] if paragraphs else "")
+
+    # Nenhum destes tres campos pode sair vazio ou fora da faixa de transporte:
+    # os tres sao obrigatorios no contrato e dependem da saida da IA. Quando ela
+    # omite, o valor e DERIVADO do proprio material da materia — e a derivacao
+    # vira aviso, nunca silencio.
+    title_derived = derive_seo_title(
+        title=neutral.get("title") or title,
+        subtitle=subtitle,
+        summary=summary,
+        lead=lead,
+        minimum=policy.title.min,
+        maximum=policy.title.max,
     )
-    focus = plain_text(
-        neutral.get("focusKeyphrase") or focus_keyphrase,
-        max_length=policy.focus_keyphrase.max,
+    meta_derived = derive_meta_description(
+        meta=neutral.get("metaDescription") or meta_description,
+        summary=summary,
+        lead=lead,
+        body=paragraphs,
+        minimum=policy.meta_description.min,
+        maximum=policy.meta_description.max,
     )
+    seo_title = title_derived.value
+    seo_meta = meta_derived.value
+
+    focus_derived = derive_focus_keyphrase(
+        focus=neutral.get("focusKeyphrase") or focus_keyphrase,
+        title=seo_title,
+        slug=slug_suggestion,
+        lead=lead,
+        minimum=policy.focus_keyphrase.min,
+        maximum=policy.focus_keyphrase.max,
+    )
+    focus = focus_derived.value
+
+    for field_name, derived in (
+        ("seo.title", title_derived),
+        ("seo.metaDescription", meta_derived),
+        ("seo.focusKeyphrase", focus_derived),
+    ):
+        if derived.is_fallback:
+            findings.append(
+                SeoFinding(
+                    WARNING,
+                    "CAMPO_DERIVADO_POR_FALLBACK",
+                    field_name,
+                    f"a IA nao entregou um valor utilizavel; derivado de {derived.source}",
+                )
+            )
 
     for value, length_policy, field_name in (
         (seo_title, policy.title, "seo.title"),
@@ -410,7 +538,22 @@ def build_seo_proposal(
         item_max_length=policy.editorial_keyword_item_max,
     )
 
-    slug = normalize_slug(slug_suggestion or seo_title)
+    slug_derived = derive_slug(
+        slug=slug_suggestion or seo_title,
+        title=seo_title,
+        focus=focus,
+        cluster_id=cluster_id,
+    )
+    slug = slug_derived.value or None
+    if slug_derived.is_fallback:
+        findings.append(
+            SeoFinding(
+                WARNING,
+                "CAMPO_DERIVADO_POR_FALLBACK",
+                "seo.slugSuggestion",
+                f"slug proposta inutilizavel; derivada de {slug_derived.source}",
+            )
+        )
     issue = slug_issue(slug)
     if issue is not None:
         findings.append(SeoFinding(BLOCKING, issue.split(":")[0], "seo.slugSuggestion", issue))
@@ -425,7 +568,7 @@ def build_seo_proposal(
     findings.extend(schema_findings)
 
     findings.extend(
-        _check_focus_keyphrase(focus, title=seo_title, meta=seo_meta, lead=lead_text, related=related)
+        _check_focus_keyphrase(focus, title=seo_title, meta=seo_meta, lead=lead, related=related)
     )
 
     proposal = SeoProposal(
@@ -463,7 +606,7 @@ def build_seo_proposal(
         findings=findings,
     )
 
-    proposal.findings.extend(_check_stuffing(proposal))
+    proposal.findings.extend(_relieve_stuffing(proposal))
     if alt_texts and not proposal.image_alt_suggestions:
         proposal.findings.append(
             SeoFinding(

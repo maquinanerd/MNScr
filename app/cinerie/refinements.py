@@ -36,23 +36,65 @@ from .text import find_forbidden_markup, normalize_keyphrase
 _TIMEZONE_SUFFIX: Final[re.Pattern[str]] = re.compile(r"(?:Z|[+-]\d{2}:?\d{2})$")
 
 
+#: Quantos caracteres de um valor recusado aparecem no log.
+#:
+#: Curto de proposito. O que um operador precisa para consertar um campo
+#: obrigatorio e distinguir ``''`` de ``None`` de ``'   '`` de um texto grande
+#: demais — nao ler a materia. Trinta caracteres respondem essa pergunta e nao
+#: transportam conteudo inedito.
+VALUE_EXCERPT_MAX: Final[int] = 30
+
+
+def describe_value(value: Any) -> str:
+    """Rendericao SEGURA do valor recusado: forma e tamanho, nunca o conteudo inteiro.
+
+    A decisao anterior era nao mostrar valor nenhum, e ela custava caro na
+    pratica: ``seo.focusKeyphrase: minLength: 1`` nao diz se o campo chegou
+    vazio, nulo ou com espacos, e as tres causas se consertam em lugares
+    diferentes. O meio-termo e mostrar a FORMA sempre e um trecho curto quando o
+    valor e texto — o suficiente para identificar o defeito, longe do suficiente
+    para vazar a materia.
+    """
+    if value is None:
+        return "None"
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        if not value:
+            return "'' (string vazia)"
+        if not value.strip():
+            return f"'   ' (so espacos, {len(value)} caracteres)"
+        excerpt = value[:VALUE_EXCERPT_MAX]
+        suffix = "..." if len(value) > VALUE_EXCERPT_MAX else ""
+        return f"{excerpt!r}{suffix} ({len(value)} caracteres)"
+    if isinstance(value, (list, tuple)):
+        return f"<lista de {len(value)} item(ns)>"
+    if isinstance(value, Mapping):
+        return f"<objeto com {len(value)} chave(s)>"
+    return f"<{type(value).__name__}>"
+
+
 @dataclass(frozen=True)
 class ContractIssue:
-    """Caminho + mensagem. Nunca o valor recebido.
+    """Caminho + mensagem, e a FORMA do valor recebido.
 
-    Um erro de validacao que ecoa o payload vira vetor de vazamento: o valor de
-    um campo aqui e trecho de materia inedita.
+    O valor nunca aparece inteiro: ``received`` e o resultado de
+    :func:`describe_value`, que mostra tipo, tamanho e no maximo um trecho
+    curto. Um erro de validacao que ecoasse o payload viraria vetor de
+    vazamento — o valor de um campo aqui e trecho de materia inedita.
     """
 
     path: str
     message: str
+    received: str = ""
 
     def __str__(self) -> str:  # pragma: no cover - trivial
-        return f"{self.path}: {self.message}"
+        suffix = f" [recebido: {self.received}]" if self.received else ""
+        return f"{self.path}: {self.message}{suffix}"
 
 
-def _issue(path: str, message: str) -> ContractIssue:
-    return ContractIssue(path=path or "(raiz)", message=message)
+def _issue(path: str, message: str, received: str = "") -> ContractIssue:
+    return ContractIssue(path=path or "(raiz)", message=message, received=received)
 
 
 def _text(value: Any) -> str:
@@ -148,7 +190,11 @@ def check_seo(seo: Any, *, media_ids: Sequence[str]) -> List[ContractIssue]:
     title = _text(seo.get("title")).strip()
     if len(title) < policy.title.min:
         issues.append(
-            _issue("seo.title", f"title precisa de ao menos {policy.title.min} caracteres")
+            _issue(
+                "seo.title",
+                f"title precisa de ao menos {policy.title.min} caracteres",
+                describe_value(seo.get("title")),
+            )
         )
 
     meta = _text(seo.get("metaDescription")).strip()
@@ -157,6 +203,7 @@ def check_seo(seo: Any, *, media_ids: Sequence[str]) -> List[ContractIssue]:
             _issue(
                 "seo.metaDescription",
                 f"metaDescription precisa de ao menos {policy.meta_description.min} caracteres",
+                describe_value(seo.get("metaDescription")),
             )
         )
 

@@ -1171,6 +1171,50 @@ def test_critical_conflict_reaches_qa_warnings_and_qa_still_passes(server, store
     assert qa["passed"] is True, f"blockingErrors: {qa['blockingErrors']}"
     assert qa["blockingErrors"] == []
     assert any("GATE" in w or "CONFLIT" in w.upper() for w in qa["warnings"]), qa["warnings"]
+    # Nomeada, nao so contada: `EDITORIAL_GATE:GATE_REVIEW_REQUIRED` sozinho nao
+    # diz a quem revisa SOBRE O QUE as fontes discordam.
+    assert any("GATE_CRITICAL_FACT_CONFLICT" in w for w in qa["warnings"]), qa["warnings"]
+
+
+def test_every_triggered_gate_rule_reaches_qa_warnings(server, store):
+    """O veredito do gate atravessa inteiro, uma linha por regra acionada.
+
+    Rebaixar uma regra de BLOCKING para WARNING so vale se o achado dela chegar
+    ao Cinerie. Colapsar tudo num unico `EDITORIAL_GATE:GATE_REVIEW_REQUIRED`
+    reintroduziria, uma camada acima, o mesmo silenciamento que a correcao em
+    `rules.py` desfez — e o revisor humano ficaria sem o motivo.
+    """
+    from app.editorial_gate.policy import load_policy
+
+    draft = make_draft()
+    draft.content.title = "Estudio confirma estreia em 29 de julho de 2026"
+    draft.factual_assessment = build_factual_assessment(
+        draft, CONFLICTING_SOURCES, mode="deterministic"
+    )
+    draft.editorial_gate = EditorialGate(
+        load_policy("mnscr-editorial-gate-v2", "config/editorial_gate")
+    ).evaluate(
+        draft, context={"output_mode": "local", "factual_assessment": draft.factual_assessment}
+    )
+
+    esperadas = {
+        rule.rule_code
+        for rule in draft.editorial_gate.triggered_rules
+        if rule.severity in ("BLOCKING", "WARNING")
+    }
+    assert esperadas, "o cenario precisa acionar alguma regra, senao passa por vacuidade"
+
+    server.script = [ScriptedResponse(201, published_body())]
+    make_service(server, store).publish_draft(draft)
+    warnings = server.last_request.body["qa"]["warnings"]
+
+    for code in sorted(esperadas):
+        assert any(code in w for w in warnings), f"{code} nao chegou em qa.warnings: {warnings}"
+
+    # INFO e contexto operacional, nao orientacao editorial: nao polui a lista.
+    info = {r.rule_code for r in draft.editorial_gate.triggered_rules if r.severity == "INFO"}
+    for code in info:
+        assert not any(f"GATE:{code}" in w for w in warnings), f"{code} (INFO) vazou para qa.warnings"
 
 
 def test_generated_at_is_the_pipeline_time_not_now(server, store):

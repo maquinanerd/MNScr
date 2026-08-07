@@ -162,8 +162,25 @@ def test_contract_output_uses_exactly_the_schema_names():
 # ===========================================================================
 
 
-def test_short_title_blocks():
-    built = proposal(title="Curto")
+def test_short_title_is_completed_instead_of_blocked():
+    """Titulo curto demais para transporte e COMPLETADO, nao recusado.
+
+    "Duna 3" e um titulo legitimo que o contrato nao transporta sozinho (minimo
+    de 15 caracteres, regra de `superRefine` do Cinerie). Bloquear ali custava a
+    materia inteira por uma questao de tamanho; compor com o material que a
+    propria materia ja tem resolve sem afirmar nada novo.
+    """
+    built = proposal(title="Curto", subtitle="o estudio confirmou a data de estreia")
+    assert not built.blocking
+    assert len(built.title) >= 15
+    assert any(item.code == "CAMPO_DERIVADO_POR_FALLBACK" for item in built.findings), (
+        "o remendo precisa aparecer: um campo consertado em silencio esconde o defeito"
+    )
+
+
+def test_short_title_without_material_to_complete_still_blocks():
+    """Sem nada de onde derivar, a recusa continua — e continua honesta."""
+    built = proposal(title="Curto", subtitle="", summary="", lead_text="")
     assert any(item.severity == BLOCKING for item in built.findings)
 
 
@@ -194,10 +211,35 @@ def test_meta_inside_the_editorial_range_is_clean():
 # ===========================================================================
 
 
-def test_missing_focus_keyphrase_blocks():
+def test_missing_focus_keyphrase_is_derived_from_the_title():
+    """A IA omitir a frase-chave nao pode custar a materia.
+
+    Este e o defeito que matou uma materia de gate limpo em producao: a IA
+    devolveu `None` e o pedido saiu com o campo vazio, para morrer em
+    CONTRACT_INVALID no proprio validador local. O campo agora e derivado do
+    titulo — texto que a materia ja tem, nunca uma frase inventada.
+    """
+    built = proposal(focus_keyphrase="")
+    assert built.focus_keyphrase, "focusKeyphrase e obrigatorio no contrato"
+    assert 2 <= len(built.focus_keyphrase) <= 80
+    assert not built.blocking
     assert any(
-        item.code == "FOCUS_KEYPHRASE_AUSENTE" for item in proposal(focus_keyphrase="").findings
+        item.code == "CAMPO_DERIVADO_POR_FALLBACK" and item.field == "seo.focusKeyphrase"
+        for item in built.findings
     )
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "<script>x</script>"])
+def test_focus_keyphrase_never_leaves_empty(value):
+    """Nulo, vazio, so espacos ou com markup: nenhum deles sai no pedido."""
+    built = proposal(focus_keyphrase=value)
+    assert built.focus_keyphrase
+    assert len(built.focus_keyphrase) <= 80
+
+
+def test_derived_focus_keyphrase_does_not_start_with_a_preposition():
+    built = proposal(focus_keyphrase="", title="De volta ao futuro ganha nova edicao")
+    assert not built.focus_keyphrase.lower().startswith("de ")
 
 
 def test_generic_focus_keyphrase_is_not_auto_publishable():
@@ -263,6 +305,52 @@ def test_keyword_stuffing_is_not_auto_publishable():
 
 def test_normal_repetition_is_not_stuffing():
     assert all(item.code != "KEYWORD_STUFFING" for item in proposal().findings)
+
+
+def test_redundant_social_suggestion_is_dropped_instead_of_shipped():
+    """O caso real que voltou 422 do Cinerie: og e twitter copiando o titulo.
+
+    O MNScr MEDIA as 4 repeticoes contra o maximo de 3 e mandava assim mesmo,
+    porque o achado era so um aviso. O Cinerie respondeu
+    `BLOCKED / SEO_KEYWORD_STUFFING` e a materia morreu. Saber do defeito e
+    enviar mesmo assim gasta a tentativa e ainda registra a recusa la.
+
+    A repeticao era inteiramente duplicata: as duas sugestoes sociais eram o
+    titulo copiado. Sao campos OPCIONAIS — sem eles o CMS usa `seo.title`, que
+    continua no pedido —, entao descartar nao perde nada que o leitor veria.
+    """
+    title = "Spider-Man: Brand New Day quebra recorde de bilheteria nos EUA"
+    built = proposal(
+        title=title,
+        focus_keyphrase="Spider-Man: Brand New Day",
+        meta_description=(
+            "Spider-Man: Brand New Day quebra recorde de bilheteria ao atingir "
+            "US$ 500 milhoes nos EUA em apenas sete dias de exibicao."
+        ),
+        extra={"openGraphTitleSuggestion": title, "twitterTitleSuggestion": title},
+    )
+    assert all(item.code != "KEYWORD_STUFFING" for item in built.findings)
+    assert any(item.code == "SUGESTAO_SOCIAL_DESCARTADA" for item in built.findings), (
+        "o descarte precisa aparecer: um campo removido em silencio esconde o defeito"
+    )
+    assert "twitterTitleSuggestion" not in built.to_contract()
+    # O campo obrigatorio que o CMS usa como fallback continua no pedido.
+    assert built.to_contract()["title"] == title
+
+
+def test_stuffing_that_survives_the_drop_is_still_reported():
+    """Quando nao sobra sugestao opcional para descartar, o achado permanece.
+
+    Reescrever titulo ou meta description para caber no limite seria mexer em
+    texto editorial, e isso nao e trabalho desta camada.
+    """
+    built = proposal(
+        title="Data de estreia: data de estreia da data de estreia",
+        meta_description="Data de estreia " * 12,
+        extra={},
+    )
+    assert any(item.code == "KEYWORD_STUFFING" for item in built.findings)
+    assert not built.auto_publishable
 
 
 # ===========================================================================
@@ -342,8 +430,38 @@ def test_slug_stays_inside_the_schema_length():
     assert len(slug) <= 200
 
 
-def test_invalid_slug_blocks_the_proposal():
-    built = proposal(slug_suggestion="!!!", title="!!! ???")
+def test_invalid_slug_falls_back_to_the_cluster_id():
+    """Slug inutilizavel vira a do agrupamento, que ja e estavel e ja esta no pedido.
+
+    A slug e SUGESTAO: quem decide a canonica, a colisao e o redirect e o
+    Cinerie. Recusar o pedido inteiro por causa de uma sugestao seria caro por
+    nada — desde que o remendo apareca no aviso.
+    """
+    built = proposal(slug_suggestion="!!!", title="!!! ???", cluster_id="cluster.abc123")
+    assert not built.blocking
+    assert built.slug_suggestion
+    assert is_valid_slug(built.slug_suggestion)
+    assert any(
+        item.code == "CAMPO_DERIVADO_POR_FALLBACK" and item.field == "seo.slugSuggestion"
+        for item in built.findings
+    )
+
+
+def test_slug_with_nothing_to_derive_from_still_blocks():
+    """Sem titulo, sem frase-chave e sem agrupamento nao ha o que derivar.
+
+    A cadeia e longa de proposito — titulo, frase-chave, agrupamento — e so
+    quando ela inteira falha o achado bloqueante volta. Um pedido sem nada
+    disso nao e uma materia.
+    """
+    built = proposal(
+        slug_suggestion="!!!",
+        title="!!! ???",
+        focus_keyphrase="!!!",
+        meta_description="!!! ???",
+        lead_text="",
+        cluster_id="",
+    )
     assert any(item.severity == BLOCKING for item in built.findings)
 
 

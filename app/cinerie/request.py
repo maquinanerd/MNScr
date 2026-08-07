@@ -23,6 +23,7 @@ from typing import Any, Dict, Final, List, Mapping, Optional, Sequence
 from .blocks import BlockConversion, has_rating, has_structured_list, has_structured_steps, html_to_blocks
 from .contract import ContractIdentity, local_identity
 from .errors import RequestBuildError
+from .fallbacks import derive_summary
 from .identity import (
     RequestIdentity,
     build_identity,
@@ -235,6 +236,39 @@ def primary_source_display_name(draft: Any) -> Optional[str]:
     return None
 
 
+def _gate_rule_warnings(gate: Any) -> List[str]:
+    """Uma linha por regra do gate acionada — o veredito, nao so o rotulo dele.
+
+    ``EDITORIAL_GATE:GATE_REVIEW_REQUIRED`` sozinho nao diz NADA a quem revisa:
+    "precisa de revisao" ja se sabe pelo fato de o item estar na fila. O que
+    ajuda e saber que fontes se contradizem numa data, ou que a manchete afirma
+    algo que nenhuma fonte recebida sustenta.
+
+    Isso passou a valer mais depois que as trancas sairam da politica: cada
+    regra rebaixada de BLOCKING para WARNING so continua util se o achado dela
+    ATRAVESSAR ate o pedido. Rebaixar a severidade e depois colapsar tudo num
+    rotulo unico reintroduziria, uma camada acima, exatamente o silenciamento
+    que a correcao em ``rules.py`` desfez.
+
+    As regras BLOQUEANTES acionadas tambem entram: quando o gate bloqueia, o
+    codigo agregado ja esta em ``blockingErrors``, e a lista detalhada continua
+    sendo a unica coisa que explica o motivo.
+    """
+    rules = getattr(gate, "triggered_rules", None) or []
+    lines: List[str] = []
+    for rule in rules:
+        severity = collapse(getattr(rule, "severity", ""))
+        if severity not in ("BLOCKING", "WARNING"):
+            # INFO e observacao de contexto, nao orientacao editorial.
+            continue
+        code = collapse(getattr(rule, "rule_code", ""))
+        if not code:
+            continue
+        message = collapse(getattr(rule, "message", ""))
+        lines.append(f"GATE:{code}" + (f" — {message}" if message else ""))
+    return lines
+
+
 def _qa_from_draft(draft: Any, *, seo: SeoProposal, extra_warnings: Sequence[str]) -> Dict[str, Any]:
     """O QA do pipeline, consolidado.
 
@@ -257,10 +291,12 @@ def _qa_from_draft(draft: Any, *, seo: SeoProposal, extra_warnings: Sequence[str
         blocking.append("EDITORIAL_GATE_AUSENTE")
     elif gate_outcome == "GATE_BLOCKED":
         blocking.append(f"EDITORIAL_GATE:{gate_outcome}")
+        warnings.extend(_gate_rule_warnings(gate))
     elif gate_outcome != "GATE_CLEAR":
         # GATE_REVIEW_REQUIRED (ou qualquer futuro estado que nao seja
         # bloqueante nem limpo): o motivo fica visivel, mas como orientacao.
         warnings.append(f"EDITORIAL_GATE:{gate_outcome}")
+        warnings.extend(_gate_rule_warnings(gate))
 
     # O detalhe de CADA regra do gate (inclusive conflito factual critico) ja
     # esta em `gate.blocking_rules`/`gate.warning_rules`, que e o que decidiu
@@ -382,6 +418,7 @@ def build_publication_request(
     )
 
     media_entries = _normalize_media(media)
+    lead = lead_text_of(conversion.blocks)
     seo = build_seo_proposal(
         title=getattr(content, "title", ""),
         meta_description=getattr(content, "meta_description", "") or "",
@@ -392,7 +429,11 @@ def build_publication_request(
         content_type=resolved_content_type,
         schema_type=(seo_source or {}).get("schemaTypeRecommendation"),
         article_section=(getattr(content, "category_suggestions", None) or [None])[0],
-        lead_text=lead_text_of(conversion.blocks),
+        lead_text=lead,
+        body_blocks=conversion.blocks,
+        subtitle=getattr(content, "subtitle", None) or "",
+        summary=getattr(content, "summary", None) or "",
+        cluster_id=identity.source_cluster_id,
         extra=seo_source,
         media_ids=[entry["mediaId"] for entry in media_entries],
         alt_texts=(seo_source or {}).get("image_alt_texts"),
@@ -402,14 +443,34 @@ def build_publication_request(
         has_rating=has_rating(conversion.blocks),
     )
 
-    summary = plain_text(
-        getattr(content, "summary", None)
-        or getattr(content, "subtitle", None)
-        or seo.meta_description,
-        max_length=2000,
+    build_warnings: List[str] = list(conversion.warnings)
+
+    summary_derived = derive_summary(
+        summary=getattr(content, "summary", None),
+        subtitle=getattr(content, "subtitle", None),
+        meta=seo.meta_description,
+        lead=lead,
+        maximum=2000,
     )
+    summary = summary_derived.value
     if not summary:
         raise RequestBuildError("draft sem resumo: `summary` e obrigatorio no contrato")
+    if summary_derived.is_fallback:
+        build_warnings.append(
+            f"CAMPO_DERIVADO_POR_FALLBACK:summary (origem {summary_derived.source})"
+        )
+
+    # `title` tem o mesmo problema de `seo.title`, com um teto diferente: o
+    # contrato exige string nao vazia, e a IA pode nao ter entregue nenhuma. A
+    # proposta de SEO ja resolveu o assunto deterministicamente; reaproveita-la
+    # aqui evita duas respostas diferentes para a mesma pergunta.
+    article_title = plain_text(getattr(content, "title", ""), max_length=300)
+    if not article_title:
+        article_title = plain_text(seo.title, max_length=300)
+        if article_title:
+            build_warnings.append("CAMPO_DERIVADO_POR_FALLBACK:title (origem seo.title)")
+    if not article_title:
+        raise RequestBuildError("draft sem titulo: `title` e obrigatorio no contrato")
 
     payload: Dict[str, Any] = {
         **contract_identity.as_request_fields(),
@@ -419,7 +480,7 @@ def build_publication_request(
         "attributionMode": attribution_mode,
         "contentType": resolved_content_type,
         "language": language,
-        "title": plain_text(getattr(content, "title", ""), max_length=300),
+        "title": article_title,
         "summary": summary,
         "blocks": conversion.blocks,
         "externalSources": _sources_from_draft(draft),
@@ -427,7 +488,7 @@ def build_publication_request(
         "media": media_entries,
         "seo": seo.to_contract(),
         "provenance": _provenance_from_draft(draft),
-        "qa": _qa_from_draft(draft, seo=seo, extra_warnings=conversion.warnings),
+        "qa": _qa_from_draft(draft, seo=seo, extra_warnings=build_warnings),
         "generatedAt": _generated_at(draft),
         "pipelineVersion": plain_text(
             pipeline_version or getattr(provenance, "pipeline_version", "") or "mnscr",
@@ -447,7 +508,7 @@ def build_publication_request(
         contract=contract_identity,
         seo=seo,
         blocks=conversion,
-        warnings=list(conversion.warnings),
+        warnings=list(build_warnings),
     )
 
 

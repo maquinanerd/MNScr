@@ -1,5 +1,36 @@
 {
   "policyVersion": "mnscr-editorial-gate-v2",
+  "_comment": [
+    "JSON nao tem comentario; esta chave e ignorada pelo carregador (load_policy le",
+    "policyVersion, enabledRules, trustedSingleSourceDomains e thresholds) e existe para",
+    "que a decisao viaje junto com o arquivo que a executa.",
+    "",
+    "DECISAO DO DONO DO PRODUTO: nenhuma regra desta politica bloqueia publicacao.",
+    "Todas continuam avaliando e reportando; o que sai e a tranca, nao o sinal. Os avisos",
+    "chegam inteiros em qa.warnings e o Cinerie decide o que fazer com eles.",
+    "",
+    "MOTIVO, medido em execucao real: coverage_ratio=0.0 com supported=0 de 7 claims. O",
+    "casador de evidencia nao confirma NADA hoje. Nesse estado,",
+    "blockCriticalFactConflicts e blockUnsupportedMaterialClaimsInCriticalLocations nao",
+    "medem risco — elas bloqueiam incondicionalmente, porque a ausencia de suporte e",
+    "propriedade do matcher, nao da materia. Uma regra que reprova todo mundo nao separa",
+    "nada, e o custo dela e a materia inteira.",
+    "",
+    "QUANDO RELIGAR: quando supported > 0 de forma consistente nas execucoes reais, ou",
+    "seja, quando o matcher passar a confirmar afirmacoes que as fontes recebidas de fato",
+    "sustentam. Ate la, o sinal fica em qa.warnings e a decisao fica com o humano.",
+    "",
+    "ARMADILHA JA PAGA DUAS VEZES: desligar o threshold nao pode calar a regra. Uma regra",
+    "que devolve triggered=false quando o threshold e false some do veredito, e o operador",
+    "perde justamente a informacao que motivou desligar a tranca. Em rules.py, tanto",
+    "rule_critical_fact_conflict quanto rule_material_claim_unsupported trocam a",
+    "SEVERIDADE (BLOCKING -> WARNING) e continuam avaliando. Qualquer regra nova com",
+    "threshold de bloqueio precisa seguir esse mesmo desenho.",
+    "",
+    "block_on_unverified_media continua declarado e false por coerencia com a decisao:",
+    "nenhuma regra o consulta hoje (rule_unverified_media ja e WARNING fixo), entao ele e",
+    "inerte — mas um true ali leria como uma tranca que existe, e nao existe."
+  ],
   "enabledRules": [
     "GATE_MISSING_TITLE",
     "GATE_MISSING_BODY",
@@ -56,7 +87,7 @@
     "block_on_unverified_media": false,
     "minimumFactualCoverageRatio": 0.75,
     "minimumIndependentSourceOrigins": 2,
-    "blockUnsupportedMaterialClaimsInCriticalLocations": true,
+    "blockUnsupportedMaterialClaimsInCriticalLocations": false,
     "blockCriticalFactConflicts": false
   }
 }

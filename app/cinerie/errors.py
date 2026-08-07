@@ -50,15 +50,28 @@ class SchemaValidationError(CinerieError):
     """O pedido montado nao satisfaz o JSON Schema do Cinerie.
 
     Erro PERMANENTE de construcao: reenviar repete o defeito. Os caminhos dos
-    campos invalidos sao preservados; os valores, nunca — um erro de validacao
-    que ecoa o payload vira vetor de vazamento de materia inedita no log.
+    campos invalidos sao preservados, e ``details`` acrescenta a FORMA do valor
+    recusado (tipo, tamanho e, para texto, um trecho de ate trinta caracteres —
+    ver ``refinements.describe_value``). O valor inteiro nunca entra: um erro de
+    validacao que ecoa o payload vira vetor de vazamento de materia inedita.
+
+    Sem essa forma, ``seo.focusKeyphrase: minLength: 1`` nao distingue campo
+    vazio de campo nulo de campo so com espacos, e as tres causas se consertam
+    em lugares diferentes.
     """
 
     code = "CONTRACT_INVALID"
 
-    def __init__(self, message: str, *, paths: Optional[Sequence[str]] = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        paths: Optional[Sequence[str]] = None,
+        details: Optional[Sequence[str]] = None,
+    ) -> None:
         super().__init__(message)
         self.paths: List[str] = list(paths or [])
+        self.details: List[str] = list(details or [])
 
 
 class ForbiddenFieldError(SchemaValidationError):

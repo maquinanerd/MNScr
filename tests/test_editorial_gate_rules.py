@@ -672,6 +672,76 @@ def test_every_rule_is_serializable(rule_code, policy):
     assert payload["rule_code"] == rule_code
 
 
+# ===========================================================================
+# Threshold desligado troca a SEVERIDADE, nunca cala a regra
+# ===========================================================================
+
+
+class _FakeClaim:
+    draft_locations = ["title"]
+    display_text = "O filme estreia em julho"
+
+
+class _FakeConflict:
+    conflict_type = "DATE"
+    subject = "estreia"
+    values = ["julho", "agosto"]
+
+
+class _FakeAssessment:
+    """Uma avaliacao factual que aciona as duas regras com threshold de bloqueio."""
+
+    unsupported_in_critical_locations = [_FakeClaim()]
+    critical_conflicts = [_FakeConflict()]
+    conflicts = [_FakeConflict()]
+
+
+#: As regras cujo bloqueio e governado por um threshold da politica.
+_THRESHOLD_GOVERNED_BLOCKING_RULES = {
+    "GATE_MATERIAL_CLAIM_UNSUPPORTED": "blockUnsupportedMaterialClaimsInCriticalLocations",
+    "GATE_CRITICAL_FACT_CONFLICT": "blockCriticalFactConflicts",
+}
+
+
+@pytest.mark.parametrize(
+    "rule_code,threshold", sorted(_THRESHOLD_GOVERNED_BLOCKING_RULES.items())
+)
+def test_disabled_threshold_downgrades_severity_without_silencing(rule_code, threshold, policy):
+    """Desligar a tranca nao pode apagar o sinal.
+
+    Esta e a armadilha que ja custou duas correcoes: uma regra que devolve
+    ``triggered=False`` quando o threshold e ``false`` some do veredito, e o
+    operador perde exatamente a informacao que motivou desligar a tranca. O
+    contrato correto e trocar a SEVERIDADE e continuar avaliando — o achado sai
+    em ``qa.warnings`` em vez de ``qa.blockingErrors``.
+    """
+    draft = make_draft(factual_assessment=_FakeAssessment())
+
+    policy.thresholds = {**policy.thresholds, threshold: True}
+    ligado = run(rule_code, draft, policy)
+    assert ligado.triggered
+    assert ligado.severity == SEVERITY_BLOCKING
+
+    policy.thresholds = {**policy.thresholds, threshold: False}
+    desligado = run(rule_code, draft, policy)
+    assert desligado.triggered, f"{rule_code} ficou MUDA com {threshold}=false"
+    assert desligado.severity == SEVERITY_WARNING
+    assert desligado.evidence, "a evidencia precisa sobreviver ao rebaixamento"
+
+
+def test_production_policy_has_no_blocking_threshold_enabled():
+    """A politica em uso nao pode religar uma tranca sem que alguem note.
+
+    Decisao do dono do produto registrada em ``mnscr-editorial-gate-v2.json``:
+    nenhuma regra bloqueia enquanto o casador de evidencia nao confirmar nada
+    (coverage_ratio=0.0, supported=0 de 7 na execucao real).
+    """
+    v2 = load_policy("mnscr-editorial-gate-v2", POLICY_DIR)
+    for threshold in _THRESHOLD_GOVERNED_BLOCKING_RULES.values():
+        assert v2.threshold(threshold) is False, f"{threshold} voltou a bloquear"
+    assert v2.threshold("block_on_unverified_media") is False
+
+
 def test_a_rule_that_raises_becomes_a_blocking_finding(policy, monkeypatch):
     """Um draft que nao pode ser avaliado e exatamente o caso de inspecao humana."""
     def _explode(draft, pol, ctx):

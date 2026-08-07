@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Final, List, Optional, Sequence, Tuple
 
+from app.stopwords import trim_function_words
+
 from . import states as S
 from .errors import InvalidModelResponseError
 from .models import FactualClaim
@@ -162,6 +164,14 @@ def _subject_of(sentence: str) -> Optional[str]:
     the capture class also admits digits, apostrophes and hyphens, so a token
     like "A2" or "A-" would otherwise pass a bare length check while still
     being a one-letter article wearing a longer disguise.
+
+    That length check was not enough on its own, and the factual report showed
+    it: subjects came out as "Do" and "Com". A Portuguese preposition has two
+    alphabetic characters, starts a sentence capitalised, and sails through. The
+    stoplist closes it — a run made only of function words is not a subject, it
+    is the front half of a noun phrase whose head was left out. Function words
+    in the MIDDLE stay ("Nova temporada DE Stranger Things"); it is starting or
+    ending on one that means the capture went wrong.
     """
     match = re.match(
         r"\s*((?:[A-ZÁÉÍÓÚÂÊÔÃÕÇ][\w'’\-]+)(?:\s+(?:de|da|do|dos|das|of|the)?\s*"
@@ -171,9 +181,16 @@ def _subject_of(sentence: str) -> Optional[str]:
     if not match:
         return None
     subject = normalize_text(match.group(1))
-    if sum(1 for ch in subject if ch.isalpha()) < 2:
+    if not subject:
         return None
-    return subject or None
+
+    trimmed = " ".join(trim_function_words(subject.split()))
+    if not trimmed:
+        # Só palavras funcionais: "Do", "Com", "A The". Não é sujeito nenhum.
+        return None
+    if sum(1 for ch in trimmed if ch.isalpha()) < 2:
+        return None
+    return trimmed
 
 
 def extract_deterministic_claims(draft: Any, *, max_claims: int = 100) -> List[FactualClaim]:
