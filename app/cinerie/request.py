@@ -28,8 +28,17 @@ from .blocks import (
     has_structured_list,
     has_structured_steps,
     html_to_blocks,
+    max_blocks,
 )
 from .contract import ContractIdentity, local_identity
+from .entity_resolve import (
+    EntityResolver,
+    attach_entity_cards,
+    collect_entity_candidates,
+    log_emitted_cards,
+    parse_resolution,
+    select_entity_cards,
+)
 from .errors import RequestBuildError
 from .fallbacks import derive_summary
 from .identity import (
@@ -66,6 +75,11 @@ class BuiltRequest:
     seo: SeoProposal
     blocks: BlockConversion
     warnings: List[str] = field(default_factory=list)
+    #: As fichas de entidade que entraram no corpo, com nome de origem, casamento
+    #: e id resolvido. Ficam aqui — e nao so no log — porque sao o unico campo do
+    #: pedido que aponta para FORA da materia sem que o Cinerie possa conferir; o
+    #: relatorio da rodada precisa poder listar cada uma.
+    entity_cards: List[Any] = field(default_factory=list)
 
     @property
     def intent(self) -> str:
@@ -282,6 +296,77 @@ def _gate_rule_warnings(gate: Any) -> List[str]:
     return lines
 
 
+def _attach_resolved_entity_cards(
+    conversion: BlockConversion,
+    *,
+    title: str,
+    resolver: Optional[EntityResolver],
+    maximum: int,
+    match_kinds: Sequence[str],
+) -> List[Any]:
+    """Resolve as entidades do rascunho e insere as fichas no corpo. Nunca levanta.
+
+    Uma chamada por MATERIA, em lote — nao uma por entidade. A rota tem teto de
+    60 chamadas por minuto por credencial, e o teto existe para proteger o banco
+    de um laco descontrolado; uma chamada por nome transformaria uma materia com
+    doze nomes em doze chamadas para responder a mesma pergunta.
+
+    Devolve as fichas emitidas, para o relatorio. Toda falha vira zero fichas:
+    esta e a mesma regra da imagem — enriquecimento nao derruba materia —, e aqui
+    ela e ainda mais estrita, porque a alternativa a "sem ficha" nao e "ficha
+    aproximada", e sim "ficha apontando para a obra errada, com 201 na
+    auditoria".
+    """
+    if resolver is None or maximum <= 0 or not match_kinds:
+        return []
+
+    try:
+        lead = lead_text_of(conversion.blocks)
+        candidatos = collect_entity_candidates(
+            title=title, lead=lead, blocks=conversion.blocks
+        )
+        if not candidatos:
+            return []
+
+        resultados = resolver([candidato.as_resolve_item() for candidato in candidatos])
+        if resultados is None:
+            # O resolvedor ja registrou o motivo. `None` e "nao sei", e "nao sei"
+            # nunca vira bloco.
+            conversion.warnings.append("ENTITY_RESOLVE_INDISPONIVEL")
+            return []
+
+        resolution = parse_resolution(
+            resultados, candidatos, accepted_match_kinds=match_kinds
+        )
+        conversion.warnings.extend(resolution.warnings)
+        if resolution.reasons:
+            logger.info(
+                "[CINERIE_ENTITY] %s candidatos, %s resolvidos; nao resolvidos por motivo: %s",
+                len(candidatos), len(resolution.resolved), resolution.reasons,
+            )
+
+        escolhidas = select_entity_cards(resolution, maximum=maximum)
+        if not escolhidas:
+            return []
+
+        # Um lugar reservado para o `sourceList`, que entra depois e e o bloco
+        # que NAO pode ficar de fora: a atribuicao da fonte vale mais que a ficha.
+        conversion.warnings.extend(
+            attach_entity_cards(
+                conversion.blocks, escolhidas, max_total_blocks=max(1, max_blocks() - 1)
+            )
+        )
+        log_emitted_cards(escolhidas)
+        return list(escolhidas)
+    except Exception as exc:  # noqa: BLE001 - ficha NUNCA custa a materia publicada
+        logger.warning(
+            "[CINERIE_ENTITY] resolucao levantou %s: %s; materia segue sem ficha",
+            type(exc).__name__, exc,
+        )
+        conversion.warnings.append("ENTITY_RESOLVE_FALHOU")
+        return []
+
+
 def _qa_from_draft(draft: Any, *, seo: SeoProposal, extra_warnings: Sequence[str]) -> Dict[str, Any]:
     """O QA do pipeline, consolidado.
 
@@ -382,6 +467,9 @@ def build_publication_request(
     media: Sequence[Mapping[str, Any]] = (),
     entity_links: Sequence[Mapping[str, Any]] = (),
     contract: Optional[ContractIdentity] = None,
+    entity_resolver: Optional[EntityResolver] = None,
+    entity_card_max: int = 0,
+    entity_match_kinds: Sequence[str] = (),
 ) -> BuiltRequest:
     """Monta o pedido. Nao valida e nao envia — ver ``validation`` e ``client``."""
     policy = seo_policy()
@@ -425,6 +513,18 @@ def build_publication_request(
         raise RequestBuildError(
             "corpo acima do limite de blocos do contrato; truncar publicaria a materia pela metade"
         )
+
+    # As fichas entram ANTES do `sourceList` e DEPOIS do corpo estar montado. A
+    # ordem nao e arbitraria: `sourceList` e sempre o ULTIMO bloco, e a ficha se
+    # posiciona pelo paragrafo em que a entidade e mencionada — o que exige o
+    # corpo pronto e a lista de fontes ainda fora.
+    entity_cards = _attach_resolved_entity_cards(
+        conversion,
+        title=getattr(content, "title", "") or "",
+        resolver=entity_resolver,
+        maximum=entity_card_max,
+        match_kinds=entity_match_kinds,
+    )
 
     # As fontes precisam existir ANTES do corpo fechar: `sourceList` referencia
     # `externalSources` por id, e o unico jeito de garantir que a referencia
@@ -528,6 +628,7 @@ def build_publication_request(
         seo=seo,
         blocks=conversion,
         warnings=list(build_warnings),
+        entity_cards=entity_cards,
     )
 
 

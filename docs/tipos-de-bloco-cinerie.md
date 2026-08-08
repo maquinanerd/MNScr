@@ -14,6 +14,7 @@ quatro tipos continuam fora.
 | `video` | paragrafo com URL nua do YouTube | depois do primeiro `h2`, ou no fim sem `h2`; **um** por materia |
 | `quote` | `<blockquote>`, ou citacao com autor declarado dentro de um paragrafo | no maximo **duas** por materia |
 | `sourceList` | `externalSources[]` do proprio pedido | **ultimo** bloco; substitui o paragrafo "Fonte: X" |
+| `entityCard` | `POST /api/internal/entity-resolve` | so com `entityId` nao-nulo; no maximo **tres**; depois do paragrafo da primeira mencao |
 | `divider` | `<hr>` | passa direto; o gerador de texto raramente produz `<hr>` |
 
 ### `video`
@@ -61,16 +62,69 @@ O paragrafo de credito (`html_utils.append_source_credit_block`) so sai quando o
 bloco entra. Sem fonte referenciavel o texto fica: perder a atribuicao seria
 pior do que exibi-la sem link, que e o estado que este bloco veio corrigir.
 
+### `entityCard`
+
+**Atualizado em 08/08/2026.** A secao abaixo, escrita em 07/08, terminava com
+"para implementar seria preciso, do lado do Cinerie, um endpoint de resolucao
+(nome + tipo -> id interno) que o MNScr pudesse consultar. Nao existe hoje."
+**Esse endpoint existe agora**: `POST /api/internal/entity-resolve`, no
+`screen-app` (nao no CMS), com escopo proprio `catalog_resolve` e credencial
+separada. Tudo o que a secao antiga descreve sobre o PERIGO continua valendo
+palavra por palavra — o que mudou e que o MNScr deixou de precisar adivinhar.
+
+Regras de emissao, todas verificadas em `tests/test_cinerie_entity_cards.py`:
+
+- **`entityId` nulo nao vira bloco.** Nem aproximacao, nem plano B. Isso inclui
+  `no_canonical_slug`, o caso em que a entidade EXISTE e mesmo assim nao serve:
+  sem slug canonico pt-BR ela nao tem pagina, e o card sumiria do corpo
+  exatamente como sumiria um id inexistente;
+- **uma chamada por MATERIA**, em lote (teto de 50 itens, cortado localmente
+  ANTES do envio — acima disso a rota recusa o pedido inteiro, e nunca trunca);
+- **limiar de confianca configuravel** (`MNSCR_CINERIE_ENTITY_MATCH_KINDS`). Os
+  tres casamentos que a rota oferece sao exatos; toda ficha emitida por nome
+  sobe no log como `[CINERIE_ENTITY_CARD] auditoria=exact_name`, com o nome de
+  origem e o id resolvido;
+- **no maximo tres por materia** (`MNSCR_CINERIE_ENTITY_CARD_MAX`), as de maior
+  confianca, com desempate estavel por proeminencia e nome — uma materia
+  picotada de fichas vira diretorio, e um desempate instavel faria a revisao
+  seguinte trocar os blocos sem que nada tivesse mudado no texto;
+- **posicao:** logo DEPOIS do paragrafo em que a entidade e mencionada pela
+  primeira vez; quando o nome so aparece no titulo, depois do primeiro
+  paragrafo. E o unico ponto DEDUZIVEL do texto — um indice fixo escolhido a mao
+  seria desmentido pela proxima materia;
+- **filme e serie so viajam com ano**, e so o ano que o texto declara colado ao
+  titulo (`Titulo (2026)`). Sem ano a rota responde `title_requires_year`, e
+  colar o primeiro ano do texto num titulo qualquer produziria
+  `exact_title_year` — o casamento mais confiante da rota — ancorado num chute;
+- **falha vira zero ficha**, nunca ficha aproximada e nunca materia perdida.
+  `503 resolve_failed` existe justamente para que falha de leitura NAO chegue ao
+  emissor como "nao existe".
+
+O array `entityLinks[]` de topo **continua saindo vazio**, e de proposito: ver
+"Relacao com `entityLinks[]`" abaixo.
+
 ## Nao emitidos
 
-### `image` — falta `mediaId`
+### `image` — falta um `mediaId` que possa ir no corpo
 
 Exige `mediaRef` apontando para midia ja aprovada no CMS. O `mediaId` so nasce
-depois da materia existir; hoje a ingestao devolve um id real
-(`[CINERIE_MEDIA] ingerida com sucesso`) mas a capa nao e reapontada na mesma
-rodada. Fora de escopo enquanto a resubmissao com `media[]` nao existir.
+depois de a materia existir, e o corpo e enviado antes — logo, so uma revisao
+POSTERIOR do mesmo cluster poderia carregar o bloco.
 
-### `entityCard` e `relatedContent` — falta o id INTERNO do catalogo
+**Continua fora, e o motivo mudou.** Desde 08/08 a capa e apontada de fato
+(`PATCH /editorial-media/:mediaId/hero`), entao existe um `mediaId` real. Mas
+ele e o da CAPA: reutiliza-lo como `image` no meio do texto publicaria a mesma
+foto duas vezes na mesma pagina. Um bloco `image` util exigiria uma SEGUNDA
+ingestao, com `intendedUse` proprio, e um lugar no banco local para guardar o id
+entre revisoes — nenhum dos dois existe hoje. Forcar revisao sintetica para
+antecipar isso ja foi decidido como nao: colide com a revisao legitima do RSS
+Prime.
+
+### `relatedContent` — falta o id INTERNO do catalogo
+
+A secao abaixo foi escrita quando `entityCard` estava no mesmo balde. Para
+`relatedContent` ela continua inteira: `articleRefs` pede id de materia do
+proprio Cinerie, e nao ha rota que traduza isso.
 
 Investigacao no repo do Cinerie (`origin/main`), 07/08/2026:
 
@@ -108,14 +162,44 @@ Investigacao no repo do Cinerie (`origin/main`), 07/08/2026:
   do corpo nao tem nenhuma dessas duas protecoes — nem a checagem de forma, nem
   a confirmacao humana.
 
-**Decisao: nao emitir.** O MNScr nao resolve entidade contra o catalogo do
-Cinerie. `taxonomy.EntityProposal.entity_id` existe e e sempre `None` na
-pratica (`TAXONOMY_ENTITIES_UNRESOLVED`), e a fase MS-5 proibe explicitamente
-importar TMDB (`tests/test_no_publication_guard.py:285`). Chutar `entityId`
-apontaria para outra obra, em silencio, com 201 na auditoria.
+**Decisao de 07/08, hoje superada para `entityCard`:** naquela data o MNScr nao
+tinha como resolver entidade contra o catalogo, `taxonomy.EntityProposal
+.entity_id` era sempre `None` na pratica (`TAXONOMY_ENTITIES_UNRESOLVED`) e
+chutar `entityId` apontaria para outra obra, em silencio, com 201 na auditoria.
+A rota de resolucao fechou essa lacuna — mas note que ela nao afrouxou nenhuma
+das regras acima: o que ela entrega e um id CONFERIDO, ou um `null`.
 
-Para implementar seria preciso, do lado do Cinerie, um endpoint de resolucao
-(nome + tipo -> id interno) que o MNScr pudesse consultar. Nao existe hoje.
+`relatedContent` continua sem rota equivalente, e por isso continua fora.
+
+### Relacao com `entityLinks[]` e `ENTITY_LINK_NOT_REAPPLIED`
+
+Os dois caminhos usam o MESMO formato de id e tem guardas diferentes, e a
+diferenca decide por que o MNScr preenche um e nao o outro:
+
+- **`entityCard` (corpo)** nao tem checagem de forma no CMS nem confirmacao
+  humana. O corpo e remapeado inteiro a cada `update`, e isso e inofensivo:
+  nenhuma decisao de gente mora la. E o bloco que vira link visivel na pagina.
+- **`entityLinks[]` (topo)** passa por `resolveEntityReferences`, grava sempre
+  com `verified: false` e **so aparece no site depois de confirmacao humana no
+  admin** (ADR 0018). Em `update` o CMS **nao reaplica** o campo e avisa com
+  `ENTITY_LINK_NOT_REAPPLIED`, porque `verified` carrega curadoria que uma
+  reescrita automatica apagaria.
+
+**Decisao: o MNScr continua enviando `entityLinks: []`.** Nao e timidez, sao
+tres razoes somadas:
+
+1. `relation` (`primary_subject` | `mentioned` | `reviewed` | ...) e
+   **obrigatorio** e nao e resolvivel: a rota devolve QUAL entidade e, nunca o
+   PAPEL dela na materia. Preencher exigiria a heuristica que o resto deste
+   documento existe para recusar;
+2. o ganho visivel hoje seria zero — a linha nasce `verified: false` e nao
+   renderiza ate um humano confirmar —, enquanto o `entityCard` ja entrega o
+   link real na pagina;
+3. mandando `[]`, o array de curadoria simplesmente **nunca e tocado por robo**,
+   e o aviso `ENTITY_LINK_NOT_REAPPLIED` nem chega a ser emitido. A garantia
+   deixa de depender de o CMS continuar recusando a reaplicacao.
+
+Travado por `test_the_top_level_entity_links_array_is_left_untouched_by_the_resolver`.
 
 ### `factBox` — falta dado estruturado
 

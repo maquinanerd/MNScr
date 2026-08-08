@@ -196,6 +196,39 @@ class MediaIngestError(CinerieError):
         self.retryable = retryable
 
 
+class MediaHeroError(CinerieError):
+    """``PATCH /api/internal/editorial-media/:mediaId/hero`` recusou apontar a capa.
+
+    Irma de ``MediaIngestError`` e com a mesma promessa: NUNCA derruba a materia
+    publicada. Existe separada porque o desfecho que ela carrega e de outra
+    natureza — ``is_state_conflict`` distingue "a capa nao pode ser apontada
+    AGORA" (os quatro ``409``) de "o pedido estava errado". Colapsar os dois numa
+    excecao so faria o log dizer que o ``mediaId`` falhou quando o ``mediaId``
+    estava certo e quem recusou foi o estado da materia.
+    """
+
+    code = "MEDIA_HERO_FAILED"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        remote_code: Optional[str] = None,
+        issues: Optional[Sequence[str]] = None,
+        retryable: bool = False,
+        state_conflict: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.remote_code = remote_code
+        self.issues: List[str] = list(issues or [])
+        self.retryable = retryable
+        self.state_conflict = state_conflict
+
+    @property
+    def is_state_conflict(self) -> bool:
+        return self.state_conflict
+
+
 class NonRetryableServerError(TransportError):
     """503 SEM ``retryable: true``. Nao se repete as cegas."""
 
@@ -268,6 +301,8 @@ __all__ = [
     "EndpointUnavailableError",
     "ForbiddenFieldError",
     "InvalidRemoteResponseError",
+    "MediaHeroError",
+    "MediaIngestError",
     "NonRetryableServerError",
     "OperationalError",
     "PermissionError_",

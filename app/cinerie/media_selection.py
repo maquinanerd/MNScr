@@ -18,8 +18,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
-from .errors import MediaIngestError
-from .media_client import MAX_MEDIA_BYTES, MediaIngestResult
+from .errors import MediaHeroError, MediaIngestError
+from .media_client import MAX_MEDIA_BYTES, MediaHeroResult, MediaIngestResult
 
 if TYPE_CHECKING:
     from .client import CinerieClient
@@ -158,4 +158,63 @@ def ingest_hero_image(
         return None
 
 
-__all__ = ["ingest_hero_image", "select_hero_candidate"]
+def point_hero_media(
+    *,
+    article_id: str,
+    media_id: str,
+    client: Optional["CinerieClient"],
+    media_api_key: str,
+) -> Optional[MediaHeroResult]:
+    """Passo 3: aponta a foto ja ingerida como capa da materia. Nunca levanta.
+
+    Mesma promessa de ``ingest_hero_image``, e pelo mesmo motivo: a esta altura
+    a materia JA foi aceita pelo Cinerie. Deixar uma excecao escapar daqui faria
+    a camada de cima ler "a publicacao falhou" depois de o `article_id` real ja
+    existir — e o id seria descartado. Toda falha vira WARNING e ``None``.
+
+    O log separa duas coisas que um `HTTP 4xx` generico confundiria:
+
+    - **conflito de estado** (os quatro ``409``): o ``mediaId`` estava CERTO e a
+      capa e que nao pode ser apontada agora. Depois que a materia sai de
+      ``automation_draft`` este passo passa a recusar sempre, e isso e o
+      desenho: dali em diante a capa e assunto de quem esta editando;
+    - **qualquer outra recusa**: credencial, formato, foto ou materia
+      inexistente — ai sim ha algo a corrigir do lado de ca.
+    """
+    if client is None or not media_api_key:
+        logger.info(
+            "[CINERIE_MEDIA] capa nao apontada: credencial de midia nao configurada "
+            "(MNSCR_CINERIE_MEDIA_API_KEY ausente)"
+        )
+        return None
+
+    try:
+        result = client.point_media_as_hero(
+            media_id=str(media_id), article_id=str(article_id), api_key=media_api_key
+        )
+    except MediaHeroError as exc:
+        if exc.is_state_conflict:
+            logger.warning(
+                "[CINERIE_MEDIA] capa NAO apontada por conflito de ESTADO "
+                "(mediaId=%s continua valido) article_id=%s code=%s: %s",
+                media_id, article_id, exc.remote_code or "sem_codigo", exc,
+            )
+        else:
+            logger.warning(
+                "[CINERIE_MEDIA] capa NAO apontada article_id=%s mediaId=%s code=%s: %s; "
+                "a materia publicada segue valida, sem capa",
+                article_id, media_id, exc.remote_code or "sem_codigo", exc,
+            )
+        return None
+    except Exception as exc:  # noqa: BLE001 - a capa nunca custa a materia publicada
+        logger.warning(
+            "[CINERIE_MEDIA] capa NAO apontada (%s) article_id=%s mediaId=%s: %s",
+            type(exc).__name__, article_id, media_id, exc,
+        )
+        return None
+
+    logger.info("[CINERIE_MEDIA] capa apontada %s", result.safe_log_fields())
+    return result
+
+
+__all__ = ["ingest_hero_image", "point_hero_media", "select_hero_candidate"]

@@ -139,6 +139,9 @@ class CinerieService:
         clock: Optional[Clock] = None,
         identity: Optional[ContractIdentity] = None,
         pipeline_version: Optional[str] = None,
+        entity_resolver: Optional[Any] = None,
+        entity_card_max: int = 0,
+        entity_match_kinds: Sequence[str] = (),
     ) -> None:
         if delivery_mode not in DELIVERY_MODES:
             raise ValueError(f"delivery_mode desconhecido: {delivery_mode!r}")
@@ -153,6 +156,13 @@ class CinerieService:
         self.sleeper = sleeper or Sleeper()
         self.clock = clock or Clock()
         self.pipeline_version = pipeline_version
+        # Injetado, e desligado por default. Sem resolvedor o pedido sai
+        # exatamente como saia antes — nenhuma ficha, nenhum bloco a mais —, que
+        # e o que mantem replay, teste e execucao local sem credencial de
+        # catalogo produzindo o MESMO corpo.
+        self.entity_resolver = entity_resolver
+        self.entity_card_max = entity_card_max
+        self.entity_match_kinds = tuple(entity_match_kinds)
 
     # -- caminho principal -------------------------------------------------
 
@@ -237,6 +247,9 @@ class CinerieService:
                 entity_links=entity_links,
                 pipeline_version=self.pipeline_version,
                 contract=self.identity,
+                entity_resolver=self.entity_resolver,
+                entity_card_max=self.entity_card_max,
+                entity_match_kinds=self.entity_match_kinds,
             )
             ensure_valid(built.payload, identity=self.identity)
         except (RequestBuildError, SchemaValidationError, BlockedByPolicyError) as exc:

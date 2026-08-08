@@ -32,6 +32,10 @@ from .config import (
     FACTUAL_ASSESSMENT_MODE,
     LOCAL_DRAFT_DIR,
     MNSCR_ATTRIBUTION_MODE,
+    MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY,
+    MNSCR_CINERIE_CATALOG_RESOLVE_URL,
+    MNSCR_CINERIE_ENTITY_CARD_MAX,
+    MNSCR_CINERIE_ENTITY_MATCH_KINDS,
     MNSCR_CINERIE_MAX_ATTEMPTS,
     MNSCR_CINERIE_MEDIA_API_KEY,
     MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED,
@@ -2189,20 +2193,90 @@ def _persistent_cinerie_seo_source(source: Any) -> Dict[str, Any]:
     return persisted
 
 
+def _build_entity_resolver():
+    """O resolvedor de entidade, ou ``None`` quando o recurso nao esta configurado.
+
+    ``None`` NAO e erro, e essa e a regra: a resolucao e enriquecimento, e a
+    materia sai sem ficha do mesmo jeito que sai sem foto. Uma variavel ausente
+    vira WARNING no log e segue; virar `issue` de startup faria uma credencial
+    que ninguem pediu impedir a publicacao de tudo.
+
+    A credencial e NOVA e separada das duas do CMS (`draft_ingest` e
+    `editorial_media_ingest`): a rota vive no `screen-app`, e reaproveitar uma
+    chave do CMS faria um unico vazamento abrir os dois lados da fronteira.
+    """
+    from .config import cinerie_entity_resolve_enabled
+
+    if not cinerie_entity_resolve_enabled():
+        faltando = [
+            nome
+            for nome, valor in (
+                ("MNSCR_CINERIE_CATALOG_RESOLVE_URL", MNSCR_CINERIE_CATALOG_RESOLVE_URL),
+                (
+                    "MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY",
+                    MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY,
+                ),
+            )
+            if not valor
+        ]
+        logger.warning(
+            "[CINERIE_ENTITY] resolucao de entidade DESLIGADA (ausente: %s); "
+            "as materias saem sem entityCard",
+            ", ".join(faltando),
+        )
+        return None
+
+    try:
+        from .cinerie.client import CatalogResolveClient, CatalogResolveConfig
+
+        cliente = CatalogResolveClient(
+            CatalogResolveConfig(
+                base_url=MNSCR_CINERIE_CATALOG_RESOLVE_URL,
+                api_key=MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY,
+                timeout_seconds=MNSCR_CINERIE_TIMEOUT_SECONDS,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - ficha nunca custa a materia
+        logger.warning(
+            "[CINERIE_ENTITY] resolvedor nao pode ser construido (%s): %s; "
+            "as materias saem sem entityCard",
+            type(exc).__name__, exc,
+        )
+        return None
+
+    logger.info(
+        "[CINERIE_ENTITY] resolucao LIGADA base=%s max_cards=%s casamentos_aceitos=%s",
+        MNSCR_CINERIE_CATALOG_RESOLVE_URL,
+        MNSCR_CINERIE_ENTITY_CARD_MAX,
+        ",".join(MNSCR_CINERIE_ENTITY_MATCH_KINDS),
+    )
+    return cliente.resolve
+
+
 def _ingest_hero_media_best_effort(draft, result, client) -> None:
-    """Tenta anexar a imagem de destaque ao acervo do Cinerie. Nunca falha a materia.
+    """Os tres passos da imagem de destaque. Nenhum deles pode falhar a materia.
 
-    LIMITE CONHECIDO, deliberado: esta funcao apenas INGERE a foto (obtem um
-    ``mediaId``). Ela nao resubmete a materia com ``media=[{mediaId,
-    intendedUse:"hero"}]`` para de fato apontar a capa — a rota de ingestao,
-    por contrato, nao faz isso sozinha (ver `app.cinerie.media_client`).
-    Resubmeter exigiria incrementar `sourceRevision` so por causa da foto, o
-    que tambem alimenta a reconciliacao de eventos; ver o relatorio da tarefa
-    para a decisao de arquitetura que falta antes de fechar esse laco.
+        1. a materia ja foi publicada             -> article_id   (quem chama)
+        2. a foto entra no acervo                 -> mediaId
+        3. a foto vira a CAPA daquela materia     -> PATCH .../hero
 
-    ``client`` e o MESMO ``CinerieClient`` ja usado para publicar o texto —
-    so a credencial de midia e separada, passada por ``api_key`` na propria
-    chamada.
+    Os tres sao idempotentes e sao repetidos na integra a cada revisao: o passo
+    2 devolve ``unchanged`` quando os bytes nao mudaram, e o passo 3 devolve
+    ``unchanged`` quando a capa ja e aquela — sem escrever, sem criar versao
+    nova. Quando a fonte troca a foto no mesmo endereco, os dois devolvem
+    ``replaced`` e a capa acompanha.
+
+    O passo 3 fechou um no que era de ORDEM, nao de permissao: a foto so pode
+    ser ingerida depois de a materia existir, e a materia so poderia declarar
+    ``media[]`` antes de a foto existir. A rota nova nao le nem escreve
+    ``sourceRevision`` e nao passa por ``staleRevision``, entao ela nao mexe na
+    reconciliacao de eventos — que era exatamente o efeito colateral que
+    impedia fechar isto pela resubmissao.
+
+    ``client`` e o MESMO ``CinerieClient`` ja usado para publicar o texto — so
+    a credencial de midia e separada, passada por ``api_key`` na propria
+    chamada, e o passo 3 usa a MESMA do passo 2 (escopo
+    ``editorial_media_ingest``, nenhuma variavel nova).
 
     NADA ESCAPA DAQUI, e a razao e a POSICAO da chamada, nao a educacao do
     codigo chamado. Quem chama esta funcao e ``_publish_to_cinerie``, DENTRO do
@@ -2210,9 +2284,10 @@ def _ingest_hero_media_best_effort(draft, result, client) -> None:
     ``None``. Uma excecao que vazasse desta funcao seria lida como "a
     publicacao falhou" DEPOIS de o Cinerie ja ter aceitado a materia: o
     ``article_id`` real seria descartado, o `CinerieStore` nao registraria o
-    desfecho e a materia publicada viraria uma falha no relatorio. Hoje
-    ``ingest_hero_image`` ja engole tudo; este bloco existe para que a garantia
-    nao dependa de o outro modulo continuar se comportando.
+    desfecho e a materia publicada viraria uma falha no relatorio. Os modulos
+    chamados ja engolem tudo; os ``except`` daqui existem para que a garantia
+    nao dependa de eles continuarem se comportando — e o passo 3 ganhou o SEU
+    proprio, pelo mesmo motivo que o passo 2 tem o dele.
     """
     if not MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED:
         return
@@ -2246,12 +2321,35 @@ def _ingest_hero_media_best_effort(draft, result, client) -> None:
         )
         return
 
-    if media_result is not None:
-        logger.warning(
-            "[CINERIE_MEDIA] mediaId=%s obtido para article_id=%s, mas a capa NAO foi "
-            "apontada nesta rodada (resubmissao com media[] nao implementada; ver relatorio)",
-            media_result.media_id, article_id,
+    if media_result is None:
+        return
+
+    try:
+        from .cinerie.media_selection import point_hero_media
+
+        hero = point_hero_media(
+            article_id=str(article_id),
+            media_id=media_result.media_id,
+            client=client,
+            media_api_key=MNSCR_CINERIE_MEDIA_API_KEY,
         )
+    except Exception as exc:  # noqa: BLE001 - a capa NUNCA custa a materia publicada
+        logger.warning(
+            "[CINERIE_MEDIA] passo da capa levantou %s para article_id=%s mediaId=%s: %s; "
+            "a materia publicada segue valida, sem capa",
+            type(exc).__name__, article_id, media_result.media_id, exc,
+        )
+        return
+
+    if hero is None:
+        # O motivo ja saiu classificado em `point_hero_media` — conflito de
+        # ESTADO ou recusa de outra natureza. Repetir aqui so somaria ruido.
+        return
+
+    logger.info(
+        "[CINERIE_MEDIA] capa apontada mediaId=%s -> article_id=%s outcome=%s previous=%s",
+        hero.media_id, hero.article_id, hero.outcome, hero.previous_media_id or "-",
+    )
 
 
 def _publish_to_cinerie(draft, art_data):
@@ -2303,6 +2401,9 @@ def _publish_to_cinerie(draft, art_data):
                 max_attempts=MNSCR_CINERIE_MAX_ATTEMPTS,
                 base_seconds=MNSCR_CINERIE_RETRY_BASE_SECONDS,
             ),
+            entity_resolver=_build_entity_resolver(),
+            entity_card_max=MNSCR_CINERIE_ENTITY_CARD_MAX,
+            entity_match_kinds=MNSCR_CINERIE_ENTITY_MATCH_KINDS,
         )
         result = service.publish_draft(
             draft,
@@ -2444,6 +2545,9 @@ def _dispatch_cinerie_pending_once() -> None:
                 max_attempts=MNSCR_CINERIE_MAX_ATTEMPTS,
                 base_seconds=MNSCR_CINERIE_RETRY_BASE_SECONDS,
             ),
+            entity_resolver=_build_entity_resolver(),
+            entity_card_max=MNSCR_CINERIE_ENTITY_CARD_MAX,
+            entity_match_kinds=MNSCR_CINERIE_ENTITY_MATCH_KINDS,
         )
         with cinerie_dispatch_lock_heartbeat(
             store.db_path,

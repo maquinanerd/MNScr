@@ -327,6 +327,70 @@ MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED = (
 )
 MNSCR_CINERIE_MEDIA_API_KEY = (os.getenv('MNSCR_CINERIE_MEDIA_API_KEY') or '').strip()
 
+#: Resolucao de entidade (`POST /api/internal/entity-resolve`) — o tradutor
+#: entre o mundo do MNScr (NOMES) e o do catálogo do Cinerie (IDS internos).
+#:
+#: Rota do **screen-app**, não do CMS: o catálogo vive no `screen-db`, e o CMS
+#: não alcança aquele banco. Por isso a base é outra (`https://cinerie.com`, e
+#: não `PAYLOAD_INTERNAL_SERVICE_URL`) e a credencial é NOVA e separada —
+#: escopo `catalog_resolve`. Reaproveitar `MNSCR_PAYLOAD_API_KEY` ou
+#: `MNSCR_CINERIE_MEDIA_API_KEY` faria uma única chave vazada abrir os **dois
+#: lados** da fronteira.
+#:
+#: Ausência de qualquer uma das duas = recurso DESLIGADO com aviso, nunca erro:
+#: matéria sem ficha de entidade continua sendo matéria.
+MNSCR_CINERIE_CATALOG_RESOLVE_URL = (
+    os.getenv('MNSCR_CINERIE_CATALOG_RESOLVE_URL') or ''
+).strip()
+
+#: A chave do lado do SERVIDOR se chama `CINERIE_CATALOG_RESOLVE_API_KEYS`
+#: (plural, lista separada por vírgula, para rotação). Aceitar esse nome como
+#: alternativa é o que permite ao emissor ler o mesmo segredo que já está
+#: publicado sem uma segunda linha no `.env` dizendo a mesma coisa — e a
+#: primeira da lista é a chave corrente. O nome com prefixo `MNSCR_` continua
+#: sendo o preferido, porque é ele que declara de quem é a credencial.
+def _resolve_catalog_api_key() -> str:
+    direct = (os.getenv('MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY') or '').strip()
+    if direct:
+        return direct
+    shared = (os.getenv('CINERIE_CATALOG_RESOLVE_API_KEYS') or '').strip()
+    for candidate in shared.split(','):
+        chave = candidate.strip()
+        if chave:
+            return chave
+    return ''
+
+
+MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY = _resolve_catalog_api_key()
+
+#: Teto de `entityCard` por matéria. Três é o padrão porque uma matéria picotada
+#: de fichas deixa de ser reportagem e vira diretório.
+MNSCR_CINERIE_ENTITY_CARD_MAX = int(os.getenv('MNSCR_CINERIE_ENTITY_CARD_MAX', 3))
+
+#: Limiar de confiança: quais `matchedBy` da rota podem virar bloco publicado.
+#: Configurável porque é uma decisão editorial, não técnica — apertar para
+#: `exact_title_year` derruba a resolução por nome de pessoa, que hoje é a que
+#: mais resolve. O default aceita os três casamentos exatos que a rota oferece;
+#: nenhum deles é aproximação (a rota não faz fuzzy nem prefixo).
+MNSCR_CINERIE_ENTITY_MATCH_KINDS = tuple(
+    item.strip()
+    for item in (
+        os.getenv(
+            'MNSCR_CINERIE_ENTITY_MATCH_KINDS',
+            'tmdb_id,exact_title_year,exact_name',
+        )
+    ).split(',')
+    if item.strip()
+)
+
+
+def cinerie_entity_resolve_enabled() -> bool:
+    """As duas variáveis presentes? Sem uma delas o recurso não liga."""
+    return bool(
+        MNSCR_CINERIE_CATALOG_RESOLVE_URL and MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY
+    )
+
+
 #: `development` | `production`. Decide se um modo de entrega ausente bloqueia.
 MNSCR_ENVIRONMENT = (os.getenv('MNSCR_ENVIRONMENT') or 'development').strip().lower()
 
@@ -408,6 +472,18 @@ def get_cinerie_config_issues() -> List[str]:
             'MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED=true exige MNSCR_CINERIE_MEDIA_API_KEY '
             '(conta tecnica com escopo editorial_media_ingest, separada de MNSCR_PAYLOAD_API_KEY)'
         )
+
+    # A resolução de entidade NÃO entra nesta lista de bloqueios: ela é um
+    # enriquecimento, e a ausência dela não pode impedir a matéria de sair. O
+    # que a configuração parcial produz é um aviso no log, em
+    # `entity_resolve.resolver_from_config`, nunca um `issue` de startup. O que
+    # é validado aqui é só o que já está declarado e está errado.
+    if MNSCR_CINERIE_CATALOG_RESOLVE_URL and not MNSCR_CINERIE_CATALOG_RESOLVE_URL.startswith(
+        ('http://', 'https://')
+    ):
+        issues.append('MNSCR_CINERIE_CATALOG_RESOLVE_URL precisa começar com http:// ou https://')
+    if MNSCR_CINERIE_ENTITY_CARD_MAX < 0:
+        issues.append('MNSCR_CINERIE_ENTITY_CARD_MAX não pode ser negativo')
 
     return issues
 
