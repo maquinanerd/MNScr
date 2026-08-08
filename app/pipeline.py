@@ -55,6 +55,8 @@ from .config import (
     RSS_FEEDS,
     SOURCE_CATEGORY_MAP,
 )
+from .early_reject import LEDGER as EARLY_REJECT_LEDGER
+from .early_reject import evaluate_early_rejection
 from .editorial import DRAFT_FAILED, DRAFT_GENERATED, validate_draft
 from .editorial.builder import build_editorial_draft
 from .editorial_gate import GATE_BLOCKED, GATE_REVIEW_REQUIRED, disabled_result
@@ -100,7 +102,6 @@ from .policy_engine import (
 from .seo_title_optimizer import optimize_title
 from .store import Database
 from .submitters import OUTPUT_MODE_LOCAL, build_submitter
-from .superfeed_policy import check_superfeed_policy
 from .task_queue import ArticleQueue
 from .title_validator import TitleValidator
 
@@ -579,6 +580,10 @@ class OnceRunResult:
     editorial_blocked: int = 0
     review_required: int = 0
     technical_failed: int = 0
+    #: Itens recusados ANTES da IA, e quantos chegaram a ela. Sao o par que
+    #: torna a economia legivel: "recusado" sozinho nao diz se custou dinheiro.
+    early_rejected: int = 0
+    reached_ai: int = 0
     remaining: int = 0
     stop_reason: str = "completed"
     duration_ms: int = 0
@@ -591,10 +596,12 @@ class OnceRunResult:
     def log_summary(self) -> None:
         logger.info(
             "[ONCE_SUMMARY] initial=%s reconciled=%s ingested=%s claimed=%s completed=%s "
-            "editorial_blocked=%s review_required=%s technical_failed=%s remaining=%s "
+            "editorial_blocked=%s review_required=%s technical_failed=%s "
+            "early_rejected=%s reached_ai=%s remaining=%s "
             "duration_ms=%s stop_reason=%s outcome=%s exit_code=%s",
             self.initial, self.reconciled, self.ingested, self.claimed, self.completed,
             self.editorial_blocked, self.review_required, self.technical_failed,
+            self.early_rejected, self.reached_ai,
             self.remaining, self.duration_ms, self.stop_reason,
             "success" if self.success else "incomplete", self.exit_code,
         )
@@ -676,6 +683,7 @@ def run_pipeline_once(*, deadline_seconds: float, max_items: int) -> OnceRunResu
 
     started = time.monotonic()
     result = OnceRunResult(initial=len(article_queue))
+    EARLY_REJECT_LEDGER.reset()
 
     db = Database()
     try:
@@ -728,6 +736,9 @@ def run_pipeline_once(*, deadline_seconds: float, max_items: int) -> OnceRunResu
             result.stop_reason = "shutdown_incomplete"
             result.exit_code = EXIT_SHUTDOWN_INCOMPLETE
             result.success = False
+        result.early_rejected = EARLY_REJECT_LEDGER.rejected
+        result.reached_ai = EARLY_REJECT_LEDGER.reached_ai
+        EARLY_REJECT_LEDGER.log_summary(scope="once")
         result.log_summary()
     return result
 
@@ -1092,6 +1103,25 @@ def _run_3phase_batch(
     return results
 
 
+def _publishes_to_cinerie() -> bool:
+    """Se esta rodada vai mesmo pedir publicacao governada ao Cinerie.
+
+    Le a configuracao pelo nome do modulo, e nao por um valor capturado na
+    importacao, porque e assim que `_publish_to_cinerie` decide — e as duas
+    respostas precisam ser a mesma. Um cheque antecipado que recusasse item que
+    o caminho real nem tentaria publicar nao seria economia: seria materia
+    perdida.
+    """
+    from .cinerie_service import MODE_AUTO_PUBLISH, resolve_delivery_mode
+
+    try:
+        return resolve_delivery_mode(
+            MNSCR_DELIVERY_MODE, environment=MNSCR_ENVIRONMENT
+        ) == MODE_AUTO_PUBLISH
+    except Exception:  # noqa: BLE001 - configuracao invalida nunca publica
+        return False
+
+
 def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
     """Process a batch of articles."""
     if not articles:
@@ -1133,27 +1163,44 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                 logger.info(f"Processing article: {article_data.get('title', 'N/A')} (DB ID: {article_db_id}) from {source_id}")
                 logger.info(f"  Original URL: {article_url}")
 
-                # â”€â”€ MODO CLUSTER (RSSPRIME Superfeed) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                if is_superfeed_item(article_data):
-                    allow_single_source = os.getenv("ALLOW_SINGLE_SOURCE", "false").lower() == "true"
-                    policy_status, policy_reason = check_superfeed_policy(
-                        article_data,
-                        allow_single_source=allow_single_source,
+                # â”€â”€ RECUSA CEDO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                # Antes da extracao e antes da IA: o que ja da para saber aqui
+                # nao pode custar token para ser descoberto la na frente.
+                recusa = evaluate_early_rejection(
+                    article_data,
+                    publishes_to_cinerie=_publishes_to_cinerie(),
+                    public_author_id=MNSCR_PUBLIC_AUTHOR_ID,
+                )
+                if recusa is not None:
+                    codigo, motivo = recusa
+                    EARLY_REJECT_LEDGER.record_rejection(codigo)
+                    logger.warning(
+                        "[EARLY_REJECT] db_id=%s source_id=%s event_key=%s code=%s "
+                        "chamadas_de_ia_evitadas=%s motivo=%s",
+                        article_db_id,
+                        source_id,
+                        article_data.get("event_key") or "-",
+                        codigo,
+                        EARLY_REJECT_LEDGER.AI_CALLS_PER_ARTICLE,
+                        motivo,
                     )
-                    if policy_status != "OK":
-                        logger.info(
-                            "[SUPERFEED_POLICY] blocked event_key=%s status=%s reason=%s",
-                            article_data.get("event_key"),
-                            policy_status,
-                            policy_reason,
-                        )
-                        db.update_article_status(
-                            article_db_id,
-                            'FAILED',
-                            reason=f"{policy_status}: {policy_reason}",
-                        )
-                        continue
-                    logger.info(f"[CLUSTER_ITEM] event_key={article_data.get('event_key')} sources={article_data.get('all_sources')}")
+                    db.update_article_status(
+                        article_db_id, 'FAILED', reason=f"{codigo}: {motivo}"
+                    )
+                    continue
+
+                # â”€â”€ MODO SUPERFEED (RSSPRIME) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                # Cacho E fonte unica passam por aqui: o que os une e o
+                # `event_key`, nao a contagem de fontes. A politica de entrada ja
+                # foi aplicada por `evaluate_early_rejection`, antes da extracao.
+                if is_superfeed_item(article_data):
+                    logger.info(
+                        "[SUPERFEED_ITEM] event_key=%s is_cluster=%s source_count=%s sources=%s",
+                        article_data.get('event_key'),
+                        bool(article_data.get('is_cluster')),
+                        article_data.get('source_count'),
+                        article_data.get('all_sources'),
+                    )
                     cluster_item = normalize_cluster_item(article_data)
                     cluster_item['db_id'] = article_db_id
                     cluster_item['urls'] = article_data.get('urls') or [article_url]
@@ -1244,7 +1291,14 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         'category':    category,
                         'feed_config': feed_config,
                         'title':       article_data.get('title', ''),
-                        'is_cluster':  True,
+                        # `is_superfeed` e o MARCADOR DE RAMO: diz que o payload
+                        # ja foi montado aqui. `is_cluster` continua sendo o
+                        # FATO EDITORIAL — multi-fonte — e por isso e copiado, e
+                        # nao afirmado.
+                        'is_superfeed': True,
+                        'is_cluster':  bool(article_data.get('is_cluster')),
+                        'event_key':   article_data.get('event_key'),
+                        'cluster_signature': article_data.get('cluster_signature'),
                         'cluster_item': cluster_item,
                         'cluster_docs': cluster_docs,
                         'sources_used': multi_source_payload.get('sources_used', []),
@@ -1315,8 +1369,8 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
 
             batch_data = []
             for art in batch:
-                # â”€â”€ MODO CLUSTER: payload jÃ¡ montado â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                if art.get('is_cluster'):
+                # â”€â”€ MODO SUPERFEED: payload jÃ¡ montado â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                if art.get('is_superfeed'):
                     ai_payload = build_cluster_prompt_payload(art['cluster_item'], art['cluster_docs'])
                     ai_payload['db_id'] = art.get('db_id')
                     ai_payload['source_word_count'] = art.get('source_word_count', 0)
@@ -1340,7 +1394,12 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         len(link_candidates), art.get('db_id', '?'),
                     )
                     _write_cluster_prompt_input_audit(ai_payload, art)
-                    logger.info(f"[CLUSTER_MERGE] {len(art['cluster_docs'])} docs mesclados para IA | event_key={art['cluster_item']['event_key']}")
+                    logger.info(
+                        "[CLUSTER_MERGE] %s docs mesclados para IA | event_key=%s is_cluster=%s",
+                        len(art['cluster_docs']),
+                        art['cluster_item']['event_key'],
+                        bool(art.get('is_cluster')),
+                    )
                     batch_data.append(ai_payload)
                     continue
                 # â”€â”€ MODO SIMPLES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1432,6 +1491,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                 })
 
             try:
+                EARLY_REJECT_LEDGER.record_reached_ai(len(batch_data))
                 if USE_3PHASE_AI:
                     batch_results = _run_3phase_batch(batch_data, processor)
                 else:
@@ -1638,7 +1698,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
 
                         credit_primary_url = art_data.get('url')
                         credit_additional_urls = []
-                        if art_data.get('is_cluster'):
+                        if art_data.get('is_superfeed'):
                             cluster_item = art_data.get('cluster_item', {})
                             cluster_docs = art_data.get('cluster_docs', [])
                             credit_primary_url = cluster_item.get('url') or credit_primary_url
@@ -1894,7 +1954,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                                 draft.draft_id, OUTPUT_MODE,
                             )
 
-                        if art_data.get('is_cluster'):
+                        if art_data.get('is_superfeed'):
                             event_key = (art_data.get('cluster_item') or {}).get('event_key', '')
                             cluster_urls = (art_data.get('cluster_item') or {}).get('urls') or [art_data.get('url')]
                             db.register_covered_urls(event_key, cluster_urls, art_data['db_id'])
@@ -1971,6 +2031,9 @@ def worker_loop():
                 f"[RPM PROTECTION] Atingido limite de {MAX_REQUESTS_PER_CYCLE} requisiÃƒÂ§ÃƒÂµes por ciclo. "
                 f"Pausando pipeline por {PAUSE_ON_LIMIT_S}s (5 minutos)."
             )
+            # O daemon nao tem fim para relatar no fim: a pausa de ciclo e o
+            # unico ponto natural onde a conta acumulada cabe.
+            EARLY_REJECT_LEDGER.log_summary(scope="worker_cycle")
             last_pause_time = time.time()
             _worker_stop_requested.wait(PAUSE_ON_LIMIT_S)
             if _worker_stop_requested.is_set():
