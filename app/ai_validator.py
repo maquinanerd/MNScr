@@ -179,11 +179,17 @@ Você é um editor sênior do Cinerie revisando uma matéria abaixo do tamanho e
 NÃO se trata de aumentar o texto. Trata-se de reescrever a matéria para corrigir falhas editoriais que provavelmente causaram o texto curto:
 
 - lead genérico que não entrega fato + entidade + conflito;
+- lead que abre com contexto ou promessa em vez do fato novo;
 - ausência de ângulo jornalístico claro;
 - H2s genéricos sem nome próprio, número ou tensão concreta;
 - falta de contexto sobre franquia, histórico, recepção crítica ou bilheteria;
-- apagamento de falas humanas relevantes que existiam na fonte;
+- apagamento de falas humanas relevantes que existiam na fonte (pelo menos UMA
+  deve permanecer como citação direta entre aspas, com atribuição);
 - fechamento clichê do tipo "resta saber" ou "promete agradar os fãs";
+- parágrafo-conclusão refletindo sobre legado, trajetória ou importância
+  histórica (a matéria termina no último fato relevante);
+- adjetivos promocionais sem fonte: "aguardado", "definitivo", "icônico",
+  "imperdível", "promete ser";
 - aparência de resumo automático em vez de reportagem.
 
 REGRAS DURAS:
@@ -223,10 +229,9 @@ Gere cerca de {requested_additional_words} palavras adicionais. O artigo precisa
 {missing_words} palavras novas para chegar ao minimo editorial, mas a margem extra compensa
 respostas curtas do modelo.
 
-O conteudo novo deve agregar valor real ao leitor brasileiro:
-- contexto editorial e historico;
-- analise de impacto para franquia, plataforma, publico ou mercado;
-- bastidores e comparacoes quando estiverem presentes ou forem seguros a partir da fonte;
+O conteudo novo deve agregar FATO da fonte que o artigo ainda nao cobriu:
+- declaracoes da fonte que ficaram de fora (citacao direta entre aspas, com atribuicao);
+- numeros, datas, nomes, bastidores e comparacoes PRESENTES na fonte;
 - secao de onde assistir, janela de estreia ou disponibilidade no Brasil se aplicavel e sustentado pela fonte.
 
 REGRAS DURAS:
@@ -237,6 +242,16 @@ REGRAS DURAS:
 - Nao invente dados, datas, plataformas, declaracoes ou numeros.
 - Preserve nomes, datas, numeros, plataformas e declaracoes presentes na fonte.
 - Nada de encher linguica, conclusao generica, CTA ou frases como "resta saber".
+- PROIBIDO bloco de reflexao sobre legado, trajetoria, importancia historica,
+  influencia no genero ou "estrategia" da producao. Nada de "consolida a posicao",
+  "marco cultural", "pilar do genero", "capitaliza o amor dos fas", "aceno
+  nostalgico". Se o unico conteudo possivel for reflexao, retorne MENOS palavras:
+  bloco curto e factual vale mais que bloco longo e vazio.
+- PROIBIDO adjetivo promocional sem fonte: "aguardado", "definitivo", "iconico",
+  "imperdivel", "promete ser", "evento especial". Se a fonte disse, vira citacao
+  entre aspas com atribuicao; se nao disse, nao entra.
+- Cada bloco novo precisa conter pelo menos um fato concreto verificavel na
+  fonte (data, numero, nome, declaracao). Bloco sem fato novo nao deve existir.
 
 ARTIGO ATUAL:
 

@@ -52,16 +52,21 @@ def collapse(value: object) -> str:
 def plain_text(value: object, *, max_length: Optional[int] = None) -> str:
     """Texto editorial simples: espacos colapsados e, opcionalmente, truncado.
 
-    O truncamento corta em fronteira de palavra quando da, porque cortar no meio
-    de uma palavra e visivel para o leitor na SERP.
+    O truncamento corta SEMPRE em fronteira de palavra. A versao anterior so
+    recuava ate o espaco quando ele estava nos ultimos 40% do corte; abaixo
+    disso ela publicava a palavra picada ("confli" em vez de "conflito") — e um
+    corte no meio da palavra e visivel para o leitor na SERP e dentro de aspas.
+    A unica excecao e um token unico maior que o limite inteiro (URL, hash):
+    ai nao existe fronteira de palavra para recuar, e o corte duro e o que ha.
     """
     text = collapse(value)
     if max_length is None or len(text) <= max_length:
         return text
     cut = text[:max_length]
-    space = cut.rfind(" ")
-    if space >= max_length * 0.6:
-        cut = cut[:space]
+    if text[max_length : max_length + 1] != " ":
+        space = cut.rfind(" ")
+        if space > 0:
+            cut = cut[:space]
     return cut.rstrip(" ,;:-—–")
 
 

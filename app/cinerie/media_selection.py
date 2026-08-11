@@ -46,30 +46,34 @@ def _candidate_url_and_text(candidate: Any) -> tuple[str, Optional[str], Optiona
     return "", None, None
 
 
-def select_hero_candidate(
+def rank_usable_candidates(
     image_candidates: Sequence[Any],
     *,
+    intended_use: str = "hero",
     alt_fallback: Optional[str] = None,
     caption_fallback: Optional[str] = None,
-) -> Optional[Mapping[str, str]]:
-    """O melhor candidato a capa, ou ``None`` se nenhum for utilizavel.
+) -> list[Mapping[str, str]]:
+    """Candidatos utilizaveis, do melhor para o pior. Nunca levanta.
 
     Reusa ``app.media_validation.validate_candidate`` — a mesma regra que ja
     filtra pixel de rastreio, avatar, logo e formato nao entregavel — para nao
     duplicar criterio. Entre os utilizaveis, o de maior dimensao DECLARADA NA
     URL vence; sem dimensao para nenhum candidato, o primeiro da lista vence
     (a ordem do cluster ja e prioridade editorial: fonte primaria primeiro).
+    URLs repetidas contam uma vez — a mesma foto em duas fontes e uma foto.
     """
     from app.media_validation import _DIMENSION_IN_URL, validate_candidate
 
-    scored: list[tuple[int, str, Optional[str]]] = []
-    for candidate in image_candidates or []:
+    scored: list[tuple[int, int, str, Optional[str]]] = []
+    seen: set[str] = set()
+    for order, candidate in enumerate(image_candidates or []):
         url, alt, caption = _candidate_url_and_text(candidate)
-        if not url:
+        if not url or url in seen:
             continue
+        seen.add(url)
         validation = validate_candidate(
             url,
-            intended_use="hero",
+            intended_use=intended_use,
             alt=alt or alt_fallback,
             caption=caption or caption_fallback,
         )
@@ -79,14 +83,31 @@ def select_hero_candidate(
         area = 0
         if dimension_match:
             area = int(dimension_match.group(1)) * int(dimension_match.group(2))
-        scored.append((area, url, validation.alt_suggestion))
+        scored.append((area, -order, url, validation.alt_suggestion))
 
-    if not scored:
-        return None
+    # Maior area primeiro; empate resolvido pela ordem editorial do cluster
+    # (fonte primaria primeiro), que o ``-order`` preserva no sort decrescente.
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [
+        {"url": url, "alt": alt or alt_fallback or ""}
+        for _, _, url, alt in scored
+    ]
 
-    scored.sort(key=lambda item: item[0], reverse=True)
-    _, best_url, best_alt = scored[0]
-    return {"url": best_url, "alt": best_alt or alt_fallback or ""}
+
+def select_hero_candidate(
+    image_candidates: Sequence[Any],
+    *,
+    alt_fallback: Optional[str] = None,
+    caption_fallback: Optional[str] = None,
+) -> Optional[Mapping[str, str]]:
+    """O melhor candidato a capa, ou ``None`` se nenhum for utilizavel."""
+    ranked = rank_usable_candidates(
+        image_candidates,
+        intended_use="hero",
+        alt_fallback=alt_fallback,
+        caption_fallback=caption_fallback,
+    )
+    return ranked[0] if ranked else None
 
 
 def ingest_hero_image(
@@ -158,6 +179,117 @@ def ingest_hero_image(
         return None
 
 
+#: Teto de imagens de corpo por materia, alem da capa. Tres e o suficiente
+#: para ilustrar sem transformar a materia em galeria.
+MAX_BODY_IMAGES: Final = 3
+
+
+def ingest_body_images(
+    *,
+    article_id: str,
+    image_candidates: Sequence[Any],
+    exclude_urls: Sequence[str] = (),
+    exclude_content_hashes: Sequence[str] = (),
+    source_name: str,
+    client: Optional["CinerieClient"],
+    media_api_key: str,
+    alt_fallback: Optional[str] = None,
+    maximum: int = MAX_BODY_IMAGES,
+) -> list[Mapping[str, str]]:
+    """Ingere ate ``maximum`` imagens de CORPO. Nunca levanta, nunca repete a capa.
+
+    A rota de midia aceita varias fotos por ``articleId``; o que faltava era
+    alguem chama-la mais de uma vez. Cada foto aceita devolve um ``mediaId``
+    real — e um ``mediaId`` conhecido e o que permite a uma revisao legitima
+    posterior carregar blocos ``image`` que o contrato aceita.
+
+    Duas exclusoes, porque a mesma foto chega por dois caminhos diferentes:
+
+    - ``exclude_urls``: a URL que ja virou capa.
+    - ``exclude_content_hashes``: o hash dos BYTES da capa. A fonte serve a
+      mesma imagem em URLs distintas (og:image e corpo, tamanhos na query), e
+      so a URL nao pega isso — a materia 38 ingeriu a capa de novo como
+      "imagem de corpo" exatamente assim. O hash e comparado ANTES do upload,
+      sobre os bytes baixados, entao a duplicata nem consome a rota.
+
+    Falha em uma foto nao interrompe as demais — cada uma e best-effort por
+    conta propria.
+    """
+    if client is None or not media_api_key or maximum <= 0:
+        return []
+
+    excluded = {str(url).strip() for url in exclude_urls or [] if str(url).strip()}
+    ranked = [
+        candidate
+        for candidate in rank_usable_candidates(
+            image_candidates, intended_use="inline", alt_fallback=alt_fallback
+        )
+        if candidate["url"] not in excluded
+    ]
+    if not ranked:
+        return []
+
+    import hashlib
+
+    from app.safe_http import safe_get
+
+    seen_hashes = {
+        str(item).strip().removeprefix("sha256:")
+        for item in exclude_content_hashes or []
+        if str(item).strip()
+    }
+
+    display_name = source_name or "Fonte externa"
+    ingested: list[Mapping[str, str]] = []
+    for candidate in ranked:
+        if len(ingested) >= maximum:
+            break
+        try:
+            fetched = safe_get(candidate["url"], max_bytes=MAX_MEDIA_BYTES)
+            if fetched.status_code != 200:
+                raise MediaIngestError(
+                    f"download da imagem retornou HTTP {fetched.status_code}",
+                    remote_code="download_failed",
+                )
+            content_hash = hashlib.sha256(fetched.content).hexdigest()
+            if content_hash in seen_hashes:
+                logger.info(
+                    "[CINERIE_MEDIA] imagem de corpo pulada: mesmos bytes de "
+                    "imagem ja usada (hash %s...) url=%s",
+                    content_hash[:12], candidate["url"][:120],
+                )
+                continue
+            result = client.ingest_editorial_media(
+                article_id=article_id,
+                source_url=candidate["url"],
+                source_name=display_name,
+                rights_holder=display_name,
+                credit=f"Divulgacao/{display_name}",
+                alt=candidate.get("alt") or alt_fallback or "Imagem da materia",
+                content_bytes=fetched.content,
+                api_key=media_api_key,
+            )
+        except Exception as exc:  # noqa: BLE001 - imagem nunca derruba materia
+            logger.warning(
+                "[CINERIE_MEDIA] imagem de corpo falhou (%s) url=%s: %s; seguindo",
+                type(exc).__name__, candidate["url"][:120], exc,
+            )
+            continue
+        seen_hashes.add(content_hash)
+        logger.info(
+            "[CINERIE_MEDIA] imagem de corpo ingerida %s", result.safe_log_fields()
+        )
+        ingested.append(
+            {
+                "media_id": result.media_id,
+                "url": candidate["url"],
+                "alt": candidate.get("alt") or alt_fallback or "Imagem da materia",
+                "outcome": result.outcome,
+            }
+        )
+    return ingested
+
+
 def point_hero_media(
     *,
     article_id: str,
@@ -217,4 +349,11 @@ def point_hero_media(
     return result
 
 
-__all__ = ["ingest_hero_image", "point_hero_media", "select_hero_candidate"]
+__all__ = [
+    "MAX_BODY_IMAGES",
+    "ingest_body_images",
+    "ingest_hero_image",
+    "point_hero_media",
+    "rank_usable_candidates",
+    "select_hero_candidate",
+]

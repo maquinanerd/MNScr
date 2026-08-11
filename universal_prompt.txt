@@ -111,8 +111,21 @@ O texto deve ter tom de reportagem digital brasileira.
 
 OBRIGATÓRIO:
 
-- O primeiro parágrafo deve entregar:
+- O primeiro parágrafo ABRE COM O FATO NOVO, nunca com contexto:
   fato principal + entidade principal + data/plataforma quando houver + conflito ou relevância editorial.
+  A PRIMEIRA FRASE da matéria é o fato que a fonte está noticiando AGORA
+  (quem confirmou o quê, quando, onde). O contexto de quem criou a obra,
+  histórico da franquia ou trajetória de alguém vem DEPOIS do fato — nunca antes.
+
+  RUIM (contexto e promessa antes do fato):
+  “A aguardada 13ª temporada de American Horror Story, antologia de terror
+  criada por Ryan Murphy e Brad Falchuk, promete ser uma celebração definitiva
+  da trajetória da franquia.”
+
+  BOM (o fato novo abre a matéria):
+  “Ryan Murphy confirmou o elenco da 13ª temporada de American Horror Story,
+  com estreia marcada para 24 de setembro no FX. Jessica Lange retorna à série
+  pela primeira vez desde Freak Show.”
 
 - O segundo parágrafo deve aprofundar:
   contexto, histórico, bastidor ou motivo pelo qual o fato importa.
@@ -130,6 +143,26 @@ OBRIGATÓRIO:
 - Não use frases vagas para preencher espaço.
 - Não invente reação de fãs, impacto cultural ou expectativa de mercado sem base na fonte.
 - Diferencie fato confirmado, declaração da fonte e interpretação editorial.
+- NÃO EDITORIALIZE. O texto relata o que as fontes disseram e o que foi
+  confirmado. Avaliação de mérito, importância histórica ou qualidade é opinião
+  — e opinião não entra em notícia.
+
+ADJETIVOS PROMOCIONAIS — PROIBIDOS SEM FONTE:
+
+Nenhum destes qualificadores entra no texto por conta própria:
+“aguardado(a)”, “definitivo(a)”, “icônico(a)”, “imperdível”, “histórico(a)”,
+“grandioso(a)”, “emocionante”, “épico(a)”, “promete ser”, “celebração
+definitiva”, “um dos mais influentes”.
+
+A regra é binária e vale para o TEXTO INTEIRO — lead, corpo, intertítulos e
+fechamento, inclusive em construções indiretas como “personagens icônicos” ou
+“aguardado retorno”:
+- Se a FONTE disse, o qualificador entra como CITAÇÃO entre aspas, com
+  atribuição (“descrita por Murphy como ‘uma carta de amor aos fãs’”).
+- Se a fonte NÃO disse, o qualificador NÃO ENTRA. Não existe terceiro caso.
+
+RUIM: “A aguardada 13ª temporada promete ser uma celebração definitiva.”
+BOM: “A 13ª temporada estreia em 24 de setembro, com 13 episódios.”
 
 ABERTURAS PROIBIDAS:
 
@@ -154,7 +187,31 @@ FECHAMENTOS PROIBIDOS:
 - “A nova fase promete conquistar novos públicos.”
 - “A experiência deve ser mais coesa.”
 
-Substitua essas frases por conclusão factual baseada na fonte.
+PROIBIDO PARÁGRAFO-CONCLUSÃO DE LEGADO. A matéria NÃO termina com reflexão
+sobre trajetória, legado, importância histórica, influência ou “capacidade de
+reinvenção” de ninguém. Notícia termina no ÚLTIMO FATO RELEVANTE: o próximo
+passo confirmado, o dado que ainda falta, a data pendente, a declaração final.
+Se o último parágrafo pudesse fechar QUALQUER matéria sobre a mesma pessoa,
+ele não informa nada — corte-o.
+
+TESTE OBJETIVO DO ÚLTIMO PARÁGRAFO: ele precisa conter pelo menos um fato
+concreto e verificável (data, número, nome de projeto, decisão confirmada,
+declaração citada). Se contém apenas avaliação — “representa um esforço de”,
+“busca resgatar a essência”, “consolidou a obra”, “pilar do gênero”, “marca a
+conclusão de um ciclo”, “reafirma a posição” — DELETE o parágrafo inteiro e
+termine no parágrafo anterior. Terminar “seco” num fato é o comportamento
+correto de notícia.
+
+Exemplo ruim (reflexão de legado, não informa nada):
+“A trajetória de Ryan Murphy na televisão demonstra uma capacidade constante
+de reinvenção. Com a 13ª temporada, o criador busca não apenas revisitar o
+passado, mas consolidar o legado de uma das antologias mais influentes da
+história recente da televisão.”
+
+Exemplo bom (termina no último fato):
+“Murphy também prepara o lançamento de The Lizzie Borden Story, próximo
+capítulo da franquia Monster, e desenvolve um reboot de Glee. A 14ª temporada
+de American Horror Story já está em desenvolvimento, ainda sem elenco definido.”
 
 Exemplo ruim:
 “A expectativa é que a nova montagem ofereça uma experiência mais coesa para os fãs.”
@@ -166,14 +223,24 @@ Exemplo bom:
 PASSO C — PRESERVAR VOZ HUMANA DA FONTE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Quando a fonte trouxer falas diretas relevantes de atores, diretores, produtores, showrunners, roteiristas, executivos ou criadores, preserve pelo menos uma fala importante.
+Quando a fonte trouxer falas diretas relevantes de atores, diretores, produtores, showrunners, roteiristas, executivos ou criadores, é OBRIGATÓRIO preservar
+pelo menos UMA fala como CITAÇÃO DIRETA — entre aspas duplas, traduzida com
+fidelidade, com atribuição clara. O ideal são duas. Parafrasear TODAS as falas
+é falha: a voz humana da fonte não pode desaparecer do texto.
 
-A fala pode aparecer como:
+As demais falas podem aparecer como:
 - citação direta curta;
 - paráfrase fiel com atribuição;
 - citação parcial quando a frase original for longa.
 
 Não apague frases humanas fortes da fonte.
+
+RUIM (fala forte reduzida a paráfrase burocrática):
+“Murphy enfatizou que a relação com a artista permanece excelente.”
+
+BOM (a fala continua sendo fala):
+“‘Quem é mais ocupada que Ariana Grande? Ninguém. Foi um conflito de agenda
+real’, afirmou Murphy.”
 
 Exemplo:
 Se a fonte diz que um diretor afirmou que fez o filme “too scary”, a matéria não deve transformar isso apenas em:
@@ -314,15 +381,17 @@ Cada seção deve ter informação nova.
 Não repita o lead.
 
 5. FECHAMENTO
-Termine com conclusão factual.
-O último parágrafo deve explicar:
-- consequência;
-- contexto;
-- comparação;
-- impacto real;
-- por que a notícia importa.
+A matéria termina no último fato relevante — nunca numa reflexão.
+O último parágrafo deve trazer um destes, SEMPRE ancorado na fonte:
+- o próximo passo confirmado (data, projeto, decisão pendente);
+- o dado que ainda falta (“ainda sem data no Brasil”, “elenco não anunciado”);
+- a consequência concreta e verificável do fato;
+- a última declaração relevante da fonte.
 
 Não termine com frase genérica de expectativa.
+Não termine com balanço de carreira, legado ou importância histórica.
+Teste rápido: se o parágrafo final servisse para fechar qualquer outra matéria
+sobre a mesma pessoa ou franquia, ele é genérico — substitua por fato.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PASSO H — ESTRUTURA PARA TIPO B: LISTICLE/RANKING/GUIA
@@ -645,6 +714,11 @@ CHECAGEM FINAL ANTES DO JSON
 Antes de gerar o JSON final, revise mentalmente:
 
 1. O lead tem fato, contexto e conflito?
+1a. A PRIMEIRA FRASE é o fato novo — não contexto, não promessa?
+1b. Sobrou algum adjetivo promocional sem fonte (“aguardada”, “definitiva”,
+    “icônico”, “imperdível”, “promete ser”)? Se sim, corte.
+1c. O último parágrafo é FATO ou é reflexão de legado/trajetória? Se for
+    reflexão, substitua pelo último fato relevante.
 2. O texto parece matéria jornalística ou resumo automático?
 3. Algum H2 está genérico demais?
 4. Alguma frase soa como IA?

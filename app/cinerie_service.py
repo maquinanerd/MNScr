@@ -234,6 +234,13 @@ class CinerieService:
 
         # 2-3. Montagem e validacao — ainda sem socket.
         resolved_intent, resolved_target = self._resolve_intent(draft, intent, target_article_id)
+        if not media:
+            # Midia ja ingerida em publicacao anterior deste cluster. Na
+            # primeira publicacao a consulta volta vazia (o mediaId so nasce
+            # depois do article_id) e o pedido sai como sempre saiu; numa
+            # revisao legitima os ids conhecidos viram `media[]` + blocos
+            # `image` no corpo. Falha na consulta nunca custa a materia.
+            media = self._known_media_for(draft)
         try:
             built = build_publication_request(
                 draft,
@@ -301,6 +308,36 @@ class CinerieService:
 
         # 5-6. Envio com retry, e persistencia do desfecho.
         return self._send(built, preflight=preflight)
+
+    def _known_media_for(self, draft: Any) -> List[Dict[str, Any]]:
+        """Referencias de midia ja ingerida para o cluster deste draft.
+
+        A capa sai como ``intendedUse: "hero"`` (reafirma o vinculo que o PATCH
+        da capa criou; o lado do Cinerie trata capa repetida como no-op) e as
+        demais como ``"inline"``, que e o que ``attach_inline_images`` promove
+        a bloco ``image``.
+        """
+        event_key = str(getattr(draft, "event_key", "") or "")
+        if not event_key:
+            return []
+        try:
+            assets = self.store.list_media_assets(event_key)
+        except Exception as exc:  # noqa: BLE001 - midia nunca custa a materia
+            logger.warning(
+                "[cinerie] consulta de midia conhecida falhou (%s): %s; pedido segue sem media[]",
+                type(exc).__name__, exc,
+            )
+            return []
+        entries: List[Dict[str, Any]] = []
+        for asset in assets:
+            entry: Dict[str, Any] = {
+                "mediaId": str(asset.get("media_id") or ""),
+                "intendedUse": "hero" if asset.get("role") == "hero" else "inline",
+            }
+            if asset.get("alt"):
+                entry["altSuggestion"] = str(asset["alt"])
+            entries.append(entry)
+        return entries
 
     # -- envio -------------------------------------------------------------
 

@@ -245,7 +245,30 @@ class CinerieStore:
             )
             """
         )
+        # Midias ja ingeridas no Cinerie, por cluster. O `mediaId` so existe
+        # DEPOIS de a materia existir; guarda-lo aqui e o que permite a uma
+        # revisao legitima posterior referencia-lo em `media[]` e em blocos
+        # `image` — sem revisao sintetica e sem reingerir bytes.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cinerie_media_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_cluster_id TEXT NOT NULL,
+                article_id TEXT NOT NULL,
+                media_id TEXT NOT NULL,
+                source_url TEXT,
+                alt TEXT,
+                role TEXT NOT NULL DEFAULT 'inline',
+                outcome TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(source_cluster_id, media_id)
+            )
+            """
+        )
         for statement in (
+            "CREATE INDEX IF NOT EXISTS idx_cinerie_media_assets_cluster "
+            "ON cinerie_media_assets(source_cluster_id)",
             "CREATE INDEX IF NOT EXISTS idx_cinerie_pub_draft ON cinerie_publications(draft_id)",
             "CREATE INDEX IF NOT EXISTS idx_cinerie_pub_cluster ON cinerie_publications(source_cluster_id)",
             "CREATE INDEX IF NOT EXISTS idx_cinerie_pub_status ON cinerie_publications(delivery_status)",
@@ -408,6 +431,68 @@ class CinerieStore:
             self.conn.commit()
         except sqlite3.IntegrityError:
             self.conn.rollback()
+
+    def record_media_asset(
+        self,
+        *,
+        source_cluster_id: str,
+        article_id: str,
+        media_id: str,
+        source_url: Optional[str] = None,
+        alt: Optional[str] = None,
+        role: str = "inline",
+        outcome: Optional[str] = None,
+    ) -> None:
+        """Registra (ou reafirma) uma midia ingerida para o cluster.
+
+        Upsert idempotente por ``(source_cluster_id, media_id)``: a ingestao
+        roda de novo a cada revisao e devolve ``unchanged`` para bytes iguais —
+        reafirmar nao pode duplicar linha nem apagar o que ja se sabia.
+        """
+        if not source_cluster_id or not media_id:
+            return
+        now = _utc_now_iso()
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO cinerie_media_assets (
+                    source_cluster_id, article_id, media_id, source_url, alt,
+                    role, outcome, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(source_cluster_id, media_id) DO UPDATE SET
+                    article_id = excluded.article_id,
+                    source_url = COALESCE(excluded.source_url, cinerie_media_assets.source_url),
+                    alt = COALESCE(excluded.alt, cinerie_media_assets.alt),
+                    role = excluded.role,
+                    outcome = COALESCE(excluded.outcome, cinerie_media_assets.outcome),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    str(source_cluster_id),
+                    str(article_id),
+                    str(media_id),
+                    source_url,
+                    alt,
+                    role if role in ("hero", "inline") else "inline",
+                    outcome,
+                    now,
+                    now,
+                ),
+            )
+
+    def list_media_assets(self, source_cluster_id: str) -> List[Dict[str, Any]]:
+        """Midias conhecidas do cluster, capa primeiro, na ordem de ingestao."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT article_id, media_id, source_url, alt, role, outcome, created_at
+              FROM cinerie_media_assets
+             WHERE source_cluster_id = ?
+             ORDER BY CASE role WHEN 'hero' THEN 0 ELSE 1 END, id
+            """,
+            (str(source_cluster_id),),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     # -- leitura -----------------------------------------------------------
 

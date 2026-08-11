@@ -2316,7 +2316,7 @@ def _build_entity_resolver():
     return cliente.resolve
 
 
-def _ingest_hero_media_best_effort(draft, result, client) -> None:
+def _ingest_hero_media_best_effort(draft, result, client, store=None) -> None:
     """Os tres passos da imagem de destaque. Nenhum deles pode falhar a materia.
 
         1. a materia ja foi publicada             -> article_id   (quem chama)
@@ -2364,17 +2364,22 @@ def _ingest_hero_media_best_effort(draft, result, client) -> None:
         )
         return
 
+    candidates = getattr(draft, "media_candidates", None) or []
+    alt_fallback = getattr(getattr(draft, "content", None), "title", None)
     try:
-        from .cinerie.media_selection import ingest_hero_image
+        from .cinerie.media_selection import ingest_hero_image, select_hero_candidate
         from .cinerie.request import primary_source_display_name
 
+        # A URL da capa e conhecida ANTES da ingestao (selecao pura); ela vira
+        # exclusao das imagens de corpo e proveniencia no registro local.
+        hero_candidate = select_hero_candidate(candidates, alt_fallback=alt_fallback)
         media_result = ingest_hero_image(
             article_id=str(article_id),
-            image_candidates=getattr(draft, "media_candidates", None) or [],
+            image_candidates=candidates,
             source_name=primary_source_display_name(draft) or "",
             client=client,
             media_api_key=MNSCR_CINERIE_MEDIA_API_KEY,
-            alt_fallback=getattr(getattr(draft, "content", None), "title", None),
+            alt_fallback=alt_fallback,
         )
     except Exception as exc:  # noqa: BLE001 - imagem NUNCA custa a materia publicada
         logger.warning(
@@ -2383,6 +2388,17 @@ def _ingest_hero_media_best_effort(draft, result, client) -> None:
             type(exc).__name__, article_id, exc,
         )
         return
+
+    _ingest_body_media_best_effort(
+        draft,
+        article_id=str(article_id),
+        client=client,
+        store=store,
+        hero_result=media_result,
+        hero_url=(hero_candidate or {}).get("url"),
+        hero_alt=(hero_candidate or {}).get("alt"),
+        alt_fallback=alt_fallback,
+    )
 
     if media_result is None:
         return
@@ -2413,6 +2429,87 @@ def _ingest_hero_media_best_effort(draft, result, client) -> None:
         "[CINERIE_MEDIA] capa apontada mediaId=%s -> article_id=%s outcome=%s previous=%s",
         hero.media_id, hero.article_id, hero.outcome, hero.previous_media_id or "-",
     )
+
+
+def _ingest_body_media_best_effort(
+    draft,
+    *,
+    article_id: str,
+    client,
+    store,
+    hero_result,
+    hero_url,
+    hero_alt,
+    alt_fallback,
+) -> None:
+    """Imagens de CORPO (ate 3, sem repetir a capa) + registro local dos ids.
+
+    Mesma promessa das demais etapas de midia: NADA escapa daqui. O registro em
+    ``cinerie_media_assets`` e o que permite a uma revisao legitima posterior
+    referenciar esses ``mediaId`` em ``media[]`` e blocos ``image`` — sem
+    revisao sintetica, sem reingerir bytes.
+    """
+    event_key = str(getattr(draft, "event_key", "") or "")
+    try:
+        from .cinerie.media_selection import ingest_body_images
+        from .cinerie.request import primary_source_display_name
+
+        body_images = ingest_body_images(
+            article_id=article_id,
+            image_candidates=getattr(draft, "media_candidates", None) or [],
+            exclude_urls=[hero_url] if hero_url else [],
+            exclude_content_hashes=(
+                [hero_result.content_hash] if hero_result is not None else []
+            ),
+            source_name=primary_source_display_name(draft) or "",
+            client=client,
+            media_api_key=MNSCR_CINERIE_MEDIA_API_KEY,
+            alt_fallback=alt_fallback,
+        )
+    except Exception as exc:  # noqa: BLE001 - imagem NUNCA custa a materia publicada
+        logger.warning(
+            "[CINERIE_MEDIA] imagens de corpo levantaram %s para article_id=%s: %s; seguindo",
+            type(exc).__name__, article_id, exc,
+        )
+        body_images = []
+
+    if store is None or not event_key:
+        return
+    try:
+        if hero_result is not None:
+            store.record_media_asset(
+                source_cluster_id=event_key,
+                article_id=article_id,
+                media_id=hero_result.media_id,
+                source_url=hero_url,
+                alt=hero_alt or alt_fallback,
+                role="hero",
+                outcome=hero_result.outcome,
+            )
+        for image in body_images:
+            store.record_media_asset(
+                source_cluster_id=event_key,
+                article_id=article_id,
+                media_id=image["media_id"],
+                source_url=image.get("url"),
+                alt=image.get("alt"),
+                role="inline",
+                outcome=image.get("outcome"),
+            )
+        if hero_result is not None or body_images:
+            logger.info(
+                "[CINERIE_MEDIA] registradas %s midia(s) para o cluster %s "
+                "(capa=%s, corpo=%s)",
+                (1 if hero_result is not None else 0) + len(body_images),
+                event_key,
+                getattr(hero_result, "media_id", None) or "-",
+                len(body_images),
+            )
+    except Exception as exc:  # noqa: BLE001 - registro local nunca custa a materia
+        logger.warning(
+            "[CINERIE_MEDIA] falha ao registrar midia local (%s) cluster=%s: %s",
+            type(exc).__name__, event_key, exc,
+        )
 
 
 def _publish_to_cinerie(draft, art_data):
@@ -2474,7 +2571,7 @@ def _publish_to_cinerie(draft, art_data):
         )
         logger.info("[CINERIE_PUBLICATION] draft_id=%s %s", draft.draft_id, result.safe_log_fields())
         log_cinerie_quota_deferrals([result])
-        _ingest_hero_media_best_effort(draft, result, client)
+        _ingest_hero_media_best_effort(draft, result, client, store=service.store)
         return result
     except Exception as exc:  # noqa: BLE001 - o draft local nunca pode ser perdido
         logger.exception(

@@ -22,6 +22,7 @@ from typing import Any, Dict, Final, List, Mapping, Optional, Sequence
 
 from .blocks import (
     BlockConversion,
+    attach_inline_images,
     attach_source_list,
     blocks_summary,
     has_rating,
@@ -506,7 +507,10 @@ def build_publication_request(
         payload_hash=payload_hash,
     )
 
-    conversion = html_to_blocks(getattr(content, "body_html", ""))
+    conversion = html_to_blocks(
+        getattr(content, "body_html", ""),
+        article_title=getattr(content, "title", "") or "",
+    )
     if conversion.is_empty:
         raise RequestBuildError("corpo do draft nao produziu nenhum bloco editorial")
     if conversion.truncated:
@@ -526,6 +530,19 @@ def build_publication_request(
         match_kinds=entity_match_kinds,
     )
 
+    # A midia REFERENCIADA precisa estar resolvida antes do corpo fechar, pelo
+    # mesmo motivo do `sourceList` logo abaixo: bloco `image` referencia
+    # `media[].mediaId` do MESMO pedido. Os ids vem de ingestao anterior
+    # (revisao >= 2 do cluster); na primeira publicacao a lista sai vazia e
+    # nenhum bloco de imagem e emitido — o ovo-e-galinha continua respeitado.
+    media_entries = _normalize_media(media)
+    inline_media = [
+        {"mediaId": entry["mediaId"], "alt": entry.get("altSuggestion")}
+        for entry in media_entries
+        if entry.get("intendedUse") == "inline"
+    ]
+    attach_inline_images(conversion, inline_media)
+
     # As fontes precisam existir ANTES do corpo fechar: `sourceList` referencia
     # `externalSources` por id, e o unico jeito de garantir que a referencia
     # resolve e monta-la a partir da lista que vai no MESMO pedido.
@@ -536,7 +553,6 @@ def build_publication_request(
         content_type or (getattr(content, "category_suggestions", None) or [None])[0]
     )
 
-    media_entries = _normalize_media(media)
     lead = lead_text_of(conversion.blocks)
     seo = build_seo_proposal(
         title=getattr(content, "title", ""),

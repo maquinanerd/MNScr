@@ -221,6 +221,74 @@ def _attach_video(result: BlockConversion, videos: List[str]) -> None:
     result.blocks.insert(posicao, block)
 
 
+BLOCK_IMAGE: Final[str] = "image"
+
+
+def attach_inline_images(
+    result: BlockConversion, images: Sequence[Dict[str, Any]]
+) -> List[str]:
+    """Distribui blocos ``image`` pelo corpo, um apos cada ``h2`` a partir do
+    SEGUNDO. Devolve os ids dos blocos emitidos.
+
+    O primeiro ``h2`` fica de fora porque o video ja mora ali
+    (``_attach_video``) e a capa acabou de aparecer no topo — mais uma imagem
+    nesse trecho empilharia tres midias antes do segundo paragrafo. Sem ``h2``
+    suficientes, o que sobrar entra no fim do corpo, antes do ``sourceList``
+    (que ainda nao foi anexado quando isto roda — ver ``build_publication_request``).
+
+    ``images`` traz ``mediaId`` + ``alt`` de midia JA INGERIDA no CMS (e o
+    contrato exige exatamente isso: ``mediaRef`` que casa com ``media[].mediaId``
+    do mesmo pedido). Item sem ``mediaId`` valido e pulado — bloco de imagem
+    apontando para o nada reprovaria o pedido inteiro.
+    """
+    emitted: List[str] = []
+    if not images:
+        return emitted
+
+    usable: List[Dict[str, Any]] = []
+    for item in images:
+        media_id = collapse(item.get("mediaId") or item.get("media_id"))
+        if not is_stable_id(media_id):
+            continue
+        alt = plain_text(
+            item.get("alt") or item.get("altSuggestion") or "Imagem da materia",
+            max_length=block_field_limit(BLOCK_IMAGE, "alt", 500),
+        )
+        usable.append({"mediaRef": media_id, "alt": alt or "Imagem da materia"})
+
+    if not usable:
+        return emitted
+
+    posicoes: List[int] = []
+    h2_vistos = 0
+    for index, existente in enumerate(result.blocks):
+        if existente.get("type") == BLOCK_HEADING and existente.get("level") == 2:
+            h2_vistos += 1
+            if h2_vistos >= 2:
+                posicoes.append(index + 1)
+
+    limite = max_blocks()
+    for ordinal, image in enumerate(usable, start=1):
+        if len(result.blocks) + 1 > limite:
+            result.warnings.append("IMAGENS_INLINE_NAO_COUBERAM")
+            break
+        block = {
+            "id": f"img{ordinal}",
+            "type": BLOCK_IMAGE,
+            "mediaRef": image["mediaRef"],
+            "alt": image["alt"],
+        }
+        if posicoes:
+            posicao = posicoes.pop(0)
+            result.blocks.insert(posicao, block)
+            # Os proximos pontos de insercao andaram um indice para a frente.
+            posicoes = [p + 1 for p in posicoes]
+        else:
+            result.blocks.append(block)
+        emitted.append(block["id"])
+    return emitted
+
+
 def attach_source_list(result: BlockConversion, source_ids: Sequence[str]) -> Optional[str]:
     """Fecha a materia com ``sourceList``, no lugar do paragrafo "Fonte: X".
 
@@ -425,6 +493,112 @@ _QUOTE_BEFORE: Final[re.Pattern[str]] = re.compile(
     rf"{_OPEN_QUOTE}(?P<texto>[^\"“”„]{{40,4000}}){_CLOSE_QUOTE}\s*\.?",
 )
 
+#: ``"...", afirmou.`` — verbo de fala SEM nome, fechando a frase. Sozinha, a
+#: forma e ambigua ("afirmou quem?"); ela so promove quando a materia tem UM
+#: sujeito dominante identificado (ver ``dominant_speaker``), e e a ele que a
+#: fala e atribuida. O ``[.!]`` colado ao verbo e o que continua rejeitando
+#: ``afirmou o executivo.`` — ali ha um sujeito declarado, e ele e generico.
+_QUOTE_AFTER_BARE: Final[re.Pattern[str]] = re.compile(
+    rf"{_OPEN_QUOTE}(?P<texto>[^\"“”„]{{40,4000}}){_CLOSE_QUOTE}"
+    rf"\s*,?\s*(?:{_SPEECH_VERBS})\s*[.!]",
+)
+
+#: ``Murphy admitiu que a participacao foi fundamental: "..."`` — citacao
+#: introduzida por dois-pontos, com o verbo de fala em qualquer lugar da oracao
+#: introdutoria (nao colado aos dois-pontos, que e o caso de ``_QUOTE_BEFORE``).
+#: So o fim de paragrafo entra: no meio do texto os dois-pontos tem usos demais
+#: para a leitura ser inequivoca.
+_QUOTE_COLON_BARE: Final[re.Pattern[str]] = re.compile(
+    rf":\s*{_OPEN_QUOTE}(?P<texto>[^\"“”„]{{40,4000}}){_CLOSE_QUOTE}\s*\.?\s*$",
+)
+
+#: Palavras capitalizadas que NAO sao nome de gente. Sem esta lista, ``Ele
+#: disse`` elegeria "Ele" como falante da materia inteira.
+_SPEAKER_STOPWORDS: Final[frozenset] = frozenset(
+    {
+        "Ele", "Ela", "Eles", "Elas", "Eu", "Nos", "Nós", "Voce", "Você",
+        "O", "A", "Os", "As", "Um", "Uma", "Segundo", "Em", "No", "Na",
+        "Mas", "Depois", "Antes", "Apesar", "Quem", "Isso", "Isto",
+    }
+)
+
+_NAME_THEN_VERB: Final[re.Pattern[str]] = re.compile(
+    rf"(?P<autor>{_PROPER_NAME})\s+(?:{_SPEECH_VERBS})\b"
+)
+_VERB_THEN_NAME: Final[re.Pattern[str]] = re.compile(
+    rf"\b(?:{_SPEECH_VERBS})\s+(?P<autor>{_PROPER_NAME})"
+)
+
+
+def dominant_speaker(body_text: str, title: str = "") -> Optional[str]:
+    """O unico sujeito que fala na materia, ou ``None`` quando ha ambiguidade.
+
+    A regra de promocao de citacao exige nome colado as aspas porque
+    ``"...", afirmou o executivo`` nao diz quem falou. Mas ela ficava apertada
+    demais na materia em que TODAS as falas sao da mesma pessoa — quatro
+    citacoes de Ryan Murphy diluidas em paragrafo porque "afirmou" veio sem
+    nome. Aqui se decide quando "afirmou" sozinho e inequivoco:
+
+    - coletam-se os nomes proprios adjacentes a verbos de fala no corpo;
+    - grafias que sao subconjunto uma da outra ("Murphy" e "Ryan Murphy") sao o
+      MESMO falante, e a forma mais longa vence;
+    - um unico falante -> ele e o dominante. Dois ou mais -> ``None``, e a
+      ambiguidade continua bloqueando a promocao sem nome.
+
+    O titulo desempata a forma: se o falante aparece nele com grafia mais
+    completa, e essa que vai para ``attribution``.
+    """
+    flat = collapse(body_text)
+    if not flat:
+        return None
+
+    candidates: List[str] = []
+    for pattern in (_NAME_THEN_VERB, _VERB_THEN_NAME):
+        for match in pattern.finditer(flat):
+            name = collapse(match.group("autor")).rstrip(" ,.;:")
+            tokens = name.split()
+            # Poda pronomes/conectivos capitalizados na frente do nome
+            # ("Depois Murphy disse" -> "Murphy").
+            while tokens and tokens[0] in _SPEAKER_STOPWORDS:
+                tokens = tokens[1:]
+            if not tokens:
+                continue
+            candidates.append(" ".join(tokens))
+
+    if not candidates:
+        return None
+
+    groups: List[Dict[str, Any]] = []
+    for name in candidates:
+        tokens = set(name.split())
+        merged = False
+        for group in groups:
+            if tokens <= group["tokens"] or group["tokens"] <= tokens:
+                group["tokens"] |= tokens
+                if len(name) > len(group["form"]):
+                    group["form"] = name
+                merged = True
+                break
+        if not merged:
+            groups.append({"tokens": set(tokens), "form": name})
+
+    if len(groups) != 1:
+        return None
+
+    dominant = groups[0]["form"]
+    # A grafia do titulo costuma ser a mais completa ("Ryan Murphy" no titulo,
+    # "Murphy" no corpo). Se o titulo contem o falante com mais contexto, e a
+    # forma do titulo que assina a citacao.
+    title_flat = collapse(title)
+    if title_flat:
+        for match in re.finditer(rf"{_PROPER_NAME}", title_flat):
+            form = collapse(match.group(0)).rstrip(" ,.;:")
+            if set(dominant.split()) <= set(form.split()) and len(form) > len(dominant):
+                dominant = form
+                break
+    return dominant
+
+
 #: Teto de citacoes promovidas por materia. Acima disso a materia deixa de ser
 #: uma reportagem com uma fala em destaque e vira uma transcricao fatiada.
 _MAX_PROMOTED_QUOTES: Final[int] = 2
@@ -436,6 +610,13 @@ _SENTENCE_END: Final[re.Pattern[str]] = re.compile(r"[.!?…](?=[^.!?…]*$)")
 #: Ate onde a clausula de apresentacao pode ir. Acima disso o "resto" nao e uma
 #: clausula: e texto da materia, e a divisao estava errada desde o comeco.
 _MAX_LEAD_IN: Final[int] = 120
+
+#: Teto da oracao que introduz citacao por dois-pontos ("Murphy admitiu que a
+#: participacao foi fundamental:"). E maior que ``_MAX_LEAD_IN`` porque essa
+#: oracao carrega conteudo e FICA no paragrafo — mas um bloco de texto corrido
+#: sem pontuacao nenhuma antes dos dois-pontos nao e uma oracao introdutoria,
+#: e uma parede de texto, e promover ali e leitura errada do paragrafo.
+_MAX_COLON_INTRO: Final[int] = 160
 
 
 def _trim_lead_in(before: str) -> Optional[str]:
@@ -471,18 +652,24 @@ class _QuoteSplit:
     after: str
 
 
-def split_promotable_quote(paragraph: str) -> Optional[_QuoteSplit]:
-    """A citacao com autor declarado dentro de um paragrafo, se houver uma.
+def split_promotable_quote(
+    paragraph: str, *, dominant: Optional[str] = None
+) -> Optional[_QuoteSplit]:
+    """A citacao com autor identificavel dentro de um paragrafo, se houver uma.
 
     Duas condicoes, e as duas sao do TEXTO — nada e inferido:
 
     1. ha um trecho entre aspas com corpo de frase (40 caracteres ou mais), e
-    2. encostado nele ha um verbo de fala e um nome proprio.
+    2. a autoria e inequivoca: um nome proprio colado as aspas, OU — quando a
+       materia tem UM sujeito dominante (``dominant``) — um verbo de fala
+       fechando a frase sem sujeito nenhum ("..., afirmou.").
 
-    Sem as duas, a resposta e ``None`` e a citacao continua no paragrafo. E o
+    Sem isso, a resposta e ``None`` e a citacao continua no paragrafo. E o
     desfecho certo para ``a frase traduzida e "Hair today, Gorn tomorrow"`` (sem
-    verbo de fala) e para ``afirmou o executivo`` (sem nome): promover ali seria
-    inventar quem falou, e uma atribuicao errada e pior do que nenhuma.
+    verbo de fala) e para ``afirmou o executivo`` (sujeito generico declarado):
+    promover ali seria inventar quem falou, e uma atribuicao errada e pior do
+    que nenhuma. O sujeito dominante nao afrouxa esses dois casos — o verbo com
+    sujeito generico continua nao casando com nenhuma forma.
     """
     for pattern in (_QUOTE_AFTER, _QUOTE_BEFORE):
         match = pattern.search(paragraph)
@@ -501,11 +688,70 @@ def split_promotable_quote(paragraph: str) -> Optional[_QuoteSplit]:
             attribution=autor,
             after=collapse(paragraph[match.end():]),
         )
+
+    if not dominant:
+        return None
+
+    match = _QUOTE_AFTER_BARE.search(paragraph)
+    if match is not None:
+        texto = collapse(match.group("texto"))
+        before = _trim_lead_in(paragraph[: match.start()])
+        if texto and before is not None:
+            return _QuoteSplit(
+                before=before,
+                text=texto,
+                attribution=dominant,
+                after=collapse(paragraph[match.end():]),
+            )
+
+    match = _QUOTE_COLON_BARE.search(paragraph)
+    if match is not None:
+        texto = collapse(match.group("texto"))
+        intro = paragraph[: match.start()]
+        # A oracao que introduz os dois-pontos precisa DIZER que alguem falou:
+        # sem verbo de fala nela, os dois-pontos podem estar apresentando um
+        # slogan, um titulo, uma lista — e ai nao ha citacao nenhuma.
+        ultimo_fim = _SENTENCE_END.search(collapse(intro))
+        oracao = collapse(intro)[ultimo_fim.end():] if ultimo_fim else collapse(intro)
+        oracao_valida = (
+            texto
+            and len(collapse(oracao)) <= _MAX_COLON_INTRO
+            and re.search(rf"\b(?:{_SPEECH_VERBS})\b", oracao)
+        )
+        if oracao_valida:
+            # Se a propria oracao nomeia o falante ("Landgraf admitiu que..."),
+            # e ELE que assina — o dominante so cobre a fala sem sujeito.
+            nomeado = _NAME_THEN_VERB.search(oracao)
+            autor = dominant
+            if nomeado is not None:
+                candidato = collapse(nomeado.group("autor")).rstrip(" ,.;:")
+                tokens = candidato.split()
+                while tokens and tokens[0] in _SPEAKER_STOPWORDS:
+                    tokens = tokens[1:]
+                if tokens:
+                    autor = " ".join(tokens)
+                    if set(autor.split()) <= set(dominant.split()):
+                        autor = dominant
+            # A oracao introdutoria carrega informacao ("a participacao de
+            # Lange foi fundamental") — ela FICA no paragrafo, com os dois-
+            # pontos, que e como o texto anuncia a citacao destacada a seguir.
+            before = collapse(intro) + ":"
+            return _QuoteSplit(
+                before=before,
+                text=texto,
+                attribution=autor,
+                after=collapse(paragraph[match.end():]),
+            )
     return None
 
 
-def html_to_blocks(body_html: str) -> BlockConversion:
-    """Converte o corpo HTML do draft na lista de blocos do contrato."""
+def html_to_blocks(body_html: str, *, article_title: str = "") -> BlockConversion:
+    """Converte o corpo HTML do draft na lista de blocos do contrato.
+
+    ``article_title`` alimenta a deteccao do sujeito dominante — quem assina as
+    citacoes com verbo de fala sem nome. Sem titulo a deteccao ainda funciona,
+    so perde a chance de trocar "Murphy" pela grafia completa do titulo.
+    """
     from bs4 import BeautifulSoup
 
     result = BlockConversion()
@@ -515,6 +761,8 @@ def html_to_blocks(body_html: str) -> BlockConversion:
 
     soup = BeautifulSoup(source, "html.parser")
     root = soup.body if soup.body is not None else soup
+
+    speaker = dominant_speaker(node_text(root), article_title)
 
     paragraph_limit = block_field_limit(BLOCK_PARAGRAPH, "text", 5000)
     heading_limit = block_field_limit(BLOCK_HEADING, "text", 500)
@@ -543,7 +791,7 @@ def html_to_blocks(body_html: str) -> BlockConversion:
         if quotes_promoted >= _MAX_PROMOTED_QUOTES:
             emit({"type": BLOCK_PARAGRAPH, "text": text})
             return
-        split = split_promotable_quote(text)
+        split = split_promotable_quote(text, dominant=speaker)
         if split is None:
             emit({"type": BLOCK_PARAGRAPH, "text": text})
             return
@@ -714,6 +962,7 @@ def has_rating(blocks: List[Dict[str, Any]]) -> bool:
 __all__ = [
     "BLOCK_DIVIDER",
     "BLOCK_HEADING",
+    "BLOCK_IMAGE",
     "BLOCK_PARAGRAPH",
     "BLOCK_QUOTE",
     "BLOCK_SOURCE_LIST",
@@ -721,9 +970,11 @@ __all__ = [
     "PROVIDER_YOUTUBE",
     "SOURCE_LIST_BLOCK_ID",
     "BlockConversion",
+    "attach_inline_images",
     "attach_source_list",
     "block_field_limit",
     "blocks_summary",
+    "dominant_speaker",
     "has_rating",
     "has_structured_list",
     "has_structured_steps",
