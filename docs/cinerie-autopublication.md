@@ -267,8 +267,10 @@ testar prova apenas que ela foi chamada. Por isso eles **não** usam a fixture
   Em consequência, imagens do corpo são descartadas (com aviso) e
   `imageAltSuggestions` sai vazio — a conversão existe e é testada, mas não tem a
   que se ligar.
-- `entityLinks` sai vazio enquanto não houver id verificável do catálogo. O MNScr
-  não cria entidade.
+- `entityLinks` sai **preenchido desde 11/08/2026**, com o que a rota de
+  resolução conferiu contra o catálogo — e só com isso. O MNScr continua não
+  criando entidade: `null` da rota não vira vínculo de baixa confiança "pra
+  garantir". Ver `docs/tipos-de-bloco-cinerie.md`.
 - Não existe bloco de lista nem de passos no contrato, então `HowTo` e `ItemList`
   nunca são recomendados: seria structured data falso.
 

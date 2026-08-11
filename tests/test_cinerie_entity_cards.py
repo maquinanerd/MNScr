@@ -25,11 +25,16 @@ from app.cinerie.contract import local_identity
 from app.cinerie.entity_resolve import (
     BLOCK_ENTITY_CARD,
     MAX_RESOLVE_ITEMS,
+    EntityCandidate,
+    EntityResolution,
+    ResolvedEntity,
     attach_entity_cards,
     collect_entity_candidates,
     fold,
     parse_resolution,
+    relation_for,
     select_entity_cards,
+    to_entity_links,
 )
 from app.cinerie.request import build_publication_request
 from app.cinerie.validation import validate_request
@@ -561,25 +566,249 @@ def test_a_resolver_that_returns_none_produces_no_card_and_a_warning():
     assert built.payload["qa"]["passed"] is True
 
 
-def test_the_top_level_entity_links_array_is_left_untouched_by_the_resolver():
-    """Curadoria humana nao e sobrescrita por robo.
+# ===========================================================================
+# `entityLinks[]` — o que alimenta "Destaques de hoje"
+# ===========================================================================
 
-    `entityLinks` carrega `verified`, que e decisao de gente, e o CMS nem
-    reaplica o campo em `update` (`ENTITY_LINK_NOT_REAPPLIED`). A resolucao
-    alimenta SO o corpo; o array de topo continua saindo como quem chama mandou.
+
+def _resolver_de(por_nome):
+    """Resolvedor que so conhece os nomes do dicionario; o resto e `not_found`.
+
+    A chave e o `name`/`title` do item enviado, e o valor e a linha da rota.
     """
 
     def resolver(items):
-        return [
+        linhas = []
+        for indice, item in enumerate(items):
+            chave = item.get("name") or item.get("title")
+            linha = por_nome.get(chave)
+            if linha is None or linha.get("kind_esperado", item.get("kind")) != item.get("kind"):
+                linhas.append(
+                    {"index": indice, "entityId": None, "matchedBy": None, "reason": "not_found"}
+                )
+                continue
+            linhas.append({**{k: v for k, v in linha.items() if k != "kind_esperado"}, "index": indice})
+        return linhas
+
+    return resolver
+
+
+def test_a_resolved_entity_becomes_an_entity_link_with_the_exact_confidence():
+    """O vinculo sai com a confianca que a ROTA calculou, sem arredondar.
+
+    Do outro lado o corte e 0.9: `exact_title_year` (0.90) nasce verificado,
+    `exact_name` (0.85) espera um humano. Empurrar 0.85 para 0.9 faria o Cinerie
+    auto-verificar exatamente o vinculo que a regra dele segura de proposito —
+    `exact_name` e o unico casamento sem um segundo campo confirmando identidade.
+    """
+    built = _build(
+        resolver=_resolver_de(
             {
-                "index": indice,
+                "Morgan Freeman": {
+                    "entityKind": "person",
+                    "entityId": "4210",
+                    "matchedBy": "exact_name",
+                    "confidence": 0.85,
+                    "kind_esperado": "person",
+                }
+            }
+        )
+    )
+    report = validate_request(built.payload, identity=built.contract)
+    assert report.ok, [f"{i.path}: {i.message}" for i in report.issues]
+
+    links = built.payload["entityLinks"]
+    assert len(links) == 1
+    assert links[0]["entityKind"] == "person"
+    assert links[0]["entityId"] == "4210"
+    assert links[0]["confidence"] == 0.85
+    assert links[0]["confidence"] < 0.9
+
+
+def test_the_relation_comes_from_where_the_text_cites_the_entity():
+    """Titulo -> `primary_subject`; lead -> `secondary_subject`; resto -> `mentioned`.
+
+    Nao ha heuristica nova: e a mesma `prominence` que a coleta ja apurou contra
+    o texto, lida agora como papel.
+    """
+    assert relation_for(0) == "primary_subject"
+    assert relation_for(1) == "secondary_subject"
+    assert relation_for(2) == "mentioned"
+
+    candidatos = collect_entity_candidates(
+        title="Christopher Nolan volta a dirigir",
+        lead="O anuncio foi feito por Emma Thomas nesta terca.",
+        blocks=[{"type": "paragraph", "text": "Cillian Murphy tambem esta no elenco."}],
+    )
+    por_nome = {c.name: c for c in candidatos}
+    resolucao = EntityResolution(
+        resolved=[
+            ResolvedEntity(
+                candidate=por_nome[nome],
+                entity_kind="person",
+                entity_id=identificador,
+                matched_by="exact_name",
+                confidence=0.85,
+            )
+            for nome, identificador in (
+                ("Christopher Nolan", "11"),
+                ("Emma Thomas", "22"),
+                ("Cillian Murphy", "33"),
+            )
+        ]
+    )
+    papeis = {link["entityId"]: link["relation"] for link in to_entity_links(resolucao)}
+    assert papeis == {
+        "11": "primary_subject",
+        "22": "secondary_subject",
+        "33": "mentioned",
+    }
+
+
+def test_the_same_entity_never_produces_two_links():
+    """Uma entidade, um vinculo — e vale o papel MAIS FORTE.
+
+    O Cinerie projeta `(entityKind, entityId)` em `entity_news_links`: a mesma
+    materia repetida na mesma entidade nao significa nada la.
+    """
+    citado_duas_vezes = collect_entity_candidates(
+        title="Morgan Freeman assina novo projeto",
+        lead="",
+        blocks=[{"type": "paragraph", "text": "Morgan Freeman ja trabalhou com o estudio."}],
+    )
+    candidato = next(c for c in citado_duas_vezes if c.name == "Morgan Freeman")
+    # A coleta ja guardou a posicao mais forte: titulo vence corpo.
+    assert candidato.prominence == 0
+
+    resolucao = EntityResolution(
+        resolved=[
+            ResolvedEntity(
+                candidate=candidato,
+                entity_kind="person",
+                entity_id="4210",
+                matched_by="exact_name",
+                confidence=0.85,
+            ),
+            # O mesmo id alcancado por outro candidato — acontece quando o nome
+            # aparece em duas formas.
+            ResolvedEntity(
+                candidate=EntityCandidate(name="Freeman", kind="person", prominence=2),
+                entity_kind="person",
+                entity_id="4210",
+                matched_by="exact_name",
+                confidence=0.85,
+            ),
+        ]
+    )
+    links = to_entity_links(resolucao)
+    assert len(links) == 1
+    assert links[0]["relation"] == "primary_subject"
+
+
+def test_an_unresolved_entity_never_becomes_a_link():
+    """`null` e recusa da rota, e recusa nao vira palpite de baixa confianca.
+
+    Vinculo errado mostra a obra errada com cara de certa — e o `entityLinks`
+    ainda alimenta a Home, onde o erro fica visivel fora da materia.
+    """
+    built = _build(resolver=_resolver_de({}))
+    assert built.payload["entityLinks"] == []
+
+
+def test_a_match_below_the_threshold_never_becomes_a_link():
+    """O limiar (`MNSCR_CINERIE_ENTITY_MATCH_KINDS`) vale para os dois destinos.
+
+    Se valesse so para a ficha, o casamento recusado no corpo continuaria
+    entrando na Home pela porta de tras.
+    """
+    built = _build(
+        resolver=_resolver_de(
+            {
+                "Morgan Freeman": {
+                    "entityKind": "person",
+                    "entityId": "4210",
+                    "matchedBy": "exact_name",
+                    "confidence": 0.85,
+                    "kind_esperado": "person",
+                }
+            }
+        ),
+        match_kinds=("tmdb_id", "exact_title_year"),
+    )
+    assert built.payload["entityLinks"] == []
+
+
+def test_human_curation_is_never_overwritten_by_the_resolver():
+    """Quem chama vem primeiro; a resolucao preenche o que falta.
+
+    `entityLinks` carrega `verified`, que e decisao de gente, e o CMS nem
+    reaplica o campo em `update` (`ENTITY_LINK_NOT_REAPPLIED`). Um vinculo vindo
+    de fora e curadoria: a dobra mantem o primeiro de cada entidade.
+    """
+    built = build_publication_request(
+        _draft(),
+        public_author_id="1",
+        attribution_mode="newsroom",
+        contract=local_identity(),
+        entity_links=[
+            {
                 "entityKind": "person",
                 "entityId": "4210",
-                "matchedBy": "exact_name",
-                "confidence": 0.85,
+                "relation": "reviewed",
+                "confidence": 1.0,
             }
-            for indice, _item in enumerate(items)
-        ]
+        ],
+        entity_resolver=_resolver_de(
+            {
+                "Morgan Freeman": {
+                    "entityKind": "person",
+                    "entityId": "4210",
+                    "matchedBy": "exact_name",
+                    "confidence": 0.85,
+                    "kind_esperado": "person",
+                }
+            }
+        ),
+        entity_card_max=3,
+        entity_match_kinds=TODOS_OS_CASAMENTOS,
+    )
+    links = built.payload["entityLinks"]
+    assert len(links) == 1
+    assert links[0]["relation"] == "reviewed"
+    assert links[0]["confidence"] == 1.0
+
+
+def test_a_card_ceiling_of_zero_silences_the_body_and_not_the_home():
+    """`MNSCR_CINERIE_ENTITY_CARD_MAX` decide o CORPO, nao a Home.
+
+    Se ele calasse tambem os `entityLinks`, "Destaques de hoje" ficaria vazia por
+    causa de uma variavel que nao diz nada sobre ela — e sem nada no log ligando
+    uma coisa a outra.
+    """
+    built = _build(
+        resolver=_resolver_de(
+            {
+                "Morgan Freeman": {
+                    "entityKind": "person",
+                    "entityId": "4210",
+                    "matchedBy": "exact_name",
+                    "confidence": 0.85,
+                    "kind_esperado": "person",
+                }
+            }
+        ),
+        maximum=0,
+    )
+    assert BLOCK_ENTITY_CARD not in types_of(built.payload["blocks"])
+    assert built.entity_cards == []
+    assert [link["entityId"] for link in built.payload["entityLinks"]] == ["4210"]
+
+
+def test_a_resolver_that_fails_sends_no_links_either():
+    """Enriquecimento nao derruba materia — e falha nao vira vinculo."""
+    def resolver(_items):
+        raise RuntimeError("catalogo fora do ar")
 
     built = _build(resolver=resolver)
     assert built.payload["entityLinks"] == []
+    assert built.payload["qa"]["passed"] is True

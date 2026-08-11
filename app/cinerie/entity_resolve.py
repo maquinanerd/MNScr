@@ -426,16 +426,19 @@ def select_entity_cards(
         resolution.resolved,
         key=lambda item: (-item.confidence, item.candidate.prominence, item.candidate.name),
     )
+    teto = max(0, maximum)
     escolhidos: List[ResolvedEntity] = []
     vistos: set = set()
     for item in ordenados:
+        # O teto e conferido ANTES de acrescentar. Conferir depois faria
+        # ``maximum=0`` emitir uma ficha — "nenhuma" nao pode ser uma.
+        if len(escolhidos) >= teto:
+            break
         chave = (item.entity_kind, item.entity_id)
         if chave in vistos:
             continue
         vistos.add(chave)
         escolhidos.append(item)
-        if len(escolhidos) >= max(0, maximum):
-            break
     return escolhidos
 
 
@@ -509,6 +512,111 @@ def attach_entity_cards(
     return avisos
 
 
+# ===========================================================================
+# `entityLinks[]` (topo)
+# ===========================================================================
+
+#: Onde a entidade aparece -> qual e o papel dela na materia. E a MESMA
+#: ``prominence`` que ja ordena os candidatos, lida agora como papel: o titulo
+#: declara o assunto, o lead declara o assunto secundario, o resto e mencao.
+#:
+#: Nao ha heuristica NOVA aqui, e isso e o ponto. A posicao ja foi apurada na
+#: coleta, contra o texto; o que esta tabela faz e batiza-la. Se a mesma
+#: entidade aparecer em dois lugares, ``collect_entity_candidates`` ja guardou a
+#: posicao mais forte — logo, o papel mais forte sai por construcao.
+_RELATION_BY_PROMINENCE: Final[Tuple[str, ...]] = (
+    "primary_subject",    # 0 — titulo
+    "secondary_subject",  # 1 — lead
+    "mentioned",          # 2 — corpo
+)
+
+#: Teto de `entityLinks[]` no contrato (`maxItems: 100`). Passar dele reprovaria
+#: o pedido INTEIRO por causa de enriquecimento, entao o corte acontece aqui.
+MAX_ENTITY_LINKS: Final[int] = 100
+
+#: A partir de quanto o Cinerie faz o vinculo nascer `verified: true` (ADR 0019,
+#: que emenda o 0018). Nao e regra deste lado e nao muda nada do que sai daqui:
+#: existe para o LOG dizer o que esperar de cada linha enviada. Arredondar
+#: confianca para alcancar este numero faria o Cinerie auto-verificar o que a
+#: regra dele recusa de proposito — ver ``to_entity_links``.
+CINERIE_VERIFIED_CUTOFF: Final[float] = 0.9
+
+
+def relation_for(prominence: int) -> str:
+    """O papel da entidade, derivado da posicao em que o texto a cita."""
+    indice = max(0, int(prominence))
+    return _RELATION_BY_PROMINENCE[min(indice, len(_RELATION_BY_PROMINENCE) - 1)]
+
+
+def to_entity_links(resolution: EntityResolution) -> List[Dict[str, Any]]:
+    """`entityLinks[]` do pedido — SO o que a rota resolveu, com a confianca DELA.
+
+    Tres decisoes, e nenhuma e cosmetica:
+
+    **Entram todas as resolvidas, nao so as que viraram ficha.** Sao listas com
+    precos diferentes: `entityCard` ocupa um bloco no corpo e por isso tem teto
+    editorial (``MNSCR_CINERIE_ENTITY_CARD_MAX``); um link de topo nao ocupa
+    nada e alimenta a secao "Destaques de hoje". Cortar aqui pelo teto de fichas
+    esconderia da Home entidade que a materia trata de fato.
+
+    **A confianca vai EXATA, sem arredondar.** Do outro lado o corte e
+    ``CINERIE_VERIFIED_CUTOFF``: ``exact_title_year`` (0.90) nasce verificado e
+    ``exact_name`` (0.85) espera um humano. Essa diferenca e deliberada —
+    ``exact_name`` e o unico casamento sem um segundo campo confirmando
+    identidade, e unicidade no nosso catalogo hoje nao e unicidade no mundo
+    amanha. Empurrar 0.85 para 0.9 faria o Cinerie auto-verificar exatamente o
+    vinculo que a regra dele segura.
+
+    **Uma entidade, um vinculo.** A dobra e por ``(entityKind, entityId)``, que
+    e o par que o Cinerie projeta em `entity_news_links` — o mesmo nome citado
+    em duas formas, ou o mesmo id alcancado por dois candidatos, e UMA linha.
+    """
+    ordenados = sorted(
+        resolution.resolved,
+        key=lambda item: (item.candidate.prominence, -item.confidence, item.candidate.name),
+    )
+    links: List[Dict[str, Any]] = []
+    vistos: set = set()
+    for item in ordenados:
+        chave = (item.entity_kind, item.entity_id)
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        links.append(
+            {
+                "entityKind": item.entity_kind,
+                "entityId": item.entity_id,
+                "relation": relation_for(item.candidate.prominence),
+                "confidence": float(item.confidence),
+            }
+        )
+        if len(links) >= MAX_ENTITY_LINKS:
+            break
+    return links
+
+
+def log_emitted_links(links: Sequence[Mapping[str, Any]]) -> None:
+    """Uma linha por vinculo enviado. Auditoria do que a Home vai receber.
+
+    ``nasce_verificado`` e uma EXPECTATIVA sobre o outro lado, nao um campo do
+    pedido: quem decide e o Cinerie. Vai no log porque e a diferenca entre "o
+    vinculo chegou" e "o vinculo aparece na pagina hoje", e sem ela uma secao
+    vazia parece falha de envio quando e so a fila da curadoria.
+    """
+    for link in links:
+        confidence = float(link.get("confidence") or 0.0)
+        logger.info(
+            "[CINERIE_ENTITY_LINK] %s",
+            {
+                "entity_kind": link.get("entityKind"),
+                "entity_id": link.get("entityId"),
+                "relation": link.get("relation"),
+                "confidence": confidence,
+                "nasce_verificado": confidence >= CINERIE_VERIFIED_CUTOFF,
+            },
+        )
+
+
 def log_emitted_cards(cards: Sequence[ResolvedEntity]) -> None:
     """Uma linha por ficha publicada. Auditoria, nao depuracao.
 
@@ -536,10 +644,12 @@ EntityResolver = Callable[[Sequence[Mapping[str, Any]]], Any]
 
 __all__ = [
     "BLOCK_ENTITY_CARD",
+    "CINERIE_VERIFIED_CUTOFF",
     "ENTITY_RESOLVE_PATH",
     "EntityCandidate",
     "EntityResolution",
     "EntityResolver",
+    "MAX_ENTITY_LINKS",
     "MAX_RESOLVE_ITEMS",
     "RESOLVABLE_KINDS",
     "ResolvedEntity",
@@ -547,6 +657,9 @@ __all__ = [
     "collect_entity_candidates",
     "fold",
     "log_emitted_cards",
+    "log_emitted_links",
     "parse_resolution",
+    "relation_for",
     "select_entity_cards",
+    "to_entity_links",
 ]

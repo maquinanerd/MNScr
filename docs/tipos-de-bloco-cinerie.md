@@ -100,8 +100,9 @@ Regras de emissao, todas verificadas em `tests/test_cinerie_entity_cards.py`:
   `503 resolve_failed` existe justamente para que falha de leitura NAO chegue ao
   emissor como "nao existe".
 
-O array `entityLinks[]` de topo **continua saindo vazio**, e de proposito: ver
-"Relacao com `entityLinks[]`" abaixo.
+O array `entityLinks[]` de topo **passou a sair preenchido em 11/08/2026**, da
+mesma resolucao e com a confianca EXATA da rota: ver "Relacao com
+`entityLinks[]`" abaixo.
 
 ## Nao emitidos
 
@@ -185,21 +186,49 @@ diferenca decide por que o MNScr preenche um e nao o outro:
   `ENTITY_LINK_NOT_REAPPLIED`, porque `verified` carrega curadoria que uma
   reescrita automatica apagaria.
 
-**Decisao: o MNScr continua enviando `entityLinks: []`.** Nao e timidez, sao
-tres razoes somadas:
+**Decisao de 07/08, revista em 11/08/2026: o MNScr passou a enviar
+`entityLinks[]`.** As tres razoes de nao enviar caíram, e vale registrar QUAL
+caiu por que, porque duas delas cairam do outro lado da fronteira:
 
-1. `relation` (`primary_subject` | `mentioned` | `reviewed` | ...) e
-   **obrigatorio** e nao e resolvivel: a rota devolve QUAL entidade e, nunca o
-   PAPEL dela na materia. Preencher exigiria a heuristica que o resto deste
-   documento existe para recusar;
-2. o ganho visivel hoje seria zero — a linha nasce `verified: false` e nao
-   renderiza ate um humano confirmar —, enquanto o `entityCard` ja entrega o
-   link real na pagina;
-3. mandando `[]`, o array de curadoria simplesmente **nunca e tocado por robo**,
-   e o aviso `ENTITY_LINK_NOT_REAPPLIED` nem chega a ser emitido. A garantia
-   deixa de depender de o CMS continuar recusando a reaplicacao.
+1. ~~`relation` nao e resolvivel~~ — **era verdade sobre a ROTA, nao sobre o
+   texto.** A rota devolve QUAL entidade e, nunca o papel dela; mas o papel nao
+   precisa vir de la. A POSICAO em que a materia cita o nome ja estava apurada,
+   contra o texto, desde a coleta de candidatos (`prominence`): titulo, lead ou
+   corpo. Ler essa posicao como papel — `primary_subject`, `secondary_subject`,
+   `mentioned` — nao acrescenta heuristica nenhuma; batiza uma que ja existia e
+   ja decidia onde cada ficha entra no corpo;
+2. ~~o ganho visivel seria zero~~ — **caiu na PR #146 do Cinerie.** O vinculo com
+   `confidence >= 0.9` passou a nascer `verified: true`, com a origem em
+   `verificationSource` (ADR 0019, que emenda o 0018). O que continua nascendo
+   nao-verificado e `exact_name` (0.85), de proposito;
+3. ~~mandando `[]` o array nunca e tocado por robo~~ — continua sendo o unico
+   custo real, e ele foi pago com ordem em vez de omissao: vinculo passado de
+   fora (curadoria) entra ANTES do resolvido, e a dobra por
+   `(entityKind, entityId)` mantem o primeiro. `ENTITY_LINK_NOT_REAPPLIED` passa
+   a ser emitido em `update`, e continua correto: e o CMS dizendo que nao
+   sobrescreve decisao humana.
 
-Travado por `test_the_top_level_entity_links_array_is_left_untouched_by_the_resolver`.
+**A confianca viaja EXATA, e isso e a regra que segura tudo.** O corte do outro
+lado e 0.9. `exact_title_year` (0.90) nasce verificado; `exact_name` (0.85) fica
+de fora porque e o unico casamento sem um segundo campo confirmando identidade —
+unicidade no catalogo hoje nao e unicidade no mundo amanha, e um segundo homonimo
+entrando torna ambiguo um vinculo que hoje resolve. Arredondar 0.85 para 0.9
+faria o Cinerie auto-verificar exatamente o que a regra dele segura.
+
+`entityCard` (corpo) e `entityLinks[]` (topo) saem da MESMA chamada e tem tetos
+diferentes, porque tem precos diferentes: a ficha ocupa um bloco e por isso tem
+teto editorial (`MNSCR_CINERIE_ENTITY_CARD_MAX`); o vinculo nao ocupa nada e vai
+inteiro, ate o `maxItems: 100` do contrato. Um teto de fichas em zero cala o
+corpo e nao a Home.
+
+**O que a rota NAO resolve, e por isso nunca vira vinculo:** `season` e
+`episode` respondem `unsupported_kind` (verificado contra a rota em 11/08), e
+`tmdb_id` — o unico casamento com confianca 1.0 — exige um identificador externo
+no item, que o MNScr nao envia e nao tem de onde tirar; item com id externo e sem
+titulo volta como `no_input`. Na pratica os dois casamentos alcancaveis sao
+`exact_title_year` (0.90) e `exact_name` (0.85).
+
+Travado por `tests/test_cinerie_entity_cards.py`, secao "`entityLinks[]`".
 
 ### `factBox` — falta dado estruturado
 
