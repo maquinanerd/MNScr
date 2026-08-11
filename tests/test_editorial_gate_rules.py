@@ -183,16 +183,25 @@ def test_missing_prompt_version_does_not_trigger_when_present(policy):
     assert not run("GATE_MISSING_PROMPT_VERSION", make_draft(), policy).triggered
 
 
+@pytest.fixture
+def own_domains(monkeypatch):
+    """A lista de domínios nossos vem de configuração, não do .env da máquina."""
+    import app.config
+
+    monkeypatch.setattr(app.config, "OWN_CMS_DOMAINS", ["cinerie-legado.example"])
+    return app.config.OWN_CMS_DOMAINS
+
+
 @pytest.mark.parametrize(
     "body",
     [
         '<p>x</p><!-- wp:image --><figure></figure><!-- /wp:image -->',
         '<p>x</p><img class="wp-image-1234" src="https://a.example/x.jpg">',
-        '<p>x</p><img src="https://a.example/wp-content/uploads/2026/x.jpg">',
+        '<p>x</p><img src="https://cinerie-legado.example/wp-content/uploads/2026/x.jpg">',
     ],
-    ids=["bloco-gutenberg", "classe-wp-image", "url-wp-content"],
+    ids=["bloco-gutenberg", "classe-wp-image", "url-wp-content-nossa"],
 )
-def test_forbidden_wordpress_markup_triggers(policy, body):
+def test_forbidden_wordpress_markup_triggers(policy, own_domains, body):
     draft = make_draft()
     draft.content.body_html = body
     assert run("GATE_FORBIDDEN_WORDPRESS_MARKUP", draft, policy).triggered
@@ -200,6 +209,27 @@ def test_forbidden_wordpress_markup_triggers(policy, body):
 
 def test_forbidden_wordpress_markup_does_not_trigger_on_clean_html(policy):
     assert not run("GATE_FORBIDDEN_WORDPRESS_MARKUP", make_draft(), policy).triggered
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["screenrant.com", "comicbook.com", "movieweb.com"],
+    ids=["screenrant", "comicbook", "movieweb"],
+)
+def test_upload_url_de_fonte_wordpress_externa_nao_bloqueia(policy, own_domains, host):
+    """A fonte também é WordPress: a imagem dela não é vazamento nosso."""
+    draft = make_draft()
+    draft.content.body_html = f'<p>x</p><img src="https://{host}/wp-content/uploads/2026/08/a.jpg">'
+    result = run("GATE_FORBIDDEN_WORDPRESS_MARKUP", draft, policy)
+    assert not result.triggered
+
+
+def test_evidencia_da_url_de_upload_nomeia_a_url_bloqueada(policy, own_domains):
+    draft = make_draft()
+    draft.content.body_html = '<img src="https://cinerie-legado.example/wp-content/uploads/a.jpg">'
+    result = run("GATE_FORBIDDEN_WORDPRESS_MARKUP", draft, policy)
+    assert result.triggered
+    assert any("cinerie-legado.example/wp-content/uploads/a.jpg" in e for e in result.evidence)
 
 
 @pytest.mark.parametrize(
@@ -640,6 +670,76 @@ def test_every_rule_is_serializable(rule_code, policy):
     payload = run(rule_code, make_draft(), policy).to_dict()
     json.dumps(payload)  # levanta se algo nao for serializavel
     assert payload["rule_code"] == rule_code
+
+
+# ===========================================================================
+# Threshold desligado troca a SEVERIDADE, nunca cala a regra
+# ===========================================================================
+
+
+class _FakeClaim:
+    draft_locations = ["title"]
+    display_text = "O filme estreia em julho"
+
+
+class _FakeConflict:
+    conflict_type = "DATE"
+    subject = "estreia"
+    values = ["julho", "agosto"]
+
+
+class _FakeAssessment:
+    """Uma avaliacao factual que aciona as duas regras com threshold de bloqueio."""
+
+    unsupported_in_critical_locations = [_FakeClaim()]
+    critical_conflicts = [_FakeConflict()]
+    conflicts = [_FakeConflict()]
+
+
+#: As regras cujo bloqueio e governado por um threshold da politica.
+_THRESHOLD_GOVERNED_BLOCKING_RULES = {
+    "GATE_MATERIAL_CLAIM_UNSUPPORTED": "blockUnsupportedMaterialClaimsInCriticalLocations",
+    "GATE_CRITICAL_FACT_CONFLICT": "blockCriticalFactConflicts",
+}
+
+
+@pytest.mark.parametrize(
+    "rule_code,threshold", sorted(_THRESHOLD_GOVERNED_BLOCKING_RULES.items())
+)
+def test_disabled_threshold_downgrades_severity_without_silencing(rule_code, threshold, policy):
+    """Desligar a tranca nao pode apagar o sinal.
+
+    Esta e a armadilha que ja custou duas correcoes: uma regra que devolve
+    ``triggered=False`` quando o threshold e ``false`` some do veredito, e o
+    operador perde exatamente a informacao que motivou desligar a tranca. O
+    contrato correto e trocar a SEVERIDADE e continuar avaliando — o achado sai
+    em ``qa.warnings`` em vez de ``qa.blockingErrors``.
+    """
+    draft = make_draft(factual_assessment=_FakeAssessment())
+
+    policy.thresholds = {**policy.thresholds, threshold: True}
+    ligado = run(rule_code, draft, policy)
+    assert ligado.triggered
+    assert ligado.severity == SEVERITY_BLOCKING
+
+    policy.thresholds = {**policy.thresholds, threshold: False}
+    desligado = run(rule_code, draft, policy)
+    assert desligado.triggered, f"{rule_code} ficou MUDA com {threshold}=false"
+    assert desligado.severity == SEVERITY_WARNING
+    assert desligado.evidence, "a evidencia precisa sobreviver ao rebaixamento"
+
+
+def test_production_policy_has_no_blocking_threshold_enabled():
+    """A politica em uso nao pode religar uma tranca sem que alguem note.
+
+    Decisao do dono do produto registrada em ``mnscr-editorial-gate-v2.json``:
+    nenhuma regra bloqueia enquanto o casador de evidencia nao confirmar nada
+    (coverage_ratio=0.0, supported=0 de 7 na execucao real).
+    """
+    v2 = load_policy("mnscr-editorial-gate-v2", POLICY_DIR)
+    for threshold in _THRESHOLD_GOVERNED_BLOCKING_RULES.values():
+        assert v2.threshold(threshold) is False, f"{threshold} voltou a bloquear"
+    assert v2.threshold("block_on_unverified_media") is False
 
 
 def test_a_rule_that_raises_becomes_a_blocking_finding(policy, monkeypatch):

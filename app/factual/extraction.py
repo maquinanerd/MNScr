@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Final, List, Optional, Sequence, Tuple
 
+from app.stopwords import trim_function_words
+
 from . import states as S
 from .errors import InvalidModelResponseError
 from .models import FactualClaim
@@ -157,16 +159,38 @@ def _subject_of(sentence: str) -> Optional[str]:
 
     Deliberately shallow — real entity resolution is MS-5. This only needs to be
     stable enough to tell "the same subject" from "a different subject".
+
+    A match needs at least two ALPHABETIC characters, not just two characters:
+    the capture class also admits digits, apostrophes and hyphens, so a token
+    like "A2" or "A-" would otherwise pass a bare length check while still
+    being a one-letter article wearing a longer disguise.
+
+    That length check was not enough on its own, and the factual report showed
+    it: subjects came out as "Do" and "Com". A Portuguese preposition has two
+    alphabetic characters, starts a sentence capitalised, and sails through. The
+    stoplist closes it — a run made only of function words is not a subject, it
+    is the front half of a noun phrase whose head was left out. Function words
+    in the MIDDLE stay ("Nova temporada DE Stranger Things"); it is starting or
+    ending on one that means the capture went wrong.
     """
     match = re.match(
-        r"\s*((?:[A-ZÁÉÍÓÚÂÊÔÃÕÇ][\w'’\-]*)(?:\s+(?:de|da|do|dos|das|of|the)?\s*"
+        r"\s*((?:[A-ZÁÉÍÓÚÂÊÔÃÕÇ][\w'’\-]+)(?:\s+(?:de|da|do|dos|das|of|the)?\s*"
         r"[A-ZÁÉÍÓÚÂÊÔÃÕÇ][\w'’\-]*){0,4})",
         sentence,
     )
     if not match:
         return None
     subject = normalize_text(match.group(1))
-    return subject or None
+    if not subject:
+        return None
+
+    trimmed = " ".join(trim_function_words(subject.split()))
+    if not trimmed:
+        # Só palavras funcionais: "Do", "Com", "A The". Não é sujeito nenhum.
+        return None
+    if sum(1 for ch in trimmed if ch.isalpha()) < 2:
+        return None
+    return trimmed
 
 
 def extract_deterministic_claims(draft: Any, *, max_claims: int = 100) -> List[FactualClaim]:
@@ -355,6 +379,7 @@ def parse_claim_response(
             normalized_subject=normalize_for_comparison(item.get("subject") or "") or None,
             predicate=normalize_for_comparison(item.get("predicate") or "") or None,
             normalized_value=normalized_value,
+            semantic_evidence_query=normalize_text(item.get("semantic_evidence_query")) or None,
             source_sentence=normalize_text(item.get("source_sentence") or display_text),
             draft_locations=location_list,
             status=S.UNVERIFIED,
@@ -393,7 +418,30 @@ def merge_claims(
     normalized value came from a rule, not from a model.
     """
     merged: Dict[str, FactualClaim] = {}
-    for claim in list(deterministic) + list(semantic):
+    deterministic_list = list(deterministic)
+    for claim in deterministic_list:
+        merged[claim.claim_id] = claim
+
+    for claim in semantic:
+        semantic_text = normalize_for_comparison(claim.display_text)
+        enriched = False
+        for existing in deterministic_list:
+            source_text = normalize_for_comparison(existing.source_sentence or "")
+            same_sentence = bool(semantic_text and semantic_text in source_text)
+            same_value = (
+                not claim.normalized_value
+                or not existing.normalized_value
+                or claim.normalized_value == existing.normalized_value
+            )
+            if same_sentence and same_value and claim.semantic_evidence_query:
+                existing.semantic_evidence_query = claim.semantic_evidence_query
+                for location in claim.draft_locations:
+                    if location not in existing.draft_locations:
+                        existing.draft_locations.append(location)
+                enriched = True
+        if enriched:
+            continue
+
         existing = merged.get(claim.claim_id)
         if existing is None:
             merged[claim.claim_id] = claim

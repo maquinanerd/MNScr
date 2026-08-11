@@ -4,6 +4,7 @@ Database management for the application using SQLite.
 """
 
 import hashlib
+import json
 import logging
 import os
 import sqlite3
@@ -76,6 +77,11 @@ class Database:
                 self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"Database schema check failed: {e}", exc_info=True)
+            if self.conn is not None:
+                self.conn.rollback()
+                self.conn.close()
+                self.conn = None
+            raise
 
     def _get_cursor(self):
         """Returns a cursor for the database connection."""
@@ -101,9 +107,13 @@ class Database:
     def _ensure_seen_articles_schema(self):
         """Apply lightweight migrations required by the current runtime."""
         cursor = self._get_cursor()
-
         missing_columns = {
             "event_key": "ALTER TABLE seen_articles ADD COLUMN event_key TEXT",
+            "event_revision": "ALTER TABLE seen_articles ADD COLUMN event_revision INTEGER",
+            "legacy_cinerie_identity_unmapped": (
+                "ALTER TABLE seen_articles ADD COLUMN "
+                "legacy_cinerie_identity_unmapped INTEGER NOT NULL DEFAULT 0"
+            ),
             "is_cluster": "ALTER TABLE seen_articles ADD COLUMN is_cluster INTEGER DEFAULT 0",
             "cluster_size": "ALTER TABLE seen_articles ADD COLUMN cluster_size INTEGER DEFAULT 1",
             "sources_json": "ALTER TABLE seen_articles ADD COLUMN sources_json TEXT",
@@ -155,8 +165,19 @@ class Database:
                 logger.info(f"Applying SQLite migration: adding seen_articles.{column_name}")
                 cursor.execute(sql)
 
+        # É idempotente e precisa rodar mesmo se as colunas já existirem: DDL do
+        # SQLite pode ter sido persistido antes de uma interrupção que ocorreu
+        # entre o ALTER e o backfill. Confiar apenas na existência da coluna
+        # deixaria a guarda em DEFAULT 0 no reinício seguinte.
+        self._mark_and_backfill_legacy_event_revisions()
+
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_seen_articles_event_key ON seen_articles(event_key)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_seen_articles_event_revision "
+            "ON seen_articles(event_key, event_revision) "
+            "WHERE event_key IS NOT NULL AND event_revision IS NOT NULL"
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_seen_articles_origin_topic ON seen_articles(origin, topic)"
@@ -178,6 +199,61 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_seen_articles_draft_status ON seen_articles(draft_status)"
         )
         self._backfill_seen_articles_runtime_metadata()
+
+    def _mark_and_backfill_legacy_event_revisions(self) -> None:
+        """Marca identidade Cinerie desconhecida e recupera somente revisao certa.
+
+        Uma linha anterior a ``event_revision`` pode corresponder a um artigo que
+        ja existe no Cinerie, mas nao ha ``payload_article_id`` local para montar
+        um ``update``. O marcador faz a entrega falhar fechada ate essa associacao
+        ser reconciliada. O backfill e separado: ele so escreve a revisao quando o
+        historico aceito contem exatamente uma candidata e nao ha duas linhas
+        legadas disputando a mesma identidade.
+        """
+        cursor = self._get_cursor()
+        if not self._table_exists("rssprime_events"):
+            cursor.execute(
+                """
+                UPDATE seen_articles
+                SET legacy_cinerie_identity_unmapped = 1
+                WHERE event_key IS NOT NULL AND event_revision IS NULL
+                """
+            )
+            return
+
+        cursor.execute(
+            """
+            UPDATE seen_articles
+            SET legacy_cinerie_identity_unmapped = 1,
+                event_revision = CASE
+                    WHEN (
+                        SELECT COUNT(DISTINCT re.revision)
+                        FROM rssprime_events re
+                        WHERE re.event_key = seen_articles.event_key
+                          AND re.validation_status = 'VALIDATED'
+                    ) = 1
+                    AND (
+                        SELECT COUNT(*)
+                        FROM seen_articles sibling
+                        WHERE sibling.event_key = seen_articles.event_key
+                          AND sibling.event_revision IS NULL
+                    ) = 1
+                    THEN (
+                        SELECT MIN(re.revision)
+                        FROM rssprime_events re
+                        WHERE re.event_key = seen_articles.event_key
+                          AND re.validation_status = 'VALIDATED'
+                    )
+                    ELSE NULL
+                END
+            WHERE event_key IS NOT NULL AND event_revision IS NULL
+            """
+        )
+        logger.warning(
+            "[LEGACY_CINERIE_GUARD] %s linha(s) legada(s) exigem reconciliacao "
+            "de identidade antes de nova entrega ao Cinerie.",
+            cursor.rowcount,
+        )
 
     @staticmethod
     def _parse_claim_pid(claimed_by: str | None) -> int | None:
@@ -492,27 +568,91 @@ class Database:
                         logger.warning(f"Item for source '{source_id}' missing both 'id' and 'url', skipping: {item.get('title', 'No Title')}")
                         continue
 
+                # Identidade do evento RSS Prime, lida antes de qualquer dedup.
+                event_key = item.get("event_key")
+                event_revision = item.get("event_revision")
+                if event_revision is None:
+                    event_revision = (item.get("_input_event_ref") or {}).get("revision")
+
+                # A tabela ainda declara `UNIQUE(source_id, external_id)` — a
+                # identidade de antes de existir revisao. Numa revisao nova o
+                # `external_id` se repete (ele vem do id do feed, ou do hash da
+                # URL, e nenhum dos dois muda quando o texto e corrigido), entao
+                # a constraint recusava a linha no INSERT mesmo depois de todo o
+                # dedup ter liberado. E a recusa nao ficava contida no item: a
+                # IntegrityError cai no `except sqlite3.Error` la embaixo, que
+                # faz rollback e devolve lista vazia — ou seja, derrubava com ela
+                # as outras noticias ja aceitas naquela rodada. Elas voltam na
+                # rodada seguinte, porque nada foi commitado, mas a rodada
+                # inteira e perdida por causa de um item.
+                #
+                # Carregar a revisao no `external_id` faz a constraint legada
+                # dizer o que ela deveria dizer: uma linha por VERSAO do item.
+                # `external_id` so e produzido e comparado aqui dentro, entao a
+                # mudanca nao vaza para nenhum outro consumidor.
+                if event_key and event_revision is not None:
+                    ext_id = f"{ext_id}#rev{int(event_revision)}"
+
                 already_seen = False
                 item_url = item.get("url") or ""
                 is_superfeed_like_item = _is_superfeed_like_item(item)
 
+                # Identidade operacional versionada do evento RSS Prime.
+                #
+                # `event_key` diz QUAL assunto; `revision` diz QUAL versao dele.
+                # Quando o item traz os dois, eles SAO a identidade do trabalho, e
+                # a resposta deles e final: os dedups abaixo existem para
+                # reconhecer repeticao do MESMO trabalho, e uma revisao nova nao e
+                # o mesmo trabalho — ela existe justamente porque a materia mudou.
+                #
+                # A precedencia e o ponto. Sem ela a revisao 2 era liberada aqui e
+                # bloqueada logo adiante, por um de dois caminhos que nao entendem
+                # versao: `cluster_signature`, que e hash do conjunto de URLs e
+                # portanto identica entre revisoes que nao mudaram de fonte, e
+                # source_id + external_id, estaveis pelo mesmo motivo. O item
+                # sumia sem erro nenhum — para o pipeline, nada havia chegado.
+                versioned_identity_is_new = False
+                if event_key and event_revision is not None:
+                    cursor.execute(
+                        "SELECT id FROM seen_articles WHERE event_key = ? AND event_revision = ?",
+                        (event_key, int(event_revision)),
+                    )
+                    if cursor.fetchone() is not None:
+                        # Mesma revisao ja aceita: nao pode virar segunda tarefa,
+                        # nem sob concorrencia (o indice unico e a rede final).
+                        already_seen = True
+                    else:
+                        versioned_identity_is_new = True
+
                 # Fallback coberto por Superfeed: bloqueia apenas a URL especifica.
-                if not is_superfeed_like_item and item_url and self.is_url_covered(item_url):
+                if (
+                    not versioned_identity_is_new
+                    and not is_superfeed_like_item
+                    and item_url
+                    and self.is_url_covered(item_url)
+                ):
                     already_seen = True
                     logger.info(
                         f"[SUPERFEED_COVERAGE] Fallback bloqueado porque URL ja foi coberta: {item_url}"
                     )
 
-                # Dedup por event_key (clusters RSSPRIME)
-                if not already_seen and item.get("is_cluster") and item.get("event_key"):
+                # Evento sem revisao declarada (feed legado): da para saber que o
+                # assunto ja foi visto, mas nao qual versao dele. Comportamento
+                # preservado — bloqueia por `event_key` com revisao nula.
+                if (
+                    not already_seen
+                    and event_revision is None
+                    and item.get("is_cluster")
+                    and event_key
+                ):
                     cursor.execute(
-                        "SELECT id FROM seen_articles WHERE event_key = ?",
-                        (item["event_key"],)
+                        "SELECT id FROM seen_articles WHERE event_key = ? AND event_revision IS NULL",
+                        (event_key,),
                     )
                     already_seen = cursor.fetchone() is not None
 
                 # Dedup estrutural por assinatura de cluster.
-                if not already_seen and item.get("cluster_signature"):
+                if not already_seen and not versioned_identity_is_new and item.get("cluster_signature"):
                     cursor.execute(
                         "SELECT id, status FROM seen_articles WHERE cluster_signature = ?",
                         (item["cluster_signature"],)
@@ -525,7 +665,7 @@ class Database:
                         )
 
                 # Dedup padrão por source_id + external_id
-                if not already_seen:
+                if not already_seen and not versioned_identity_is_new:
                     cursor.execute(
                         "SELECT id FROM seen_articles WHERE source_id = ? AND external_id = ?",
                         (source_id, ext_id)
@@ -538,10 +678,10 @@ class Database:
                     cursor.execute(
                         """INSERT INTO seen_articles
                            (source_id, external_id, url, canonical_url, normalized_title,
-                            origin, topic, event_key, is_cluster, multi_source, source_count,
+                             origin, topic, event_key, event_revision, is_cluster, multi_source, source_count,
                             cluster_size, fonte_nome, primary_source, sources_json, urls_json,
                             cluster_signature, first_seen, last_seen, published_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             source_id,
                             ext_id,
@@ -551,6 +691,7 @@ class Database:
                             item.get("origin", "fallback"),
                             item.get("topic"),
                             item.get("event_key"),
+                            item.get("event_revision") or (item.get("_input_event_ref") or {}).get("revision"),
                             int(item.get("is_cluster", False)),
                             int(item.get("multi_source", False)),
                             int(item.get("source_count", 1) or 1),
@@ -577,6 +718,75 @@ class Database:
             self.conn.rollback()
             return []
         return new_articles
+
+    def reconcile_rssprime_event_tasks(self) -> List[Dict[str, Any]]:
+        """Create missing operational tasks for accepted, persisted events.
+
+        Event persistence and article task creation predate a shared transaction.
+        This idempotent reconciliation closes that crash window.  A legacy
+        unversioned article counts as a match, so upgrading never duplicates an
+        existing draft merely to backfill ``event_revision``.
+        """
+        if not self._table_exists("rssprime_events"):
+            return []
+        cursor = self._get_cursor()
+        rows = cursor.execute(
+            """
+            SELECT re.event_key, re.revision, re.normalized_payload_json
+            FROM rssprime_events re
+            WHERE re.validation_status = 'VALIDATED'
+              AND NOT EXISTS (
+                  SELECT 1 FROM seen_articles sa
+                  WHERE sa.event_key = re.event_key
+                    AND (sa.event_revision = re.revision OR sa.event_revision IS NULL)
+              )
+            ORDER BY re.id ASC
+            """
+        ).fetchall()
+        created: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["normalized_payload_json"] or "{}")
+                sources = payload.get("sources") or []
+                primary = sources[0] if sources and isinstance(sources[0], dict) else {}
+                url = primary.get("url")
+                if not url:
+                    logger.error(
+                        "[EVENT_RECONCILIATION] event_key=%s revision=%s skipped=no_source_url",
+                        row["event_key"], row["revision"],
+                    )
+                    continue
+                topic = str(payload.get("topic") or "movies")
+                source_id = f"rssprime_{topic}" if f"rssprime_{topic}" in RSS_FEEDS else "rssprime_movies"
+                item = {
+                    "id": f"event:{row['event_key']}:{int(row['revision'])}",
+                    "title": payload.get("title") or row["event_key"],
+                    "url": url,
+                    "source_id": source_id,
+                    "origin": "superfeed",
+                    "topic": topic,
+                    "event_key": row["event_key"],
+                    "event_revision": int(row["revision"]),
+                    "is_cluster": len(sources) > 1,
+                    "multi_source": len(sources) > 1,
+                    "source_count": len(sources) or 1,
+                    "all_sources": sources,
+                    "urls": [s.get("url") for s in sources if isinstance(s, dict) and s.get("url")],
+                    "fonte_nome": primary.get("name") or primary.get("source_name"),
+                    "primary_source": primary.get("url"),
+                    "_input_event_ref": {
+                        "schema": "rssprime-event-reference-v1",
+                        "event_key": row["event_key"],
+                        "revision": int(row["revision"]),
+                    },
+                }
+                created.extend(self.filter_new_articles(source_id, [item], limit=1))
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.error(
+                    "[EVENT_RECONCILIATION] event_key=%s revision=%s skipped=invalid_payload error=%s",
+                    row["event_key"], row["revision"], type(exc).__name__,
+                )
+        return created
 
     def register_covered_urls(
         self,
@@ -1215,14 +1425,22 @@ class Database:
             logger.error(f"Failed to record gate result for article {article_db_id}: {e}")
             return False
 
-    def get_article_by_event_key(self, event_key: str) -> Optional[Dict[str, Any]]:
+    def get_article_by_event_key(
+        self, event_key: str, event_revision: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
         """The article row for an acontecimento, most recent first."""
         try:
             cursor = self._get_cursor()
-            cursor.execute(
-                "SELECT * FROM seen_articles WHERE event_key = ? ORDER BY id DESC LIMIT 1",
-                (event_key,),
-            )
+            if event_revision is None:
+                cursor.execute(
+                    "SELECT * FROM seen_articles WHERE event_key = ? ORDER BY event_revision DESC, id DESC LIMIT 1",
+                    (event_key,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM seen_articles WHERE event_key = ? AND event_revision = ? LIMIT 1",
+                    (event_key, int(event_revision)),
+                )
             row = cursor.fetchone()
             return dict(row) if row else None
         except sqlite3.Error as e:
@@ -1272,6 +1490,7 @@ class Database:
                     sa.topic,
                     sa.status,
                     sa.event_key,
+                    sa.event_revision,
                     sa.is_cluster,
                     sa.multi_source,
                     sa.source_count,
@@ -1336,6 +1555,7 @@ class Database:
                     canonical_url,
                     normalized_title,
                     event_key,
+                    event_revision,
                     multi_source,
                     source_count,
                     cluster_signature,

@@ -26,6 +26,35 @@ from .normalization import (
 
 logger = logging.getLogger(__name__)
 
+_PT_MARKERS: Final[frozenset[str]] = frozenset(
+    {"as", "de", "do", "dos", "em", "que", "para", "foi", "uma", "estreia", "renovada"}
+)
+_EN_MARKERS: Final[frozenset[str]] = frozenset(
+    {"the", "of", "on", "that", "for", "was", "an", "premieres", "renewed"}
+)
+
+
+def _language(text: str) -> Optional[str]:
+    tokens = set(re.findall(r"[a-zA-ZÀ-ÿ]+", (text or "").casefold()))
+    pt = len(tokens & _PT_MARKERS)
+    en = len(tokens & _EN_MARKERS)
+    if pt >= 2 and pt > en:
+        return "pt"
+    if en >= 2 and en > pt:
+        return "en"
+    return None
+
+
+def _cross_lingual_unavailable(
+    claim: FactualClaim, evidence: Sequence[FactualEvidence]
+) -> bool:
+    if claim.semantic_evidence_query:
+        return False
+    claim_language = _language(claim.source_sentence or claim.display_text)
+    evidence_languages = {_language(item.excerpt) for item in evidence}
+    evidence_languages.discard(None)
+    return bool(claim_language and evidence_languages and claim_language not in evidence_languages)
+
 #: Topical overlap below this means the evidence is not even about the claim.
 MIN_TOPICAL_OVERLAP: Final[float] = 0.12
 #: Overlap at or above this, without a value match, is still only a mention.
@@ -106,7 +135,8 @@ def classify_relation(
     Returns ``(relation, similarity, rationale)``; ``relation`` is ``None`` when
     the excerpt is not about the claim at all.
     """
-    similarity = token_overlap(claim.display_text, evidence.excerpt)
+    comparison_text = claim.semantic_evidence_query or claim.display_text
+    similarity = token_overlap(comparison_text, evidence.excerpt)
     subject_match = (
         bool(claim.normalized_subject)
         and claim.normalized_subject in evidence.normalized_excerpt
@@ -282,7 +312,13 @@ def apply_statuses(
     """Recompute every claim's status in place and return the list."""
     evidence_by_id = {e.evidence_id: e for e in evidence}
     for claim in claims:
-        claim.status = compute_claim_status(claim, links, evidence_by_id)
+        own = [link for link in links if link.claim_id == claim.claim_id]
+        if not own and _cross_lingual_unavailable(claim, evidence):
+            claim.status = S.UNVERIFIED
+            if "CROSS_LINGUAL_MATCH_UNAVAILABLE" not in claim.warnings:
+                claim.warnings.append("CROSS_LINGUAL_MATCH_UNAVAILABLE")
+        else:
+            claim.status = compute_claim_status(claim, links, evidence_by_id)
         claim.requires_review = claim.status in S.STATUSES_REQUIRING_REVIEW
         # The hash covers the assertion, not the verdict, so it stays valid.
     return list(claims)

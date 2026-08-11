@@ -175,6 +175,11 @@ def build_factual_assessment(
 
     # 1. Claims — deterministic always, semantic only in hybrid mode.
     claims = extract_deterministic_claims(draft, max_claims=max_claims)
+    # O modo EFETIVO so e `hybrid` se a camada semantica realmente entregou
+    # claim. Pedir `hybrid` e receber nada nao e uma avaliacao semantica que nao
+    # achou nada — e uma avaliacao semantica que nao aconteceu, e o laudo nao
+    # pode registrar as duas do mesmo jeito.
+    effective_mode = S.MODE_DETERMINISTIC
     if resolved_mode == S.MODE_DETERMINISTIC:
         warnings.append("DETERMINISTIC_MODE_ONLY_PATTERN_CLAIMS")
         if claim_response is not None:
@@ -186,6 +191,13 @@ def build_factual_assessment(
             )
             claims = merge_claims(claims, semantic)
             warnings.extend(parse_warnings)
+            if semantic:
+                effective_mode = S.MODE_HYBRID
+            else:
+                # Resposta valida e vazia: a camada rodou e nao produziu claim.
+                # Nao ha o que somar ao deterministico, entao o efetivo continua
+                # deterministico — mas o motivo e outro, e fica dito.
+                warnings.append("SEMANTIC_CLAIM_RESPONSE_EMPTY")
         except InvalidModelResponseError as exc:
             # A response we cannot parse is discarded, never guessed at: the
             # deterministic claims still stand on their own.
@@ -196,6 +208,13 @@ def build_factual_assessment(
             )
     else:
         warnings.append("NO_SEMANTIC_CLAIM_RESPONSE")
+
+    if effective_mode != resolved_mode:
+        logger.warning(
+            "[FACTUAL_MODE_DEGRADED] draft_id=%s solicitado=%s efetivo=%s: "
+            "a camada semantica nao entregou claim, o laudo e deterministico",
+            draft_id, resolved_mode, effective_mode,
+        )
 
     if len(claims) > max_claims:
         warnings.append(f"CLAIMS_TRUNCATED:{len(claims)}>{max_claims}")
@@ -237,6 +256,8 @@ def build_factual_assessment(
         ),
         version=config.FACTUAL_ASSESSMENT_VERSION,
         mode=resolved_mode,
+        requested_mode=resolved_mode,
+        effective_mode=effective_mode,
         warnings=warnings,
         blocking_errors=blocking_errors,
     )

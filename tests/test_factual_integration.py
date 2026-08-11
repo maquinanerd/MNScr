@@ -30,6 +30,7 @@ from app.submitters import LocalDraftSubmitter, PayloadConfig, PayloadDraftSubmi
 FIXTURES = Path(__file__).parent / "fixtures" / "factual"
 POLICY_DIR = "config/editorial_gate"
 POLICY_V1 = "mnscr-editorial-gate-v1"
+POLICY_V2 = "mnscr-editorial-gate-v2"
 FILLER = " ".join(["palavra"] * 260)
 
 
@@ -45,6 +46,11 @@ def _no_network(monkeypatch):
 @pytest.fixture
 def policy():
     return load_policy(POLICY_V1, POLICY_DIR)
+
+
+@pytest.fixture
+def policy_v2():
+    return load_policy(POLICY_V2, POLICY_DIR)
 
 
 def fixture(name):
@@ -161,6 +167,63 @@ def test_critical_conflict_blocks(policy):
     assert "GATE_CRITICAL_FACT_CONFLICT" in [r.rule_code for r in result.blocking_rules]
 
 
+def test_policy_v2_loads_and_declares_conflict_as_orientation(policy_v2):
+    """A v2 carrega, e o threshold que a distingue da v1 esta desligado."""
+    assert policy_v2.policy_version == "mnscr-editorial-gate-v2"
+    assert policy_v2.threshold("blockCriticalFactConflicts", True) is False
+    assert "GATE_CRITICAL_FACT_CONFLICT" in policy_v2.enabled_rules
+
+
+def test_policy_v2_critical_conflict_is_a_warning_not_a_block(policy_v2):
+    """Mesmo cenario de `test_critical_conflict_blocks`, sob a v2: nao bloqueia.
+
+    Decisao do dono do produto: conflito factual e ORIENTACAO, nao regra de
+    bloqueio. A regra continua rodando e reportando — so nao para a materia.
+
+    O fixture `sources_conflicting.json` tambem dispara
+    `GATE_MATERIAL_CLAIM_UNSUPPORTED`. Ela tambem parou de bloquear na v2, pela
+    MESMA medicao que motivou a primeira: coverage_ratio=0.0 com supported=0 de
+    7 claims em execucao real. Um casador que nao confirma nada faz as duas
+    regras reprovarem incondicionalmente em vez de medir risco.
+
+    A lista vazia e verificada por inteiro de proposito: se qualquer tranca for
+    religada sem passar pela decisao registrada no JSON da politica, esta linha
+    falha em vez de passar.
+    """
+    draft = make_draft()
+    result = evaluate(draft, policy_v2, assess(draft, fixture("sources_conflicting.json")))
+    blocking_codes = [r.rule_code for r in result.blocking_rules]
+    assert "GATE_CRITICAL_FACT_CONFLICT" not in blocking_codes
+    assert blocking_codes == []
+
+
+def test_policy_v2_unsupported_claim_still_shows_as_a_warning(policy_v2):
+    """A segunda regra rebaixada tambem continua FALANDO.
+
+    Antes, `blockUnsupportedMaterialClaimsInCriticalLocations=false` fazia a
+    regra devolver `triggered=false` e sair do veredito inteira — o sinal sumia
+    junto com a tranca. Este teste prende o comportamento correto: rebaixar a
+    severidade, nunca calar.
+    """
+    draft = make_draft()
+    result = evaluate(draft, policy_v2, assess(draft, fixture("sources_conflicting.json")))
+    rule = next(r for r in result.rules if r.rule_code == "GATE_MATERIAL_CLAIM_UNSUPPORTED")
+    assert rule.triggered is True
+    assert rule.severity == "WARNING"
+    assert rule.evidence, "as afirmacoes sem suporte precisam continuar nomeadas"
+
+
+def test_policy_v2_critical_conflict_still_shows_as_a_warning(policy_v2):
+    """O sinal nao desaparece: ele so deixa de barrar a publicacao."""
+    draft = make_draft()
+    result = evaluate(draft, policy_v2, assess(draft, fixture("sources_conflicting.json")))
+    warning_codes = [r.rule_code for r in result.warning_rules]
+    assert "GATE_CRITICAL_FACT_CONFLICT" in warning_codes
+    conflict_rule = next(r for r in result.rules if r.rule_code == "GATE_CRITICAL_FACT_CONFLICT")
+    assert conflict_rule.triggered is True
+    assert conflict_rule.evidence, "o conflito precisa continuar descrito, nao so sinalizado"
+
+
 def test_low_coverage_is_only_a_warning(policy):
     draft = make_draft(title="Estudio comenta a producao em andamento")
     result = evaluate(draft, policy, assess(draft, []))
@@ -169,9 +232,20 @@ def test_low_coverage_is_only_a_warning(policy):
 
 
 def test_unverified_claims_produce_a_warning(policy):
-    draft = make_draft(title="Estudio comenta a producao em andamento")
+    """Fonte topicamente relacionada, mas que nao confirma o valor da afirmacao.
+
+    ``Bridgerton`` e um sujeito REAL de 2+ letras (ao contrario do fixture antigo,
+    que dependia do bug do sujeito de 1 letra: ``"A serie..."`` virava sujeito
+    ``"a"``, que batia por coincidencia como substring em qualquer evidencia).
+    Aqui a fonte fala do MESMO assunto — o sujeito aparece nela — mas nao diz
+    "renovada"/"renewed" nem o oposto: e so mencao, e mencao e ``UNVERIFIED``.
+    """
+    draft = make_draft(
+        title="Estudio confirma novidade sobre Bridgerton",
+        body=f"<p>Bridgerton foi renovada para uma quarta temporada.</p><p>{FILLER}</p>",
+    )
     sources = [{"url": "https://variety.example/a", "domain": "variety.example",
-                "content": "O estudio comentou o andamento geral da producao nesta semana."}]
+                "content": "Bridgerton segue fazendo sucesso na Netflix, segundo a Variety."}]
     result = evaluate(draft, policy, assess(draft, sources))
     assert "GATE_UNVERIFIED_CLAIMS_PRESENT" in [r.rule_code for r in result.warning_rules]
 

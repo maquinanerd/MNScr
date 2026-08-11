@@ -131,7 +131,9 @@ def test_titles():
     print(f"📊 RESULTADOS: {passed} passou ✅ | {failed} falhou ❌")
     print("=" * 80)
 
-    return failed == 0
+    # `assert`, e nao `return`: um teste que DEVOLVE o resultado nao reprova nada: o pytest ignora o retorno,
+    # entao a suite ficava verde mesmo com o contador de falhas diferente de zero.
+    assert failed == 0, f"{failed} caso(s) de titulo falharam"
 
 if __name__ == "__main__":
     success = test_titles()

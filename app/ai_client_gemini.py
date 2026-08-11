@@ -67,19 +67,46 @@ ARTICLE_RESPONSE_SCHEMA = {
                         "items": {"type": "string"},
                     },
                     "image_alt_texts": {"type": "object"},
-                    "yoast_meta": {
-                        "type": "object",
-                        "properties": {
-                            "_yoast_wpseo_title": {"type": "string"},
-                            "_yoast_wpseo_metadesc": {"type": "string"},
-                            "_yoast_wpseo_focuskw": {"type": "string"},
-                            "_yoast_news_keywords": {"type": "string"},
-                            "_yoast_wpseo_opengraph-title": {"type": "string"},
-                            "_yoast_wpseo_opengraph-description": {"type": "string"},
-                            "_yoast_wpseo_twitter-title": {"type": "string"},
-                            "_yoast_wpseo_twitter-description": {"type": "string"},
-                        },
-                    },
+                    # Sugestões sociais NEUTRAS. Este bloco era `yoast_meta`, o
+                    # objeto de um plugin de WordPress: pedir aquele formato
+                    # trazia junto `_yoast_wpseo_canonical` e o controle de
+                    # indexação, decisões que pertencem ao lado público. Os
+                    # valores úteis continuam aqui, com os nomes que o contrato
+                    # do Cinerie realmente aceita.
+                    "openGraphTitleSuggestion": {"type": "string"},
+                    "openGraphDescriptionSuggestion": {"type": "string"},
+                    "twitterTitleSuggestion": {"type": "string"},
+                    "twitterDescriptionSuggestion": {"type": "string"},
+                },
+            },
+        }
+    },
+}
+
+
+#: Schema for semantic claim extraction (factual_claim_extraction_v2 prompt).
+#: Distinct from ARTICLE_RESPONSE_SCHEMA — forcing the article schema here
+#: makes the model write a second article instead of listing claims.
+CLAIMS_RESPONSE_SCHEMA = {
+    "type": "object",
+    "required": ["claims"],
+    "properties": {
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["display_text", "claim_type", "location"],
+                "properties": {
+                    "display_text": {"type": "string"},
+                    "claim_type": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "predicate": {"type": "string"},
+                    "value": {"type": "string"},
+                    "semantic_evidence_query": {"type": "string"},
+                    "location": {"type": "string"},
+                    "source_sentence": {"type": "string"},
+                    "is_material": {"type": "boolean"},
+                    "confidence": {"type": "number"},
                 },
             },
         }

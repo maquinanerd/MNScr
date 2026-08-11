@@ -49,7 +49,9 @@ def test_caption_detection():
     print(f"Resultados: {passed} passaram, {failed} falharam")
     print("=" * 80)
 
-    return failed == 0
+    # `assert`, e nao `return`: um teste que DEVOLVE o resultado nao reprova nada: o pytest ignora o retorno,
+    # entao a suite ficava verde mesmo com o contador de falhas diferente de zero.
+    assert failed == 0, f"{failed} caso(s) de legenda falharam"
 
 
 def test_caption_cleaning():
@@ -114,7 +116,7 @@ def test_caption_cleaning():
         print(f"  Obtido: {captions_list}")
     print("=" * 80)
 
-    return success
+    assert success, "limpeza de legenda em ingles reprovou"
 
 
 if __name__ == "__main__":

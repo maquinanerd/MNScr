@@ -19,8 +19,8 @@ from urllib.parse import urlparse
 from app.editorial.models import (
     _WP_BLOCK_PATTERN,
     _WP_IMAGE_CLASS_PATTERN,
-    _WP_UPLOAD_PATTERN,
     EditorialDraft,
+    own_cms_upload_urls,
 )
 from app.editorial.states import (
     EVIDENCE_CONFLICTING,
@@ -232,19 +232,59 @@ def rule_missing_prompt_version(draft, policy, context) -> EditorialRuleResult:
     )
 
 
+#: Chaves de CMS de terceiro recusadas em QUALQUER profundidade do draft.
+#:
+#: A comparacao ignora underscore, hifen e caixa: `post_status`, `postStatus` e
+#: `POST-STATUS` sao a mesma tentativa.
+_FORBIDDEN_CMS_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "yoastmeta", "yoast", "yoastwpseotitle", "yoastwpseometadesc",
+        "yoastwpseofocuskw", "yoastwpseocanonical", "yoastnewskeywords",
+        "yoastwpseoopengraphtitle", "yoastwpseoopengraphdescription",
+        "yoastwpseotwittertitle", "yoastwpseotwitterdescription",
+        "poststatus", "wppost", "wppostid", "wordpress", "featuredmedia",
+        "rankmath", "aioseo", "canonical", "canonicalurl", "robots", "noindex",
+        "indexstatus", "jsonld", "schemajson", "publisher", "hreflang", "sitemap",
+    }
+)
+
+_KEY_SEPARATORS: Final[re.Pattern[str]] = re.compile(r"[_-]")
+
+
+def _find_cms_keys(payload: Any, depth: int = 0) -> List[str]:
+    """Chaves de CMS de terceiro, em qualquer nivel.
+
+    Varre CHAVES, e nao o `str()` do dicionario inteiro. A diferenca importa: a
+    varredura anterior achava "yoast" tambem dentro de um VALOR, e uma materia
+    que citasse o plugin no proprio texto era bloqueada por falar sobre ele.
+    """
+    if depth > 12 or payload is None:
+        return []
+    found: List[str] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if _KEY_SEPARATORS.sub("", str(key).lower()) in _FORBIDDEN_CMS_KEYS:
+                found.append(str(key))
+            found.extend(_find_cms_keys(value, depth + 1))
+    elif isinstance(payload, (list, tuple)):
+        for item in payload:
+            found.extend(_find_cms_keys(item, depth + 1))
+    return found
+
+
 def rule_forbidden_wordpress_markup(draft, policy, context) -> EditorialRuleResult:
     body = draft.content.body_html or ""
     found: List[str] = []
-    if _WP_UPLOAD_PATTERN.search(body):
-        found.append("URL /wp-content/uploads/ no corpo")
+    # Só a URL de upload do NOSSO CMS: a mesma URL vinda da fonte (que também
+    # roda WordPress) é dado de terceiro, não vazamento nosso.
+    for url in own_cms_upload_urls(body):
+        found.append(f"URL /wp-content/uploads/ de dominio proprio: {url}")
     if _WP_IMAGE_CLASS_PATTERN.search(body):
         found.append("classe wp-image-* no corpo")
     if _WP_BLOCK_PATTERN.search(body):
         found.append("comentario de bloco Gutenberg <!-- wp: -->")
-    flat = str(draft.to_dict())
-    for marker in ("wp_post_id", "featured_media", "yoast"):
-        if marker in flat.lower():
-            found.append(f"campo '{marker}' presente no draft")
+    for key in dict.fromkeys(_find_cms_keys(draft.to_dict())):
+        found.append(f"campo de CMS de terceiro no draft: '{key}'")
     return _result(
         "GATE_FORBIDDEN_WORDPRESS_MARKUP", SEVERITY_BLOCKING, bool(found),
         "Markup ou identificador WordPress presente no draft." if found else
@@ -554,24 +594,31 @@ def rule_material_claim_unsupported(draft, policy, context) -> EditorialRuleResu
 
     UNSUPPORTED means "no source we received sustains this", never "this is
     false".
+
+    ``blockUnsupportedMaterialClaimsInCriticalLocations=false`` downgrades this
+    to ORIENTATION, not silence — the same correction already made in
+    ``rule_critical_fact_conflict``. Returning ``triggered=False`` when the
+    threshold is off made the rule GO MUTE: the offending claims vanished from
+    the verdict entirely, so nobody could see what the gate had stopped
+    blocking. Turning a threshold off must change the SEVERITY, never whether
+    the rule looks.
     """
-    if not bool(policy.threshold("blockUnsupportedMaterialClaimsInCriticalLocations", True)):
-        return _result(
-            "GATE_MATERIAL_CLAIM_UNSUPPORTED", SEVERITY_BLOCKING, False,
-            "Bloqueio de afirmacao sem suporte desabilitado pela politica.",
-        )
+    blocks = bool(policy.threshold("blockUnsupportedMaterialClaimsInCriticalLocations", True))
+    severity = SEVERITY_BLOCKING if blocks else SEVERITY_WARNING
+
     assessment = _assessment_of(draft, context)
     if assessment is None:
         return _result(
-            "GATE_MATERIAL_CLAIM_UNSUPPORTED", SEVERITY_BLOCKING, False,
+            "GATE_MATERIAL_CLAIM_UNSUPPORTED", severity, False,
             "Sem avaliacao factual para inspecionar.",
-            metrics={"has_assessment": False},
+            metrics={"has_assessment": False, "blocking_enabled": blocks},
         )
 
     offenders = assessment.unsupported_in_critical_locations
     return _result(
-        "GATE_MATERIAL_CLAIM_UNSUPPORTED", SEVERITY_BLOCKING, bool(offenders),
-        f"{len(offenders)} afirmacao(oes) material(is) sem suporte em posicao critica."
+        "GATE_MATERIAL_CLAIM_UNSUPPORTED", severity, bool(offenders),
+        (f"{len(offenders)} afirmacao(oes) material(is) sem suporte em posicao critica."
+         + ("" if blocks else " Politica trata como orientacao, nao bloqueio."))
         if offenders else "Nenhuma afirmacao critica sem suporte.",
         evidence=[
             f"{', '.join(c.draft_locations)}: {c.display_text}" for c in offenders[:5]
@@ -581,29 +628,38 @@ def rule_material_claim_unsupported(draft, policy, context) -> EditorialRuleResu
             "Sem suporte nao significa falso: ou a fonte nao foi recebida, ou a "
             "afirmacao precisa sair da manchete."
         ),
-        metrics={"unsupported_critical_claims": len(offenders)},
+        metrics={
+            "unsupported_critical_claims": len(offenders),
+            "blocking_enabled": blocks,
+        },
     )
 
 
 def rule_critical_fact_conflict(draft, policy, context) -> EditorialRuleResult:
-    """Sources contradict each other on something the reader would act on."""
-    if not bool(policy.threshold("blockCriticalFactConflicts", True)):
-        return _result(
-            "GATE_CRITICAL_FACT_CONFLICT", SEVERITY_BLOCKING, False,
-            "Bloqueio de conflito critico desabilitado pela politica.",
-        )
+    """Sources contradict each other on something the reader would act on.
+
+    ``blockCriticalFactConflicts=false`` downgrades this to ORIENTATION, not
+    silence: the same decision already made for the SEO thresholds. Turning the
+    threshold off must not stop the rule from evaluating — it only changes
+    ``BLOCKING`` to ``WARNING``, so a real conflict still shows up in
+    ``qa.warnings`` instead of quietly disappearing from the verdict.
+    """
+    blocks = bool(policy.threshold("blockCriticalFactConflicts", True))
+    severity = SEVERITY_BLOCKING if blocks else SEVERITY_WARNING
+
     assessment = _assessment_of(draft, context)
     if assessment is None:
         return _result(
-            "GATE_CRITICAL_FACT_CONFLICT", SEVERITY_BLOCKING, False,
+            "GATE_CRITICAL_FACT_CONFLICT", severity, False,
             "Sem avaliacao factual para inspecionar.",
-            metrics={"has_assessment": False},
+            metrics={"has_assessment": False, "blocking_enabled": blocks},
         )
 
     critical = assessment.critical_conflicts
     return _result(
-        "GATE_CRITICAL_FACT_CONFLICT", SEVERITY_BLOCKING, bool(critical),
-        f"{len(critical)} conflito(s) critico(s) entre fontes." if critical else
+        "GATE_CRITICAL_FACT_CONFLICT", severity, bool(critical),
+        (f"{len(critical)} conflito(s) critico(s) entre fontes."
+         + ("" if blocks else " Politica trata como orientacao, nao bloqueio.")) if critical else
         "Nenhum conflito critico.",
         evidence=[
             f"{c.conflict_type} {c.subject or '-'}: {' vs '.join(c.values[:2])}"
@@ -613,6 +669,7 @@ def rule_critical_fact_conflict(draft, policy, context) -> EditorialRuleResult:
         remediation="Nao resolver automaticamente: um humano decide qual versao vale.",
         metrics={
             "critical_conflicts": len(critical),
+            "blocking_enabled": blocks,
             "total_conflicts": len(assessment.conflicts),
         },
     )
@@ -625,9 +682,12 @@ def rule_factual_coverage_low(draft, policy, context) -> EditorialRuleResult:
                        "Sem avaliacao factual.", metrics={"has_assessment": False})
     minimum = float(policy.threshold("minimumFactualCoverageRatio", 0.75))
     ratio = assessment.coverage.coverage_ratio
-    triggered = ratio < minimum
+    measured = assessment.coverage.coverage_measured
+    triggered = not measured or ratio < minimum
     return _result(
         "GATE_FACTUAL_COVERAGE_LOW", SEVERITY_WARNING, triggered,
+        "Cobertura factual nao medida: matcher interidioma indisponivel."
+        if not measured else
         f"Cobertura factual de {ratio} abaixo do minimo {minimum}." if triggered else
         f"Cobertura factual de {ratio}.",
         evidence=[
@@ -637,7 +697,7 @@ def rule_factual_coverage_low(draft, policy, context) -> EditorialRuleResult:
         ] if triggered else [],
         affected_fields=["factual_assessment"],
         remediation="Cobertura baixa e sinal de revisao, nao prova de erro.",
-        metrics={"coverage_ratio": ratio, "minimum": minimum},
+        metrics={"coverage_ratio": ratio, "coverage_measured": measured, "minimum": minimum},
     )
 
 
@@ -670,8 +730,11 @@ def rule_unverified_claims_present(draft, policy, context) -> EditorialRuleResul
         if unverified else "Nenhuma afirmacao indeterminada.",
         evidence=[c.display_text for c in unverified[:5]],
         affected_fields=["factual_assessment"],
-        remediation="As fontes citam o assunto mas nao confirmam a afirmacao.",
-        metrics={"unverified_claims": len(unverified)},
+        remediation="Separar limite do matcher de ausencia real de suporte; revisar humanamente.",
+        metrics={
+            "unverified_claims": len(unverified),
+            "unmeasured_claims": assessment.coverage.unmeasured_material_claims,
+        },
     )
 
 

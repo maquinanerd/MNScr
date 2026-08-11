@@ -127,6 +127,11 @@ def _conflicts_from_contradicting_evidence(
         claim = claims_by_id.get(claim_id)
         if claim is None or not claim.is_material:
             continue
+        if not claim.normalized_subject:
+            # Same guard as `_conflicts_between_claims`: without a subject a
+            # conflict cannot be told apart from a mislabeled fact, and the log
+            # would show a bare "-" instead of something a human can act on.
+            continue
         values = [claim.normalized_value or claim.display_text]
         for evidence_id in evidence_ids:
             item = evidence_by_id.get(evidence_id)

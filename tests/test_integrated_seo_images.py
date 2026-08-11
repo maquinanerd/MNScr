@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from app.html_utils import unescape_html_content, validate_and_fix_figures
-from app.seo_title_optimizer import optimize_title
+from app.seo_title_optimizer import ACTION_VERBS, optimize_title
 
 
 def test_integrated_flow():
@@ -93,8 +93,7 @@ def test_integrated_flow():
     checks = {
         "Título sem clickbait": "Você não vai acreditar" not in optimized_title,
         "Título entre 50-70 chars": 50 <= len(optimized_title) <= 70,
-        "Título com verbo de ação": any(verb in optimized_title.lower() for verb in
-                                         ['anuncia', 'lança', 'critica', 'vence', 'fecha']),
+        "Título com verbo de ação": any(verb in optimized_title.lower() for verb in ACTION_VERBS),
         "HTML desescapado": "&lt;" not in fixed_content and "&gt;" not in fixed_content,
         "Figuras com estrutura correta": "<figure><img" in fixed_content,
         "Imagens com alt text": 'alt=' in fixed_content,
@@ -111,16 +110,13 @@ def test_integrated_flow():
 
     print()
     print("=" * 80)
-    if all_passed:
-        print("🎉 TODOS OS TESTES PASSARAM!")
-        print()
-        print("RESULTADO FINAL:")
-        print(f"  Título: {optimized_title}")
-        print(f"  Conteúdo: {fixed_content[:200]}...")
-        return 0
-    else:
-        print("❌ Alguns testes falharam")
-        return 1
+    print("RESULTADO FINAL:")
+    print(f"  Título: {optimized_title}")
+    print(f"  Conteúdo: {fixed_content[:200]}...")
+
+    # `assert`, e não `return`: o pytest descarta o valor devolvido, então este
+    # teste ficava verde mesmo devolvendo 1.
+    assert all_passed, "o fluxo integrado de SEO + imagens reprovou"
 
 
 if __name__ == "__main__":

@@ -18,6 +18,31 @@ def _scanned_sources():
     return [p for p in paths if p.resolve() != THIS_FILE]
 
 
+@pytest.fixture(autouse=True)
+def _isolate_from_local_dotenv(monkeypatch):
+    """Impede que o `.env` da maquina decida o resultado destes testes.
+
+    `app/config.py` carrega o `.env` no nivel do modulo, e varios testes daqui
+    fazem `importlib.reload(config)` depois de mexer no ambiente. O reload
+    reexecuta o carregamento.
+
+    O caso que sobra depois de `load_dotenv` passar a respeitar o ambiente
+    (`override=False`) e o do `monkeypatch.delenv`: a variavel apagada pelo teste
+    fica AUSENTE, e ausente e exatamente o que o `.env` tem permissao para
+    preencher. O arquivo entao repoe o que o teste quis remover.
+
+    Enquanto existiu um `.env` com `GEMINI_KEY_1` real ao alcance da busca, isso
+    passou despercebido: a chave do arquivo satisfazia a assercao por acaso. Num
+    clone limpo, ou com a chave vazia, `test_local_mode_produces_no_issue`
+    quebrava — e apontava para configuracao de saida, que nao tem relacao
+    nenhuma com o defeito.
+
+    Um teste cujo resultado depende de um arquivo ignorado pelo git nao esta
+    testando o codigo.
+    """
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+
+
 class TestOutputConfiguration:
     def test_wordpress_credentials_are_not_required(self, monkeypatch):
         for var in ("WORDPRESS_URL", "WORDPRESS_USER", "WORDPRESS_PASSWORD"):
@@ -96,7 +121,7 @@ class TestSecurity:
     def test_key_logging_never_exposes_the_prefix(self):
         source = (REPO_ROOT / "app" / "config.py").read_text(encoding="utf-8")
         assert "key[:15]" not in source
-        assert 'f"  [{idx}] ****{key[-4:]}"' in source
+        assert "key[-4:]" not in source
 
     def test_no_active_reference_to_the_legacy_domain(self):
         offenders = []

@@ -19,7 +19,13 @@ for _stream in (sys.stdout, sys.stderr):
 from apscheduler.schedulers.blocking import BlockingScheduler  # noqa: E402
 
 from app.config import SCHEDULE_CONFIG, validate_runtime_config  # noqa: E402
-from app.pipeline import run_pipeline_cycle  # noqa: E402
+from app.pipeline import (  # noqa: E402
+    EXIT_CRITICAL_EXCEPTION,
+    EXIT_INVALID_CONFIGURATION,
+    run_pipeline_cycle,
+    run_pipeline_once,
+    stop_worker,
+)
 from app.store import Database  # noqa: E402
 
 _FILE_HANDLER: logging.Handler | None = None
@@ -101,7 +107,7 @@ def validate_startup_configuration(logger: logging.Logger) -> None:
     except Exception as e:
         logger.critical(f"Falha na validação de configuração: {e}", exc_info=True)
         flush_logs()
-        sys.exit(1)
+        raise SystemExit(EXIT_INVALID_CONFIGURATION)
 
 
 def initialize_database(logger: logging.Logger) -> None:
@@ -117,7 +123,7 @@ def initialize_database(logger: logging.Logger) -> None:
     except Exception as e:
         logger.critical(f"Falha ao inicializar o banco de dados: {e}", exc_info=True)
         flush_logs()
-        sys.exit(1)
+        raise SystemExit(EXIT_INVALID_CONFIGURATION)
 
 
 def run_pipeline_cycle_guarded() -> None:
@@ -126,17 +132,19 @@ def run_pipeline_cycle_guarded() -> None:
         run_pipeline_cycle()
 
 
-def run_once(logger: logging.Logger) -> None:
-    """Execute a single pipeline cycle and exit."""
-    logger.info("Executando um único ciclo do pipeline (--once).")
+def run_once(logger: logging.Logger, *, deadline_seconds: float, max_items: int) -> int:
+    """Execute one bounded, synchronous pipeline run and return its exit code."""
+    logger.info("Executando --once sincronamente.")
     flush_logs()
     try:
-        run_pipeline_cycle_guarded()
-    except Exception as e:
-        logger.critical(f"Erro crítico durante a execução do ciclo único: {e}", exc_info=True)
-        flush_logs()
+        result = run_pipeline_once(deadline_seconds=deadline_seconds, max_items=max_items)
+        logger.info("[ONCE_RESULT] %s", result.to_dict())
+        return result.exit_code
+    except Exception:
+        logger.exception("[ONCE_CRITICAL] falha inesperada")
+        return EXIT_CRITICAL_EXCEPTION
     finally:
-        logger.info("Ciclo único finalizado.")
+        logger.info("Ciclo --once finalizado.")
         flush_logs()
 
 
@@ -159,6 +167,9 @@ def run_forever(logger: logging.Logger) -> None:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
         logger.info("Agendador interrompido pelo usuário.")
+    finally:
+        if not stop_worker(timeout_s=30):
+            logger.error("[WORKER_SHUTDOWN] encerramento incompleto")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -169,6 +180,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--once",
         action="store_true",
         help="Executa o ciclo do pipeline uma vez e sai.",
+    )
+    parser.add_argument(
+        "--once-deadline-seconds",
+        type=float,
+        default=float(os.getenv("MNSCR_ONCE_DEADLINE_SECONDS", "900")),
+        help="Deadline monotônico de --once; preserva o backlog quando expira.",
+    )
+    parser.add_argument(
+        "--once-max-items",
+        type=int,
+        default=int(os.getenv("MNSCR_ONCE_MAX_ITEMS", "25")),
+        help="Máximo de itens em --once; o limite resulta em execução incompleta.",
     )
     parser.add_argument(
         "--replay-event",
@@ -245,6 +268,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Em --reevaluate-factual, extrai apenas padroes deterministicos (sem IA).",
     )
+    parser.add_argument(
+        "--cinerie-contract",
+        action="store_true",
+        help=(
+            "Mostra a identidade LOCAL do contrato do Cinerie (nome, versao, hash "
+            "recalculado do arquivo e commit de origem). Nao acessa a rede."
+        ),
+    )
+    parser.add_argument(
+        "--cinerie-preflight",
+        action="store_true",
+        help=(
+            "Executa o preflight contratual contra o Cinerie configurado e compara "
+            "nome, versao e hash. Nao publica nada."
+        ),
+    )
+    parser.add_argument(
+        "--list-cinerie-publications",
+        action="store_true",
+        help="Lista as publicacoes pedidas ao Cinerie e seus desfechos.",
+    )
     return parser
 
 
@@ -309,6 +353,94 @@ def _run_reevaluate_factual(
         f"novo registro: {'sim' if outcome.created_new_record else 'nao'} | "
         f"gate: {outcome.gate_outcome or '-'}"
     )
+    return 0
+
+
+def _run_cinerie_contract(logger: logging.Logger) -> int:
+    """``--cinerie-contract``: identidade local. Sem rede.
+
+    O hash exibido e **recalculado dos bytes do arquivo**, nao lido de uma
+    constante. E o que permite responder "qual contrato este binario fala?" sem
+    depender de o repositorio estar coerente consigo mesmo.
+    """
+    from app.cinerie.contract import local_identity
+    from app.cinerie.errors import ContractArtifactError
+    from app.cinerie.policy import policy_summary
+
+    try:
+        identity = local_identity()
+    except ContractArtifactError as exc:
+        logger.error("Pacote contratual do Cinerie invalido: %s", exc)
+        return 1
+
+    print(f"contractName      {identity.contract_name}")
+    print(f"contractVersion   {identity.contract_version}")
+    print(f"schemaHash        {identity.schema_hash}")
+    print(f"compatibility     {identity.compatibility}")
+    print(f"direction         {identity.direction}")
+    print(f"origem (commit)   {identity.source_commit}")
+    print("politica de SEO:")
+    for line in policy_summary():
+        print(f"  - {line}")
+    return 0
+
+
+def _run_cinerie_preflight(logger: logging.Logger) -> int:
+    """``--cinerie-preflight``: compara com o destino. Nao publica nada."""
+    from app import config
+    from app.cinerie.client import CinerieClient, CinerieConfig
+    from app.cinerie.errors import CinerieError
+    from app.cinerie.preflight import ContractPreflight
+
+    issues = config.get_cinerie_config_issues()
+    if issues:
+        for issue in issues:
+            logger.error("Configuracao do Cinerie: %s", issue)
+        return 2
+
+    try:
+        client = CinerieClient(
+            CinerieConfig(
+                base_url=config.PAYLOAD_INTERNAL_SERVICE_URL,
+                api_key=config.MNSCR_PAYLOAD_API_KEY,
+                timeout_seconds=config.MNSCR_CINERIE_TIMEOUT_SECONDS,
+            )
+        )
+        # `force=True`: um preflight pedido a mao existe justamente para nao
+        # acreditar no que estava guardado.
+        result = ContractPreflight(client).check(force=True)
+    except CinerieError as exc:
+        logger.error("Preflight falhou (%s): %s", exc.code, exc)
+        return 1
+
+    for key, value in result.safe_log_fields().items():
+        print(f"{key:<18} {value}")
+    return 0 if result.compatible else 1
+
+
+def _run_list_cinerie_publications(logger: logging.Logger) -> int:
+    """``--list-cinerie-publications``: leitura local, sem rede."""
+    from app.cinerie_store import CinerieStore
+
+    store = CinerieStore()
+    try:
+        cursor = store.conn.cursor()
+        cursor.execute("SELECT * FROM cinerie_publications ORDER BY id DESC LIMIT 100")
+        rows = [store._row_to_record(row) for row in cursor.fetchall()]
+    finally:
+        store.close()
+
+    if not rows:
+        logger.info("Nenhuma publicacao registrada para o Cinerie.")
+        return 0
+
+    print(f"{'REQUEST':<40} {'REV':>4} {'STATUS':<22} {'OUTCOME':<18} ARTIGO")
+    for record in rows:
+        print(
+            f"{record.request_id:<40} {record.source_revision:>4} "
+            f"{record.delivery_status:<22} {record.payload_outcome or '-':<18} "
+            f"{record.payload_article_id or '-'}"
+        )
     return 0
 
 
@@ -463,6 +595,15 @@ def main(argv: list[str] | None = None) -> None:
             _run_reevaluate_factual(logger, args.reevaluate_factual, args.deterministic)
         )
 
+    if args.cinerie_contract:
+        raise SystemExit(_run_cinerie_contract(logger))
+
+    if args.cinerie_preflight:
+        raise SystemExit(_run_cinerie_preflight(logger))
+
+    if args.list_cinerie_publications:
+        raise SystemExit(_run_list_cinerie_publications(logger))
+
     if args.revision is not None:
         logger.error("--revision so pode ser usado junto com --replay-event.")
         raise SystemExit(2)
@@ -480,6 +621,12 @@ def main(argv: list[str] | None = None) -> None:
     initialize_database(logger)
 
     if args.once:
-        run_once(logger)
+        raise SystemExit(
+            run_once(
+                logger,
+                deadline_seconds=args.once_deadline_seconds,
+                max_items=args.once_max_items,
+            )
+        )
     else:
         run_forever(logger)

@@ -59,6 +59,7 @@ class FactualClaim:
     normalized_subject: Optional[str] = None
     predicate: Optional[str] = None
     normalized_value: Optional[str] = None
+    semantic_evidence_query: Optional[str] = None
     source_sentence: Optional[str] = None
     draft_locations: List[str] = dc_field(default_factory=list)
     status: str = S.UNVERIFIED
@@ -79,6 +80,7 @@ class FactualClaim:
         self.normalized_subject = _clean(self.normalized_subject)
         self.predicate = _clean(self.predicate)
         self.normalized_value = _clean(self.normalized_value)
+        self.semantic_evidence_query = _clean(self.semantic_evidence_query)
 
         if self.source_sentence:
             sentence, truncated = truncate_at_safe_boundary(
@@ -133,6 +135,7 @@ class FactualClaim:
             "normalized_subject": self.normalized_subject,
             "predicate": self.predicate,
             "normalized_value": self.normalized_value,
+            "semantic_evidence_query": self.semantic_evidence_query,
             "display_text": normalize_for_comparison(self.display_text),
             "draft_locations": sorted(self.draft_locations),
             "is_material": bool(self.is_material),
@@ -145,6 +148,7 @@ class FactualClaim:
             "normalized_subject": self.normalized_subject,
             "predicate": self.predicate,
             "normalized_value": self.normalized_value,
+            "semantic_evidence_query": self.semantic_evidence_query,
             "display_text": self.display_text,
             "source_sentence": self.source_sentence,
             "draft_locations": list(self.draft_locations),
@@ -164,6 +168,7 @@ class FactualClaim:
             normalized_subject=payload.get("normalized_subject"),
             predicate=payload.get("predicate"),
             normalized_value=payload.get("normalized_value"),
+            semantic_evidence_query=payload.get("semantic_evidence_query"),
             source_sentence=payload.get("source_sentence"),
             draft_locations=list(payload.get("draft_locations") or []),
             status=payload.get("status", S.UNVERIFIED),
@@ -464,7 +469,9 @@ class FactualCoverage:
     unsupported_material_claims: int = 0
     conflicting_material_claims: int = 0
     unverified_material_claims: int = 0
+    unmeasured_material_claims: int = 0
     coverage_ratio: float = 0.0
+    coverage_measured: bool = True
     source_diversity: int = 0
     primary_evidence_count: int = 0
     review_required: bool = True
@@ -506,6 +513,18 @@ class FactualAssessment:
     contract_version: str = ""
     version: str = S.ASSESSMENT_VERSION_V1
     mode: str = S.MODE_HYBRID
+    #: Modo PEDIDO e modo que de fato rodou. Eles divergem quando `hybrid` foi
+    #: solicitado e a camada semantica nao entregou claim nenhum — por falta de
+    #: resposta, por resposta irrecuperavel ou por adapter ausente. Sem essa
+    #: distincao o laudo persistido dizia `mode: hybrid` e quem o lesse depois
+    #: (a reavaliacao do gate, um humano, um relatorio) concluiria que a camada
+    #: semantica rodou e nao achou nada — quando ela simplesmente nao rodou.
+    #:
+    #: Ficam FORA de `to_hashable_dict` de proposito, seguindo `warnings`: sao
+    #: metadado sobre COMO a avaliacao foi produzida, nao sobre o que ela apurou,
+    #: e inclui-los mudaria o hash de todo laudo ja persistido.
+    requested_mode: str = ""
+    effective_mode: str = ""
     warnings: List[str] = dc_field(default_factory=list)
     blocking_errors: List[str] = dc_field(default_factory=list)
     assessment_id: str = ""
@@ -519,6 +538,10 @@ class FactualAssessment:
         self.revision = int(self.revision or 1)
         self.event_key = _clean(self.event_key)
         self.mode = S.validate_mode(self.mode)
+        # Um laudo antigo, ou construido a mao, nao declara os dois modos: nesse
+        # caso `mode` responde pelos dois, que e o que ele sempre significou.
+        self.requested_mode = S.validate_mode(self.requested_mode or self.mode)
+        self.effective_mode = S.validate_mode(self.effective_mode or self.mode)
         self.warnings = [w for w in (str(x).strip() for x in self.warnings) if w]
         self.blocking_errors = [e for e in (str(x).strip() for x in self.blocking_errors) if e]
         if not self.assessment_hash:
@@ -602,6 +625,8 @@ class FactualAssessment:
             "contract_version": self.contract_version,
             "version": self.version,
             "mode": self.mode,
+            "requested_mode": self.requested_mode,
+            "effective_mode": self.effective_mode,
             "claims": [c.to_dict() for c in self.claims],
             "evidence": [e.to_dict() for e in self.evidence],
             "links": [link.to_dict() for link in self.links],
@@ -627,6 +652,8 @@ class FactualAssessment:
             contract_version=payload.get("contract_version", ""),
             version=payload.get("version", S.ASSESSMENT_VERSION_V1),
             mode=payload.get("mode", S.MODE_HYBRID),
+            requested_mode=payload.get("requested_mode", ""),
+            effective_mode=payload.get("effective_mode", ""),
             warnings=list(payload.get("warnings") or []),
             blocking_errors=list(payload.get("blocking_errors") or []),
             assessment_id=payload.get("assessment_id", ""),

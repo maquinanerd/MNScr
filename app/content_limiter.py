@@ -18,10 +18,16 @@ def _truncate_text(value: str, remaining: int) -> tuple[str, int, bool]:
         return normalized, len(normalized), False
 
     candidate = normalized[:remaining]
-    split_at = candidate.rfind(" ")
-    if split_at >= max(1, int(remaining * 0.8)):
-        candidate = candidate[:split_at]
-    return candidate.rstrip(), len(candidate.rstrip()), True
+    # Corta SEMPRE em fronteira de palavra: o corte no meio ("confli") entra no
+    # prompt da IA e pode voltar publicado. A regra antiga (recuar so quando o
+    # espaco estava nos ultimos 20%) deixava a palavra picada passar. Quando o
+    # no nao tem espaco nenhum antes do corte, a palavra continua alem dele —
+    # descartar o pedaco perde uma palavra do prompt; mante-lo publicaria meia.
+    if normalized[remaining : remaining + 1] not in ("", " "):
+        split_at = candidate.rfind(" ")
+        candidate = candidate[:split_at] if split_at > 0 else ""
+    candidate = candidate.rstrip()
+    return candidate, len(candidate), True
 
 
 def truncate_html_by_visible_chars(content_html: str, max_chars: int) -> str:

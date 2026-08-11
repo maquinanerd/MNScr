@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from .serialization import stable_hash, to_plain
 from .states import (
@@ -35,9 +36,69 @@ OUTPUT_CONTRACT_VERSION = "mnscr-editorial-draft-v0"  # TEMPORARY — awaiting C
 
 PIPELINE_VERSION = "mnscr-ms1"
 
-_WP_UPLOAD_PATTERN = re.compile(r"/wp-content/uploads/", re.IGNORECASE)
 _WP_IMAGE_CLASS_PATTERN = re.compile(r"wp-image-\d+", re.IGNORECASE)
 _WP_BLOCK_PATTERN = re.compile(r"<!--\s*/?wp:", re.IGNORECASE)
+
+#: A URL inteira em volta de um `/wp-content/uploads/`, para que dê para
+#: perguntar de QUEM ela é. Para nos limites que delimitam uma URL dentro de
+#: markup: aspas, espaço, `<`, `>` e parênteses.
+_WP_UPLOAD_URL_PATTERN = re.compile(
+    r"""[^\s"'<>()]*/wp-content/uploads/[^\s"'<>()]*""", re.IGNORECASE
+)
+
+
+def _host_of(url: str) -> Optional[str]:
+    """Host de uma URL de markup, sem `www.`.
+
+    ``None`` significa "sem host": caminho relativo à raiz do site que renderiza
+    o corpo — ou seja, o NOSSO site.
+    """
+    candidate = (url or "").strip()
+    if not candidate:
+        return None
+    # `//host/x` e `host/x` são as duas formas sem esquema que aparecem em
+    # markup; a segunda seria lida como caminho puro se não fosse normalizada.
+    if not candidate.startswith(("/", "http://", "https://")):
+        candidate = "//" + candidate
+    try:
+        host = (urlparse(candidate).hostname or "").lower()
+    except ValueError:
+        return None
+    if not host:
+        return None
+    return host[4:] if host.startswith("www.") else host
+
+
+def _is_own_host(host: Optional[str], own_domains: list[str]) -> bool:
+    """Sem host é nosso. Com host, casa o domínio e seus subdomínios."""
+    if host is None:
+        return True
+    return any(host == d or host.endswith("." + d) for d in own_domains)
+
+
+def own_cms_upload_urls(
+    body_html: str, own_domains: Optional[list[str]] = None
+) -> list[str]:
+    """URLs `/wp-content/uploads/` do NOSSO CMS encontradas no corpo.
+
+    A regra existe para pegar o vazamento do legado do MNScr, que é WordPress.
+    O problema é que ScreenRant, ComicBook e MovieWeb também são WordPress e
+    servem imagem pelo mesmo caminho: procurar só o caminho bloqueia a matéria
+    pela FONTE. Quem decide é o host, não o formato da URL.
+
+    Uma URL sem host (`/wp-content/uploads/x.jpg`) resolve contra o site que
+    renderiza o corpo, isto é, contra nós — e por isso conta como nossa.
+    """
+    if own_domains is None:
+        from app.config import OWN_CMS_DOMAINS
+
+        own_domains = OWN_CMS_DOMAINS
+
+    found: list[str] = []
+    for url in _WP_UPLOAD_URL_PATTERN.findall(body_html or ""):
+        if _is_own_host(_host_of(url), own_domains) and url not in found:
+            found.append(url)
+    return found
 
 
 def _utc_now_iso() -> str:
@@ -226,6 +287,9 @@ class EditorialDraft:
     media_candidates: list[MediaCandidate] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     blocking_errors: list[str] = field(default_factory=list)
+    # Entrada SEO exata usada para montar o contrato Cinerie. Faz parte do
+    # artefato porque retries posteriores precisam reconstruir o mesmo payload.
+    seo_source: dict[str, Any] = field(default_factory=dict)
     # MS-4: the factual picture — claims, evidence, conflicts, coverage. Like
     # the gate verdict it is attached after the body exists and never takes part
     # in ``content_hash``: re-assessing facts must not look like a rewrite.
@@ -246,6 +310,7 @@ class EditorialDraft:
         self.blocking_errors = [
             text for text in (_clean(item) for item in self.blocking_errors or []) if text
         ]
+        self.seo_source = dict(self.seo_source or {})
 
     # -- helpers ------------------------------------------------------------
 
@@ -333,7 +398,9 @@ def validate_draft(draft: EditorialDraft) -> list[str]:
     flat = str(payload)
     if "wp_post_id" in flat or "featured_media" in flat:
         errors.append("WORDPRESS_IDENTIFIER_PRESENT")
-    if _WP_UPLOAD_PATTERN.search(draft.content.body_html):
+    # Ciente do domínio: bloqueia a URL de upload do NOSSO CMS, deixa passar a
+    # da fonte. Ver `own_cms_upload_urls`.
+    if own_cms_upload_urls(draft.content.body_html):
         errors.append("WORDPRESS_UPLOAD_URL_PRESENT")
     if _WP_IMAGE_CLASS_PATTERN.search(draft.content.body_html):
         errors.append("WORDPRESS_MEDIA_CLASS_PRESENT")

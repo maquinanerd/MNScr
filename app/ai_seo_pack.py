@@ -2,10 +2,25 @@
 """
 Phase 3 of the 3-phase AI pipeline: SEO packaging.
 
-Receives the rewritten HTML from phase 2 and generates all SEO metadata
-fields (title, slug, meta description, excerpt/subtitle, keyphrases, categories, tags,
-Yoast meta). The rewritten HTML is injected as `conteudo_final` without
+Receives the rewritten HTML from phase 2 and generates the SEO metadata fields
+(title, slug, meta description, excerpt/subtitle, keyphrases, categories, tags,
+social suggestions). The rewritten HTML is injected as `conteudo_final` without
 asking the AI to re-generate it, saving significant tokens.
+
+Os campos são **neutros**. O prompt pedia `yoast_meta` — o objeto de um plugin de
+WordPress — e com ele vinham `_yoast_wpseo_canonical` e o controle de indexação.
+Aceitar aquele formato fazia a semântica de um CMS de terceiro virar a nossa por
+acidente, e o primeiro campo arrastava os seguintes. Os valores úteis não se
+perderam: viraram `openGraphTitleSuggestion` e companhia, que é o que o contrato
+do Cinerie realmente aceita.
+
+O modelo **não decide** canonical, robots, JSON-LD, publisher, sitemap, datas nem
+indexação. Essas são decisões do lado público, e pedi-las aqui produziria um
+palpite com cara de configuração.
+
+Os limites vêm de `app.cinerie.policy`, que os lê do contrato. Redigitá-los no
+prompt recriaria a divergência que a fase veio fechar: prompt pedindo 65,
+otimizador aceitando 70, sanitizador aceitando 90.
 """
 import json
 import logging
@@ -26,10 +41,10 @@ Com base no artigo abaixo, gere os metadados SEO.
 Retorne EXCLUSIVAMENTE um JSON válido com os campos listados. NÃO inclua o conteúdo HTML do artigo no JSON.
 
 {{
-  "titulo_final": "Título SEO (55–65 chars, texto puro, sem HTML)",
-  "meta_description": "Frase factual 140–155 chars com keyword, fato principal e contexto editorial, sem CTA",
+  "titulo_final": "Título SEO ({title_auto_min}–{title_auto_max} chars, texto puro, sem HTML)",
+  "meta_description": "Frase factual {meta_editorial_min}–{meta_editorial_max} chars com keyword, fato principal e contexto editorial, sem CTA",
   "subtitle": "Resumo editorial 140–220 chars para o excerpt do CMS, sem CTA",
-  "focus_keyphrase": "frase-chave principal (máx 60 chars)",
+  "focus_keyphrase": "frase-chave principal (máx {focus_max} chars)",
   "related_keyphrases": ["variação 1", "variação 2", "variação 3"],
   "slug": "url-amigavel-ate-5-palavras",
   "categorias": [
@@ -37,28 +52,26 @@ Retorne EXCLUSIVAMENTE um JSON válido com os campos listados. NÃO inclua o con
   ],
   "tags_sugeridas": ["tag-1", "tag-2", "tag-3", "tag-4", "tag-5"],
   "image_alt_texts": {{"nome-imagem.jpg": "descrição com keyword, ator ou personagem"}},
-  "yoast_meta": {{
-    "_yoast_wpseo_title": "Título para o Google (máx 65 chars)",
-    "_yoast_wpseo_metadesc": "Meta description (máx 155 chars)",
-    "_yoast_wpseo_focuskw": "palavra-chave foco",
-    "_yoast_news_keywords": "kw1, kw2, kw3",
-    "_yoast_wpseo_opengraph-title": "Título para redes sociais",
-    "_yoast_wpseo_opengraph-description": "Descrição para redes sociais",
-    "_yoast_wpseo_twitter-title": "Título para o Twitter",
-    "_yoast_wpseo_twitter-description": "Descrição para o Twitter"
-  }}
+  "openGraphTitleSuggestion": "Título para redes sociais",
+  "openGraphDescriptionSuggestion": "Descrição para redes sociais",
+  "twitterTitleSuggestion": "Título para o Twitter",
+  "twitterDescriptionSuggestion": "Descrição para o Twitter"
 }}
+
+NÃO gere, em nenhuma hipótese: canonical, robots, noindex, JSON-LD, publisher,
+sitemap, datePublished, dateModified, post_status, nem qualquer campo `yoast_*`.
+Essas decisões pertencem ao lado público e não são propostas editoriais.
 
 REGRAS PARA titulo_final:
 - Começa com entidade (franquia, ator, plataforma, série, filme)
 - Verbo no presente (não infinitivo)
-- 55–65 caracteres — MÁXIMO 65
+- {title_auto_min}–{title_auto_max} caracteres — MÁXIMO {title_auto_max}
 - Priorize clareza e precisão antes de CTR
 - Proibido: sensacionalismo, caixa-alta excessiva, inglês, infinitivo, resíduos de tradução
 - Nunca use pergunta ou "você"
 
 REGRAS PARA meta_description:
-- 140–155 caracteres
+- {meta_editorial_min}–{meta_editorial_max} caracteres
 - Uma frase factual com fato principal + entidade + contexto, consequência ou tensão editorial
 - Deve conter a focus_keyphrase naturalmente
 - Não copiar o título nem o primeiro parágrafo literalmente
@@ -94,8 +107,45 @@ _FALLBACK: Dict[str, Any] = {
     "categorias": [],
     "tags_sugeridas": [],
     "image_alt_texts": {},
-    "yoast_meta": {},
+    "openGraphTitleSuggestion": "",
+    "openGraphDescriptionSuggestion": "",
+    "twitterTitleSuggestion": "",
+    "twitterDescriptionSuggestion": "",
 }
+
+
+def _prompt_limits() -> Dict[str, int]:
+    """Os limites do prompt, lidos da política canônica.
+
+    Se o pacote contratual não estiver disponível, o prompt ainda precisa ser
+    gerado: o SEO é reconstruído e revalidado depois de qualquer forma, e um
+    pipeline que para de escrever porque não conseguiu ler um JSON de política
+    troca um problema pequeno por um grande.
+    """
+    try:
+        from app.cinerie.policy import seo_policy
+
+        policy = seo_policy()
+        return {
+            "title_auto_min": policy.title.auto_min or policy.title.min,
+            "title_auto_max": policy.title.auto_max or policy.title.max,
+            "meta_editorial_min": policy.meta_description.editorial_min
+            or policy.meta_description.auto_min
+            or policy.meta_description.min,
+            "meta_editorial_max": policy.meta_description.editorial_max
+            or policy.meta_description.auto_max
+            or policy.meta_description.max,
+            "focus_max": policy.focus_keyphrase.max,
+        }
+    except Exception as exc:  # pragma: no cover - defensivo
+        logger.warning("[SEO_PACK] política de SEO indisponível, usando limites de contorno: %s", exc)
+        return {
+            "title_auto_min": 15,
+            "title_auto_max": 65,
+            "meta_editorial_min": 140,
+            "meta_editorial_max": 155,
+            "focus_max": 80,
+        }
 
 
 def seo_pack(
@@ -128,6 +178,7 @@ def seo_pack(
     prompt = _PROMPT_TEMPLATE.format(
         title=title or "",
         content=html_rewritten,
+        **_prompt_limits(),
     )
 
     generation_config = {

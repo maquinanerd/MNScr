@@ -1,0 +1,182 @@
+{
+  "seoProposalVersion": "seo-proposal-v1",
+  "policy": {
+    "title": {
+      "min": 15,
+      "idealMax": 60,
+      "max": 120,
+      "autoMin": 15,
+      "autoMax": 65
+    },
+    "metaDescription": {
+      "min": 70,
+      "idealMax": 160,
+      "max": 320,
+      "autoMin": 120,
+      "autoMax": 160,
+      "editorialMin": 140,
+      "editorialMax": 155
+    },
+    "focusKeyphrase": {
+      "min": 2,
+      "max": 80
+    },
+    "relatedKeyphrases": {
+      "max": 10,
+      "itemMax": 80
+    },
+    "editorialKeywords": {
+      "max": 20,
+      "itemMax": 60
+    },
+    "socialTitle": {
+      "max": 120
+    },
+    "socialDescription": {
+      "max": 220
+    },
+    "imageAlt": {
+      "min": 4,
+      "max": 200,
+      "max_items": 20
+    },
+    "internalLinks": {
+      "max": 20
+    },
+    "maxKeyphraseRepetition": 3
+  },
+  "schemaTypeRecommendations": [
+    "NewsArticle",
+    "Article",
+    "Review",
+    "ItemList",
+    "HowTo"
+  ],
+  "schemaByContentType": {
+    "news": [
+      "NewsArticle",
+      "Article"
+    ],
+    "feature": [
+      "Article"
+    ],
+    "review": [
+      "Review",
+      "Article"
+    ],
+    "guide": [
+      "HowTo",
+      "Article"
+    ],
+    "list": [
+      "ItemList",
+      "Article"
+    ],
+    "interview": [
+      "Article"
+    ],
+    "evergreen": [
+      "Article",
+      "HowTo"
+    ]
+  },
+  "internalLinkTargetTypes": [
+    "article",
+    "movie",
+    "tv_show",
+    "person",
+    "collection",
+    "section"
+  ],
+  "forbiddenSeoKeys": [
+    "yoast_meta",
+    "yoast",
+    "_yoast_wpseo_title",
+    "_yoast_wpseo_metadesc",
+    "_yoast_wpseo_focuskw",
+    "_yoast_wpseo_canonical",
+    "_yoast_wpseo_meta-robots-noindex",
+    "_yoast_news_keywords",
+    "post_status",
+    "poststatus",
+    "wp_post",
+    "wppost",
+    "wordpress",
+    "rank_math",
+    "rankmath",
+    "aioseo",
+    "canonical",
+    "canonicalurl",
+    "canonical_url",
+    "robots",
+    "noindex",
+    "index_status",
+    "indexstatus",
+    "jsonld",
+    "json_ld",
+    "schema_json",
+    "datepublished",
+    "date_published",
+    "datemodified",
+    "date_modified",
+    "publisher",
+    "hreflang",
+    "sitemap"
+  ],
+  "forbiddenPublicationKeys": [
+    "bypassreview",
+    "skipreview",
+    "forcepublish",
+    "workflowstatus",
+    "_status",
+    "reviewstatus",
+    "indexstatus",
+    "publishedat",
+    "datepublished",
+    "datemodified",
+    "canonical",
+    "robots",
+    "jsonld",
+    "technicalactor",
+    "technicalactorid",
+    "serviceaccount",
+    "serviceaccountid",
+    "serviceaccountlabel",
+    "actor",
+    "actorid",
+    "publishedby",
+    "createdby",
+    "updatedby",
+    "scopes",
+    "scope",
+    "authenticatedas"
+  ],
+  "forbiddenTopLevelSeoKeys": [
+    "seoproposal",
+    "metatitle",
+    "metadescription",
+    "slugproposal",
+    "slugsuggestion",
+    "focuskeyphrase",
+    "schematyperecommendation",
+    "articlesection"
+  ],
+  "publicationIntents": [
+    "publish",
+    "update"
+  ],
+  "attributionModes": [
+    "byline",
+    "newsroom",
+    "assisted"
+  ],
+  "publicationContentTypes": [
+    "news",
+    "feature",
+    "review",
+    "guide",
+    "list",
+    "interview",
+    "evergreen"
+  ]
+}

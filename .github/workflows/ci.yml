@@ -1,0 +1,138 @@
+name: CI
+
+# Tudo offline. Nenhum job acessa produção, EasyPanel, screen-db, RSS Prime real
+# ou a internet: a suíte inteira roda contra SQLite temporário e um servidor HTTP
+# de loopback.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Sem modo de entrega configurado: nenhum job deve pedir publicação.
+  MNSCR_ENVIRONMENT: development
+
+jobs:
+  quality:
+    name: lint + lockfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --frozen
+      - name: lockfile reproduzível
+        run: uv lock --check
+      - run: uv run python -m ruff check .
+      - name: diff sem whitespace quebrado
+        run: git diff --check
+
+  tests:
+    name: suíte completa
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --frozen
+      - run: uv run python -m pytest -q
+      - name: CLI responde
+        run: uv run python main.py --help
+
+  build-audit:
+    # Ordem exigida pelo mandato A4. O `--frozen` importa: sem ele o `uv sync`
+    # pode RESOLVER de novo e instalar algo que o lock nao previa, e o CI passa a
+    # testar um conjunto de dependencias que producao nunca vera.
+    name: build + wheel fora do checkout + audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: lockfile reproduzível
+        run: uv lock --check
+      - run: uv sync --all-extras --frozen
+      - run: uv build
+
+      - name: wheel roda FORA do checkout
+        # O passo que mais pega defeito real: instalado em outro lugar, o pacote
+        # perde o diretorio de trabalho do repositorio. Ja aconteceu — contrato,
+        # politica do gate e prompt resolviam por cwd e o wheel instalava sem
+        # rodar. `cd /tmp` nao e detalhe: e o teste.
+        run: |
+          uv venv /tmp/venv-wheel
+          uv pip install --python /tmp/venv-wheel/bin/python dist/*.whl
+          cd /tmp
+          /tmp/venv-wheel/bin/python -c "
+          from app.cinerie.contract import local_identity
+          from app.editorial_gate.policy import load_policy
+          from app.factual_ai import load_claim_prompt
+          assert local_identity().schema_hash.startswith('sha256:')
+          load_policy('mnscr-editorial-gate-v1')
+          assert load_claim_prompt('factual_claim_extraction_v1', 'config/prompts')
+          print('wheel OK fora do checkout')
+          "
+          /tmp/venv-wheel/bin/mnscr --cinerie-contract > /dev/null
+
+      - name: dependências sem advisory conhecido
+        run: |
+          uv export --frozen --no-emit-project --format requirements-txt > /tmp/reqs.txt
+          uvx pip-audit -r /tmp/reqs.txt
+
+      - name: nada gerado ficou por commitar
+        # `uv build` e `uv lock` escrevem no repositorio. Se algo mudou aqui, o
+        # que esta versionado nao corresponde ao que o CI produziu.
+        run: git diff --exit-code
+
+  cinerie-contract:
+    # Gate 1: o pacote contratual copiado do Screen-App confere consigo mesmo e
+    # com as fixtures que o Cinerie publicou. Se alguém reformatar o arquivo de
+    # schema, o hash muda e este gate falha ANTES de o preflight começar a
+    # recusar tudo em produção.
+    name: test:cinerie-contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --frozen
+      - name: identidade do contrato (sem rede)
+        run: uv run python main.py --cinerie-contract
+      - run: uv run python -m pytest tests/test_cinerie_contract.py -q
+
+  cinerie-seo:
+    # Gate 2: SEO neutro, faixas de transporte x autopublicação, slug, keyphrases,
+    # matriz de Schema.org, alt, links internos e blocos.
+    name: test:cinerie-seo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --frozen
+      - run: uv run python -m pytest tests/test_cinerie_seo.py -q
+
+  cinerie-delivery:
+    # Gate 3: cliente HTTP contra servidor de loopback, preflight, os quatro
+    # desfechos, retry, persistência e ausência de segredo.
+    name: test:cinerie-delivery
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --frozen
+      - run: uv run python -m pytest tests/test_cinerie_delivery.py -q
+      - name: guardas arquiteturais
+        run: uv run python -m pytest tests/test_no_publication_guard.py -q

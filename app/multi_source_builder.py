@@ -5,6 +5,7 @@ Build and qualify multi-source payloads for RSSPRIME Superfeed clusters.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from html import unescape
 from urllib.parse import urlparse
@@ -119,6 +120,45 @@ def is_reliable_single_source(source_doc: dict) -> bool:
     return any(trusted in domain for trusted in TRUSTED_SINGLE_SOURCES)
 
 
+def allow_single_source() -> bool:
+    """Leitura de ``ALLOW_SINGLE_SOURCE`` no momento da chamada.
+
+    No momento da chamada, e nao na importacao: e a mesma flag que a politica de
+    entrada consulta, e ela precisa poder ser desligada sem reiniciar processo
+    nem reimportar modulo.
+    """
+    return os.getenv("ALLOW_SINGLE_SOURCE", "false").strip().lower() == "true"
+
+
+def _single_source_basis(sources_used: list[dict], *, declared_sources: int) -> str | None:
+    """Em que base uma unica fonte extraida pode sustentar a materia — ou ``None``.
+
+    Duas situacoes diferentes chegam aqui com a mesma aparencia, e trata-las
+    igual seria o erro:
+
+    ``declared_sources <= 1``
+        o acontecimento so tem UMA fonte, e sempre teve. Nao houve perda. E o
+        caso que ``ALLOW_SINGLE_SOURCE`` governa: com a flag ligada, publica;
+        desligada, o item e recusado — e agora recusado CEDO, por
+        ``evaluate_early_rejection``, antes de a IA escrever qualquer coisa.
+
+    ``declared_sources >= 2``
+        o cacho DEGRADOU: prometeu varias fontes e so uma sobreviveu a
+        extracao. Aqui a exigencia de dominio confiavel continua valendo
+        integralmente, porque o que falta e justamente a corroboracao que o
+        item dizia ter. A flag nao afrouxa isto: ela declara que fonte unica
+        publica, nao que fonte unica sirva de substituta silenciosa para as
+        fontes que se perderam no caminho.
+    """
+    if len(sources_used) != 1:
+        return None
+    if is_reliable_single_source(sources_used[0]):
+        return "single_source_trusted"
+    if declared_sources <= 1 and allow_single_source():
+        return "single_source_allowed"
+    return None
+
+
 def _source_identity(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").lower()).removesuffix("com")
 
@@ -220,8 +260,10 @@ def build_multi_source_payload(cluster: dict, extractor, min_chars: int = MIN_CH
         else:
             sources_skipped.append(doc)
 
+    basis = "multi_source"
     if len(sources_used) < 2:
-        if not (len(sources_used) == 1 and is_reliable_single_source(sources_used[0])):
+        basis = _single_source_basis(sources_used, declared_sources=len(urls))
+        if basis is None:
             logger.info(
                 "[MULTI_SOURCE] event_key=%s fontes_validas=%s fontes_descartadas=%s",
                 cluster.get("event_key"),
@@ -230,8 +272,9 @@ def build_multi_source_payload(cluster: dict, extractor, min_chars: int = MIN_CH
             )
             return None
         logger.info(
-            "[MULTI_SOURCE] event_key=%s single_source_trusted=%s fontes_descartadas=%s",
+            "[MULTI_SOURCE] event_key=%s %s=%s fontes_descartadas=%s",
             cluster.get("event_key"),
+            basis,
             sources_used[0].get("domain"),
             len(sources_skipped),
         )
@@ -241,5 +284,5 @@ def build_multi_source_payload(cluster: dict, extractor, min_chars: int = MIN_CH
         "cluster_docs": sources_used,
         "sources_used": build_sources_audit_payload(sources_used),
         "sources_skipped": build_sources_audit_payload(sources_skipped),
-        "publication_basis": "single_source_trusted" if len(sources_used) == 1 else "multi_source",
+        "publication_basis": basis,
     }

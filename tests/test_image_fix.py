@@ -59,7 +59,8 @@ def test_validate_figures_with_embedded_html():
         print(f"  {'✓' if result else '✗'} {check_name}")
 
     print()
-    return all(result for _, result in checks)
+    reprovados = [nome for nome, ok in checks if not ok]
+    assert not reprovados, f"verificacoes reprovadas: {reprovados}"
 
 
 def test_validate_figures_missing_caption():
@@ -84,7 +85,7 @@ def test_validate_figures_missing_caption():
     print(f"  {'✓' if has_caption else '✗'} Figcaption adicionada")
     print()
 
-    return has_caption
+    assert has_caption, "a figura deveria ter legenda detectada"
 
 
 def test_merge_images():
@@ -124,7 +125,8 @@ def test_merge_images():
         print(f"  {'✓' if result_check else '✗'} {check_name}")
 
     print()
-    return all(r for _, r in checks)
+    reprovados = [nome for nome, ok in checks if not ok]
+    assert not reprovados, f"verificacoes reprovadas: {reprovados}"
 
 
 def main():

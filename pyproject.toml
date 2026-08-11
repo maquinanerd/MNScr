@@ -6,17 +6,31 @@ requires-python = ">=3.11"
 dependencies = [
     "apscheduler>=3.11.0",
     "beautifulsoup4>=4.13.4",
+    # Sitemap e XML de terceiro. O `xml.etree` da stdlib expande entidade,
+    # entao um documento hostil vira consumo de memoria (billion laughs) ou
+    # leitura de arquivo local (XXE) sem nada no caminho para impedir.
+    "defusedxml>=0.7.1",
     "feedparser>=6.0.11",
     # app/ai_client_gemini.py trata ResourceExhausted/GoogleAPICallError; a
     # dependencia era transitiva e precisa ser declarada para o lockfile instalar.
     "google-api-core>=2.25.0",
     "google-genai>=1.29.0",
+    # MS-5/Cinerie: o contrato editorial-publication-request-v1 atravessa a
+    # fronteira como JSON Schema draft 2020-12. Validar com um verificador
+    # proprio criaria uma segunda leitura do mesmo schema.
+    "jsonschema>=4.23.0",
     "lxml>=5.4.0",
     "python-dotenv>=1.1.1",
     "python-slugify>=8.0.4",
     "requests>=2.32.4",
     "trafilatura>=2.0.0",
-    "urllib3==2.5.0",
+    # Piso, nao pino: `urllib3==2.5.0` e `cryptography` 49.0.0 carregam
+    # advisories conhecidos. Um pino exato impede o proprio conserto — foi ele
+    # que segurou o lock na versao vulneravel mesmo com correcao publicada.
+    "urllib3>=2.7.0",
+    # Transitiva por `google-auth`, declarada aqui so para levantar o piso: sem
+    # a declaracao, o resolvedor nao tem motivo para sair da versao vulneravel.
+    "cryptography>=50.0.0",
     "charset-normalizer==3.4.4",
 ]
 
@@ -26,12 +40,24 @@ dev = [
     "ruff>=0.8.0",
 ]
 
+# A CLI passa a ter nome proprio: sem isto, so `python -m app.main` funciona,
+# e um wheel instalado nao oferece comando nenhum.
+[project.scripts]
+mnscr = "app.entrypoint:main"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+# `contracts` e `config` entram como pacotes-namespace porque o runtime os
+# resolve por `Path(__file__).parents[2]`, que num wheel instalado aponta
+# para a raiz do site-packages. Sem eles o pacote instala e NAO roda: o
+# primeiro `local_identity()` morre com ContractArtifactError.
+include = ["app*", "contracts*", "config*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.txt", "*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -20,6 +20,7 @@ from app.editorial_gate import (
     EditorialRuleResult,
 )
 from app.editorial_gate.errors import GateResultNotFoundError, PolicyNotFoundError
+from app.factual.models import FactualAssessment, FactualCoverage
 from app.gate_service import GateService, draft_from_artifact
 from app.gate_store import GateStore
 
@@ -308,3 +309,21 @@ def test_rebuild_ignores_unknown_provenance_fields():
     draft = draft_from_artifact(payload)
     assert draft.draft_id == "draft-x"
     assert draft.provenance.output_hash == "b" * 64
+
+
+def test_rebuild_preserva_laudos_que_compõem_o_payload_cinerie():
+    gate = make_result(draft_id="draft-replay", outcome=GATE_CLEAR)
+    factual = FactualAssessment(
+        draft_id="draft-replay",
+        coverage=FactualCoverage(coverage_measured=False, unmeasured_material_claims=1),
+    )
+    payload = make_draft(draft_id="draft-replay").to_dict()
+    payload["editorial_gate"] = gate.to_dict()
+    payload["factual_assessment"] = factual.to_dict()
+    payload["seo_source"] = {"seoTitle": "Título SEO persistido"}
+
+    rebuilt = draft_from_artifact(payload)
+
+    assert rebuilt.editorial_gate.to_dict() == gate.to_dict()
+    assert rebuilt.factual_assessment.to_dict() == factual.to_dict()
+    assert rebuilt.seo_source == {"seoTitle": "Título SEO persistido"}

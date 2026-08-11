@@ -8,9 +8,11 @@ import time
 import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -24,17 +26,37 @@ from .config import (
     BLOCKED_SOURCE_IDS,
     BLOCKED_TOPICS,
     CATEGORY_ALIASES,
+    CINERIE_PUBLIC_BASE_URL,
     EDITORIAL_GATE_ENABLED,
     FACTUAL_ASSESSMENT_ENABLED,
+    FACTUAL_ASSESSMENT_MODE,
     LOCAL_DRAFT_DIR,
+    MNSCR_ATTRIBUTION_MODE,
+    MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY,
+    MNSCR_CINERIE_CATALOG_RESOLVE_URL,
+    MNSCR_CINERIE_ENTITY_CARD_MAX,
+    MNSCR_CINERIE_ENTITY_MATCH_KINDS,
+    MNSCR_CINERIE_MAX_ATTEMPTS,
+    MNSCR_CINERIE_MEDIA_API_KEY,
+    MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED,
+    MNSCR_CINERIE_RETRY_BASE_SECONDS,
+    MNSCR_CINERIE_TIMEOUT_SECONDS,
+    MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS,
+    MNSCR_DELIVERY_MODE,
+    MNSCR_ENVIRONMENT,
+    MNSCR_PAYLOAD_API_KEY,
+    MNSCR_PUBLIC_AUTHOR_ID,
     OUTPUT_MODE,
     PAYLOAD_CMS_ENABLED,
+    PAYLOAD_INTERNAL_SERVICE_URL,
     PIPELINE_CONFIG,
     PIPELINE_ORDER,
     PUBLISHER_DOMAIN,
     RSS_FEEDS,
     SOURCE_CATEGORY_MAP,
 )
+from .early_reject import LEDGER as EARLY_REJECT_LEDGER
+from .early_reject import evaluate_early_rejection
 from .editorial import DRAFT_FAILED, DRAFT_GENERATED, validate_draft
 from .editorial.builder import build_editorial_draft
 from .editorial_gate import GATE_BLOCKED, GATE_REVIEW_REQUIRED, disabled_result
@@ -79,8 +101,7 @@ from .policy_engine import (
 )
 from .seo_title_optimizer import optimize_title
 from .store import Database
-from .submitters import build_submitter
-from .superfeed_policy import check_superfeed_policy
+from .submitters import OUTPUT_MODE_LOCAL, build_submitter
 from .task_queue import ArticleQueue
 from .title_validator import TitleValidator
 
@@ -93,7 +114,11 @@ worker_thread: Optional[threading.Thread] = None
 _runtime_lock = threading.Lock()
 _worker_pause_requested = threading.Event()
 _worker_idle = threading.Event()
+_worker_stop_requested = threading.Event()
 _worker_idle.set()
+_cinerie_dispatch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cinerie-dispatch")
+_cinerie_dispatch_future = None
+_cinerie_dispatch_guard = threading.Lock()
 
 # --- Environment variables for pipeline control ---
 MAX_ARTICLE_FAIL_COUNT = int(os.getenv('MAX_ARTICLE_FAIL_COUNT', 5))  # Guard: max retries before FAILED_PERMANENT
@@ -105,9 +130,35 @@ BETWEEN_BATCH_DELAY_S = int(os.getenv('BETWEEN_BATCH_DELAY_S', 30))  # 30s entre
 BETWEEN_PUBLISH_DELAY_S = int(os.getenv('BETWEEN_PUBLISH_DELAY_S', 30))  # 30s entre publicaÃ§Ãµes
 ARTICLE_WATCHDOG_TIMEOUT_S = int(os.getenv('ARTICLE_WATCHDOG_TIMEOUT_S', 300))
 CLAIM_STALE_TIMEOUT_S = int(os.getenv('CLAIM_STALE_TIMEOUT_S', ARTICLE_WATCHDOG_TIMEOUT_S * 2))
+CINERIE_DISPATCH_LIMIT = int(os.getenv('MNSCR_CINERIE_DISPATCH_LIMIT', 10))
+CINERIE_DISPATCH_LEASE_SECONDS = int(os.getenv('MNSCR_CINERIE_DISPATCH_LEASE_SECONDS', 900))
+
+# Exit codes are shared with the CLI entrypoint.  In particular, an unfinished
+# backlog is never reported as a successful --once invocation.
+EXIT_SUCCESS = 0
+EXIT_INVALID_CONFIGURATION = 2
+EXIT_CRITICAL_EXCEPTION = 3
+EXIT_PROCESSING_FAILURE = 4
+EXIT_DEADLINE_EXCEEDED = 5
+EXIT_SHUTDOWN_INCOMPLETE = 6
 
 # Versao do prompt canonico, registrada na proveniencia de cada draft.
 PROMPT_VERSION = os.getenv('MNSCR_PROMPT_VERSION', 'universal_prompt-ms1')
+
+# Link interno so existe quando ha um site para onde apontar.
+#
+# Em OUTPUT_MODE=local o draft nao vira pagina: o unico "endereco" que ele tem e
+# o caminho do artefato em disco (artifacts/local-drafts/draft-....json). Esse
+# valor nao e URL de nada. Gravado no link_store, ele volta como <a href> para um
+# arquivo no corpo da materia seguinte; e no dia em que o destino for o Cinerie
+# ele cai em seo.internalLinkSuggestions[].targetPath, que exige casar
+# ^\/[^\s]*$ dentro de um objeto .strict() — recusa o pedido inteiro, sem strip
+# silencioso.
+#
+# Entao em modo local nao ha link interno nenhum: nem sugestao ao writer, nem
+# insercao no corpo, nem escrita no link_store. Link falso e pior que link
+# ausente.
+INTERNAL_LINKING_ENABLED = OUTPUT_MODE != OUTPUT_MODE_LOCAL
 
 CLEANER_FUNCTIONS = {
     'globo.com': clean_html_for_globo_esporte,
@@ -450,9 +501,29 @@ def ensure_worker_started() -> None:
     with _runtime_lock:
         if worker_thread and worker_thread.is_alive():
             return
-        worker_thread = threading.Thread(target=worker_loop, daemon=True, name="pipeline-worker")
+        _worker_stop_requested.clear()
+        worker_thread = threading.Thread(target=worker_loop, daemon=False, name="pipeline-worker")
         worker_thread.start()
         logger.info("Pipeline worker thread started.")
+
+
+def stop_worker(timeout_s: float = 30) -> bool:
+    """Request a coordinated worker shutdown and confirm that it joined."""
+    global worker_thread
+    _worker_pause_requested.clear()
+    _worker_stop_requested.set()
+    thread = worker_thread
+    if thread is None:
+        return True
+    thread.join(timeout=max(0.0, timeout_s))
+    stopped = not thread.is_alive()
+    if stopped:
+        worker_thread = None
+        _worker_idle.set()
+        logger.info("[WORKER_SHUTDOWN] joined=true")
+    else:
+        logger.error("[WORKER_SHUTDOWN] joined=false timeout_s=%s", timeout_s)
+    return stopped
 
 
 def pause_worker_for_maintenance(timeout_s: int = 300) -> bool:
@@ -495,6 +566,181 @@ def pipeline_has_pending_work() -> bool:
             pending_fallback,
         )
     return False
+
+
+@dataclass
+class OnceRunResult:
+    """Auditable outcome of one bounded, synchronous pipeline execution."""
+
+    initial: int = 0
+    reconciled: int = 0
+    ingested: int = 0
+    claimed: int = 0
+    completed: int = 0
+    editorial_blocked: int = 0
+    review_required: int = 0
+    technical_failed: int = 0
+    #: Itens recusados ANTES da IA, e quantos chegaram a ela. Sao o par que
+    #: torna a economia legivel: "recusado" sozinho nao diz se custou dinheiro.
+    early_rejected: int = 0
+    reached_ai: int = 0
+    remaining: int = 0
+    stop_reason: str = "completed"
+    duration_ms: int = 0
+    success: bool = False
+    exit_code: int = EXIT_SUCCESS
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    def log_summary(self) -> None:
+        logger.info(
+            "[ONCE_SUMMARY] initial=%s reconciled=%s ingested=%s claimed=%s completed=%s "
+            "editorial_blocked=%s review_required=%s technical_failed=%s "
+            "early_rejected=%s reached_ai=%s remaining=%s "
+            "duration_ms=%s stop_reason=%s outcome=%s exit_code=%s",
+            self.initial, self.reconciled, self.ingested, self.claimed, self.completed,
+            self.editorial_blocked, self.review_required, self.technical_failed,
+            self.early_rejected, self.reached_ai,
+            self.remaining, self.duration_ms, self.stop_reason,
+            "success" if self.success else "incomplete", self.exit_code,
+        )
+
+
+def _once_link_map() -> Dict[str, Any]:
+    """Get the same SQLite-backed links that the worker uses, without a thread."""
+    try:
+        return ls_get_link_map() or {"posts": []}
+    except Exception as exc:  # links must not make a durable queue item disappear
+        logger.warning("[ONCE_LINKS] mapa de links indisponivel: %s", exc)
+        return {"posts": []}
+
+
+def _process_one_queued_article() -> Optional[Dict[str, Any]]:
+    """Claim and process exactly one item using the canonical batch processor.
+
+    This is intentionally shared by ``--once`` and the daemon worker: it does
+    not reimplement any editorial, factual or gate rule.
+    """
+    worker_id = f"once:{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex[:12]}"
+    article = article_queue.pop_claimed(worker_id)
+    if article is None:
+        return None
+
+    article_id = int(article.get("db_id") or article.get("id"))
+    process_batch([article], _once_link_map())
+    db = Database()
+    try:
+        row = (
+            db.get_article_by_event_key(article.get("event_key"), article.get("event_revision"))
+            if article.get("event_key")
+            else None
+        )
+        if row is None:
+            cursor = db._get_cursor()
+            row_data = cursor.execute("SELECT * FROM seen_articles WHERE id = ?", (article_id,)).fetchone()
+            row = dict(row_data) if row_data else {}
+        return dict(row or {})
+    finally:
+        db.close()
+
+
+def _record_once_outcome(result: OnceRunResult, row: Dict[str, Any]) -> None:
+    status = str(row.get("status") or "")
+    if status == DRAFT_GENERATED:
+        result.completed += 1
+        gate = row.get("latest_gate_status")
+        if gate == GATE_BLOCKED:
+            result.editorial_blocked += 1
+        elif gate == GATE_REVIEW_REQUIRED:
+            result.review_required += 1
+    elif status in {DRAFT_FAILED, "FAILED", "FAILED_PERMANENT"}:
+        result.technical_failed += 1
+
+
+def reconcile_event_tasks() -> int:
+    """Rebuild durable queue tasks for accepted RSS Prime revisions after a crash."""
+    db = Database()
+    try:
+        tasks = db.reconcile_rssprime_event_tasks()
+        if tasks:
+            article_queue.push_many(tasks)
+            logger.info("[EVENT_RECONCILIATION] created_tasks=%s", len(tasks))
+        return len(tasks)
+    finally:
+        db.close()
+
+
+def run_pipeline_once(*, deadline_seconds: float, max_items: int) -> OnceRunResult:
+    """Run reconciliation, drain, one ingest pass and a final drain synchronously.
+
+    The deadline is monotonic and is only checked between articles.  An active
+    article is never abandoned in a daemon thread: finishing it preserves the
+    claim and prevents duplicate draft creation.
+    """
+    if deadline_seconds <= 0 or max_items <= 0:
+        raise ValueError("deadline_seconds e max_items devem ser positivos")
+
+    started = time.monotonic()
+    result = OnceRunResult(initial=len(article_queue))
+    EARLY_REJECT_LEDGER.reset()
+
+    db = Database()
+    try:
+        recovered = db.recover_stale_processing_claims(
+            stale_seconds=CLAIM_STALE_TIMEOUT_S,
+            max_recoveries=MAX_ARTICLE_WATCHDOG_TIMEOUTS,
+        )
+        result.reconciled = sum(int(value) for key, value in recovered.items() if key != "still_alive")
+    finally:
+        db.close()
+    result.reconciled += reconcile_event_tasks()
+
+    def drain() -> bool:
+        while len(article_queue):
+            if time.monotonic() >= started + deadline_seconds:
+                result.stop_reason = "deadline"
+                result.exit_code = EXIT_DEADLINE_EXCEEDED
+                return False
+            if result.claimed >= max_items:
+                result.stop_reason = "item_limit"
+                result.exit_code = EXIT_DEADLINE_EXCEEDED
+                return False
+            row = _process_one_queued_article()
+            if row is None:
+                break
+            result.claimed += 1
+            _record_once_outcome(result, row)
+        return True
+
+    try:
+        if not drain():
+            return result
+
+        before_ingest = len(article_queue)
+        run_pipeline_cycle(start_worker=False, skip_pending_guard=True)
+        result.ingested = max(0, len(article_queue) - before_ingest)
+        drain()
+    except Exception:
+        logger.exception("[ONCE_CRITICAL] execucao sincrona interrompida")
+        result.stop_reason = "critical_exception"
+        result.exit_code = EXIT_CRITICAL_EXCEPTION
+    finally:
+        result.remaining = len(article_queue)
+        result.duration_ms = int((time.monotonic() - started) * 1000)
+        if result.exit_code == EXIT_SUCCESS and result.technical_failed:
+            result.stop_reason = "processing_failure"
+            result.exit_code = EXIT_PROCESSING_FAILURE
+        result.success = result.exit_code == EXIT_SUCCESS and result.remaining == 0
+        if result.exit_code == EXIT_SUCCESS and result.remaining:
+            result.stop_reason = "shutdown_incomplete"
+            result.exit_code = EXIT_SHUTDOWN_INCOMPLETE
+            result.success = False
+        result.early_rejected = EARLY_REJECT_LEDGER.rejected
+        result.reached_ai = EARLY_REJECT_LEDGER.reached_ai
+        EARLY_REJECT_LEDGER.log_summary(scope="once")
+        result.log_summary()
+    return result
 
 
 def initialize_runtime() -> None:
@@ -857,6 +1103,25 @@ def _run_3phase_batch(
     return results
 
 
+def _publishes_to_cinerie() -> bool:
+    """Se esta rodada vai mesmo pedir publicacao governada ao Cinerie.
+
+    Le a configuracao pelo nome do modulo, e nao por um valor capturado na
+    importacao, porque e assim que `_publish_to_cinerie` decide — e as duas
+    respostas precisam ser a mesma. Um cheque antecipado que recusasse item que
+    o caminho real nem tentaria publicar nao seria economia: seria materia
+    perdida.
+    """
+    from .cinerie_service import MODE_AUTO_PUBLISH, resolve_delivery_mode
+
+    try:
+        return resolve_delivery_mode(
+            MNSCR_DELIVERY_MODE, environment=MNSCR_ENVIRONMENT
+        ) == MODE_AUTO_PUBLISH
+    except Exception:  # noqa: BLE001 - configuracao invalida nunca publica
+        return False
+
+
 def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
     """Process a batch of articles."""
     if not articles:
@@ -898,27 +1163,44 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                 logger.info(f"Processing article: {article_data.get('title', 'N/A')} (DB ID: {article_db_id}) from {source_id}")
                 logger.info(f"  Original URL: {article_url}")
 
-                # â”€â”€ MODO CLUSTER (RSSPRIME Superfeed) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                if is_superfeed_item(article_data):
-                    allow_single_source = os.getenv("ALLOW_SINGLE_SOURCE", "false").lower() == "true"
-                    policy_status, policy_reason = check_superfeed_policy(
-                        article_data,
-                        allow_single_source=allow_single_source,
+                # â”€â”€ RECUSA CEDO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                # Antes da extracao e antes da IA: o que ja da para saber aqui
+                # nao pode custar token para ser descoberto la na frente.
+                recusa = evaluate_early_rejection(
+                    article_data,
+                    publishes_to_cinerie=_publishes_to_cinerie(),
+                    public_author_id=MNSCR_PUBLIC_AUTHOR_ID,
+                )
+                if recusa is not None:
+                    codigo, motivo = recusa
+                    EARLY_REJECT_LEDGER.record_rejection(codigo)
+                    logger.warning(
+                        "[EARLY_REJECT] db_id=%s source_id=%s event_key=%s code=%s "
+                        "chamadas_de_ia_evitadas=%s motivo=%s",
+                        article_db_id,
+                        source_id,
+                        article_data.get("event_key") or "-",
+                        codigo,
+                        EARLY_REJECT_LEDGER.AI_CALLS_PER_ARTICLE,
+                        motivo,
                     )
-                    if policy_status != "OK":
-                        logger.info(
-                            "[SUPERFEED_POLICY] blocked event_key=%s status=%s reason=%s",
-                            article_data.get("event_key"),
-                            policy_status,
-                            policy_reason,
-                        )
-                        db.update_article_status(
-                            article_db_id,
-                            'FAILED',
-                            reason=f"{policy_status}: {policy_reason}",
-                        )
-                        continue
-                    logger.info(f"[CLUSTER_ITEM] event_key={article_data.get('event_key')} sources={article_data.get('all_sources')}")
+                    db.update_article_status(
+                        article_db_id, 'FAILED', reason=f"{codigo}: {motivo}"
+                    )
+                    continue
+
+                # â”€â”€ MODO SUPERFEED (RSSPRIME) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                # Cacho E fonte unica passam por aqui: o que os une e o
+                # `event_key`, nao a contagem de fontes. A politica de entrada ja
+                # foi aplicada por `evaluate_early_rejection`, antes da extracao.
+                if is_superfeed_item(article_data):
+                    logger.info(
+                        "[SUPERFEED_ITEM] event_key=%s is_cluster=%s source_count=%s sources=%s",
+                        article_data.get('event_key'),
+                        bool(article_data.get('is_cluster')),
+                        article_data.get('source_count'),
+                        article_data.get('all_sources'),
+                    )
                     cluster_item = normalize_cluster_item(article_data)
                     cluster_item['db_id'] = article_db_id
                     cluster_item['urls'] = article_data.get('urls') or [article_url]
@@ -1009,7 +1291,14 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         'category':    category,
                         'feed_config': feed_config,
                         'title':       article_data.get('title', ''),
-                        'is_cluster':  True,
+                        # `is_superfeed` e o MARCADOR DE RAMO: diz que o payload
+                        # ja foi montado aqui. `is_cluster` continua sendo o
+                        # FATO EDITORIAL — multi-fonte — e por isso e copiado, e
+                        # nao afirmado.
+                        'is_superfeed': True,
+                        'is_cluster':  bool(article_data.get('is_cluster')),
+                        'event_key':   article_data.get('event_key'),
+                        'cluster_signature': article_data.get('cluster_signature'),
                         'cluster_item': cluster_item,
                         'cluster_docs': cluster_docs,
                         'sources_used': multi_source_payload.get('sources_used', []),
@@ -1080,8 +1369,8 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
 
             batch_data = []
             for art in batch:
-                # â”€â”€ MODO CLUSTER: payload jÃ¡ montado â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                if art.get('is_cluster'):
+                # â”€â”€ MODO SUPERFEED: payload jÃ¡ montado â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                if art.get('is_superfeed'):
                     ai_payload = build_cluster_prompt_payload(art['cluster_item'], art['cluster_docs'])
                     ai_payload['db_id'] = art.get('db_id')
                     ai_payload['source_word_count'] = art.get('source_word_count', 0)
@@ -1098,14 +1387,19 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         topic=art.get('cluster_item', {}).get('topic', art.get('category', '')),
                         k=6,
                         current_url=art.get('url', ''),
-                    )
+                    ) if INTERNAL_LINKING_ENABLED else []
                     ai_payload['internal_link_candidates'] = link_candidates
                     logger.info(
                         "[LINKS] writer candidates=%s db_id=%s",
                         len(link_candidates), art.get('db_id', '?'),
                     )
                     _write_cluster_prompt_input_audit(ai_payload, art)
-                    logger.info(f"[CLUSTER_MERGE] {len(art['cluster_docs'])} docs mesclados para IA | event_key={art['cluster_item']['event_key']}")
+                    logger.info(
+                        "[CLUSTER_MERGE] %s docs mesclados para IA | event_key=%s is_cluster=%s",
+                        len(art['cluster_docs']),
+                        art['cluster_item']['event_key'],
+                        bool(art.get('is_cluster')),
+                    )
                     batch_data.append(ai_payload)
                     continue
                 # â”€â”€ MODO SIMPLES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1160,7 +1454,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                     entity=_pre_event.get("entity", ""),
                     category=art['category'],
                     limit=3,
-                )
+                ) if INTERNAL_LINKING_ENABLED else []
                 _link_block = ls_format_links(_related)
                 link_candidates = select_internal_links(
                     link_map=link_map,
@@ -1170,7 +1464,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                     topic=art.get('feed_config', {}).get('topic') or art.get('category', ''),
                     k=6,
                     current_url=art.get('url', ''),
-                )
+                ) if INTERNAL_LINKING_ENABLED else []
                 logger.info(
                     "[LINKS] writer candidates=%s db_id=%s",
                     len(link_candidates), art.get('db_id', '?'),
@@ -1197,6 +1491,7 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                 })
 
             try:
+                EARLY_REJECT_LEDGER.record_reached_ai(len(batch_data))
                 if USE_3PHASE_AI:
                     batch_results = _run_3phase_batch(batch_data, processor)
                 else:
@@ -1396,14 +1691,14 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             {'nome': name} for name in category_suggestions
                         ]
 
-                        if link_map:
+                        if INTERNAL_LINKING_ENABLED and link_map:
                             content_html = add_internal_links(
                                 html_content=content_html, link_map_data=link_map,
                                 current_post_categories=[])
 
                         credit_primary_url = art_data.get('url')
                         credit_additional_urls = []
-                        if art_data.get('is_cluster'):
+                        if art_data.get('is_superfeed'):
                             cluster_item = art_data.get('cluster_item', {})
                             cluster_docs = art_data.get('cluster_docs', [])
                             credit_primary_url = cluster_item.get('url') or credit_primary_url
@@ -1494,6 +1789,12 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         rewritten_data['slug'] = final_slug
                         logger.info("[SLUG_SUGGESTION] slug=%s db_id=%s", final_slug, art_data["db_id"])
 
+                        # As sugestoes de SEO cruas da IA seguem para a camada
+                        # do Cinerie, que as normaliza e reconstroi. Guardadas em
+                        # `art_data` para nao alargar a assinatura do draft com um
+                        # campo que so a entrega usa.
+                        art_data['_seo_source'] = rewritten_data
+
                         # --- CONSTRUCAO DO DRAFT EDITORIAL ---
                         draft = build_editorial_draft(
                             art_data=art_data,
@@ -1511,6 +1812,9 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                             prompt_version=PROMPT_VERSION,
                             duration_ms=int((time.perf_counter() - _article_started_at) * 1000),
                             input_event=_resolve_input_event(art_data),
+                        )
+                        draft.seo_source = _persistent_cinerie_seo_source(
+                            art_data.get('_seo_source')
                         )
 
                         blocking_errors = validate_draft(draft)
@@ -1602,21 +1906,55 @@ def process_batch(articles: List[Dict[str, Any]], link_map: Dict[str, Any]):
                         # --- ENTREGA AO CMS (somente draft, apos o gate) ---
                         _deliver_draft(draft, art_data)
 
-                        # Link store: alimenta sugestoes de links internos futuros.
-                        from .cluster_engine import score_event
-                        event = score_event({
-                            "title":   title,
-                            "content": content_html,
-                            "tags":    rewritten_data.get("tags_sugeridas", []),
-                        })
-                        ls_save_article(
-                            title=title,
-                            url=result.artifact_path or draft.draft_id,
-                            category=art_data['category'],
-                            entity=event.get("entity", ""),
-                        )
+                        # --- PUBLICACAO GOVERNADA NO CINERIE (AUTO_PUBLISH) ---
+                        # Canal separado do envio de rascunho: outro contrato,
+                        # outro endpoint, outro escopo.
+                        publicacao = _publish_to_cinerie(draft, art_data)
 
-                        if art_data.get('is_cluster'):
+                        # Link store: alimenta sugestoes de links internos futuros.
+                        #
+                        # O unico endereco publico desta materia e o que o
+                        # Cinerie devolveu na publicacao (`canonicalSlug`).
+                        # `artifact_path` e um caminho de arquivo e `draft_id`
+                        # nao e endereco de nada — gravar qualquer um dos dois
+                        # transformaria a proxima materia em portadora de um
+                        # link falso, e a barreira do link_store os recusaria de
+                        # qualquer forma, deixando o link interno morto com um
+                        # WARNING por artigo como unico sinal.
+                        slug_publicado = getattr(
+                            getattr(publicacao, "record", None), "canonical_slug", None
+                        )
+                        url_publica = _public_url_for_slug(
+                            slug_publicado, base=CINERIE_PUBLIC_BASE_URL
+                        )
+                        if INTERNAL_LINKING_ENABLED and url_publica:
+                            from .cluster_engine import score_event
+                            event = score_event({
+                                "title":   title,
+                                "content": content_html,
+                                "tags":    rewritten_data.get("tags_sugeridas", []),
+                            })
+                            ls_save_article(
+                                title=title,
+                                url=url_publica,
+                                category=art_data['category'],
+                                entity=event.get("entity", ""),
+                            )
+                        elif INTERNAL_LINKING_ENABLED:
+                            logger.info(
+                                "[LINKS] link_store ignorado draft_id=%s motivo=%s: "
+                                "sem endereco publico para esta materia",
+                                draft.draft_id,
+                                "sem_canonical_slug" if not slug_publicado else "base_publica_ausente",
+                            )
+                        else:
+                            logger.info(
+                                "[LINKS] link_store ignorado draft_id=%s motivo=output_mode=%s "
+                                "sem endereco publico para o draft",
+                                draft.draft_id, OUTPUT_MODE,
+                            )
+
+                        if art_data.get('is_superfeed'):
                             event_key = (art_data.get('cluster_item') or {}).get('event_key', '')
                             cluster_urls = (art_data.get('cluster_item') or {}).get('urls') or [art_data.get('url')]
                             db.register_covered_urls(event_key, cluster_urls, art_data['db_id'])
@@ -1679,10 +2017,10 @@ def worker_loop():
     last_pause_time = time.time()
     QUEUE_TIMEOUT_S = 30  # 30 segundos timeout para esperar artigo
 
-    while True:
+    while not _worker_stop_requested.is_set():
         if _worker_pause_requested.is_set():
             _worker_idle.set()
-            time.sleep(1)
+            _worker_stop_requested.wait(1)
             continue
 
         _worker_idle.set()
@@ -1693,8 +2031,13 @@ def worker_loop():
                 f"[RPM PROTECTION] Atingido limite de {MAX_REQUESTS_PER_CYCLE} requisiÃƒÂ§ÃƒÂµes por ciclo. "
                 f"Pausando pipeline por {PAUSE_ON_LIMIT_S}s (5 minutos)."
             )
+            # O daemon nao tem fim para relatar no fim: a pausa de ciclo e o
+            # unico ponto natural onde a conta acumulada cabe.
+            EARLY_REJECT_LEDGER.log_summary(scope="worker_cycle")
             last_pause_time = time.time()
-            time.sleep(PAUSE_ON_LIMIT_S)
+            _worker_stop_requested.wait(PAUSE_ON_LIMIT_S)
+            if _worker_stop_requested.is_set():
+                break
             requests_in_cycle = 0
             logger.info("[RPM PROTECTION] Resumindo pipeline apÃƒÂ³s pausa de 5 minutos.")
             continue
@@ -1726,7 +2069,7 @@ def worker_loop():
                 break
             else:
                 # Esperar um pouco antes de tentar novamente
-                time.sleep(1)
+                _worker_stop_requested.wait(1)
 
         if not articles:
             # Still no articles after timeout, reset cycle counter and continue
@@ -1738,7 +2081,7 @@ def worker_loop():
                 requests_in_cycle = 0
                 last_pause_time = time.time()
 
-            time.sleep(5)  # Esperar 5s antes de tentar novamente
+            _worker_stop_requested.wait(5)  # Esperar 5s antes de tentar novamente
             continue
         # Refresh link_map before processing to pick up articles published this session
         link_map = _refresh_link_map()
@@ -1771,7 +2114,10 @@ def worker_loop():
             f"Total requisiÃ§Ãµes neste ciclo: {requests_in_cycle}/{MAX_REQUESTS_PER_CYCLE}. "
             f"Dormindo por {ARTICLE_SLEEP_S}s."
         )
-        time.sleep(ARTICLE_SLEEP_S)
+        _worker_stop_requested.wait(ARTICLE_SLEEP_S)
+
+    _worker_idle.set()
+    logger.info("[WORKER_SHUTDOWN] loop_exited=true")
 
 
 def _handle_watchdog_timeout(article: Dict[str, Any]) -> bool:
@@ -1829,6 +2175,10 @@ def _deliver_draft(draft, art_data):
     from .delivery_service import DeliveryService
 
     if not PAYLOAD_CMS_ENABLED:
+        logger.info(
+            "[CONFIG_FEATURE_SKIPPED] feature=draft_delivery "
+            "variable=PAYLOAD_CMS_ENABLED state=disabled"
+        )
         return None
 
     service = None
@@ -1853,6 +2203,561 @@ def _deliver_draft(draft, art_data):
             service.close()
 
 
+def _public_url_for_slug(slug, *, base):
+    """Endereço público a partir do ``canonicalSlug`` devolvido pela publicação.
+
+    O link_store existe para virar ``<a href>`` no corpo da próxima matéria,
+    então o que entra ali precisa ser endereço de verdade. O pipeline oferecia
+    ``result.artifact_path or draft.draft_id`` — um caminho em disco e um
+    identificador —, a barreira do link_store recusava os dois, e o link interno
+    simplesmente nunca existia, com um WARNING por artigo como único sinal.
+
+    Faltando slug ou base, devolve ``None`` em vez de chutar. Endereço errado é
+    pior que endereço nenhum: ele vira link quebrado publicado na matéria
+    seguinte.
+    """
+    slug_text = str(slug or "").strip().strip("/")
+    base_text = str(base or "").strip()
+    if not slug_text:
+        return None
+    if not base_text:
+        logger.info(
+            "[CONFIG_FEATURE_SKIPPED] feature=internal_link_skipped "
+            "variable=CINERIE_PUBLIC_BASE_URL state=empty"
+        )
+        return None
+
+    parsed = urlsplit(base_text)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        # Base mal configurada não vira endereço: o link_store recusaria de
+        # qualquer forma, e recusar aqui deixa o motivo mais perto da causa.
+        logger.warning(
+            "[CONFIG_FEATURE_SKIPPED] feature=internal_link_skipped "
+            "variable=CINERIE_PUBLIC_BASE_URL state=invalid",
+        )
+        return None
+
+    return f"{base_text.rstrip('/')}/{slug_text}"
+
+
+def _persistent_cinerie_seo_source(source: Any) -> Dict[str, Any]:
+    """Persiste só a entrada SEO que o contrato consome, nunca o JSON cru da IA."""
+    from .cinerie.seo import migrate_legacy_seo
+
+    if not isinstance(source, dict):
+        return {}
+    persisted = migrate_legacy_seo(source)
+    schema_type = source.get("schemaTypeRecommendation")
+    if isinstance(schema_type, str) and schema_type.strip():
+        persisted["schemaTypeRecommendation"] = schema_type.strip()
+    alt_texts = source.get("image_alt_texts")
+    if isinstance(alt_texts, (dict, list)):
+        persisted["image_alt_texts"] = alt_texts
+    return persisted
+
+
+def _build_entity_resolver():
+    """O resolvedor de entidade, ou ``None`` quando o recurso nao esta configurado.
+
+    ``None`` NAO e erro, e essa e a regra: a resolucao e enriquecimento, e a
+    materia sai sem ficha do mesmo jeito que sai sem foto. Uma variavel ausente
+    vira WARNING no log e segue; virar `issue` de startup faria uma credencial
+    que ninguem pediu impedir a publicacao de tudo.
+
+    A credencial e NOVA e separada das duas do CMS (`draft_ingest` e
+    `editorial_media_ingest`): a rota vive no `screen-app`, e reaproveitar uma
+    chave do CMS faria um unico vazamento abrir os dois lados da fronteira.
+    """
+    from .config import cinerie_entity_resolve_enabled
+
+    if not cinerie_entity_resolve_enabled():
+        faltando = [
+            nome
+            for nome, valor in (
+                ("MNSCR_CINERIE_CATALOG_RESOLVE_URL", MNSCR_CINERIE_CATALOG_RESOLVE_URL),
+                (
+                    "MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY",
+                    MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY,
+                ),
+            )
+            if not valor
+        ]
+        logger.warning(
+            "[CINERIE_ENTITY] resolucao de entidade DESLIGADA (ausente: %s); "
+            "as materias saem sem entityCard",
+            ", ".join(faltando),
+        )
+        return None
+
+    try:
+        from .cinerie.client import CatalogResolveClient, CatalogResolveConfig
+
+        cliente = CatalogResolveClient(
+            CatalogResolveConfig(
+                base_url=MNSCR_CINERIE_CATALOG_RESOLVE_URL,
+                api_key=MNSCR_CINERIE_CATALOG_RESOLVE_API_KEY,
+                timeout_seconds=MNSCR_CINERIE_TIMEOUT_SECONDS,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - ficha nunca custa a materia
+        logger.warning(
+            "[CINERIE_ENTITY] resolvedor nao pode ser construido (%s): %s; "
+            "as materias saem sem entityCard",
+            type(exc).__name__, exc,
+        )
+        return None
+
+    logger.info(
+        "[CINERIE_ENTITY] resolucao LIGADA base=%s max_cards=%s casamentos_aceitos=%s",
+        MNSCR_CINERIE_CATALOG_RESOLVE_URL,
+        MNSCR_CINERIE_ENTITY_CARD_MAX,
+        ",".join(MNSCR_CINERIE_ENTITY_MATCH_KINDS),
+    )
+    return cliente.resolve
+
+
+def _ingest_hero_media_best_effort(draft, result, client, store=None) -> None:
+    """Os tres passos da imagem de destaque. Nenhum deles pode falhar a materia.
+
+        1. a materia ja foi publicada             -> article_id   (quem chama)
+        2. a foto entra no acervo                 -> mediaId
+        3. a foto vira a CAPA daquela materia     -> PATCH .../hero
+
+    Os tres sao idempotentes e sao repetidos na integra a cada revisao: o passo
+    2 devolve ``unchanged`` quando os bytes nao mudaram, e o passo 3 devolve
+    ``unchanged`` quando a capa ja e aquela — sem escrever, sem criar versao
+    nova. Quando a fonte troca a foto no mesmo endereco, os dois devolvem
+    ``replaced`` e a capa acompanha.
+
+    O passo 3 fechou um no que era de ORDEM, nao de permissao: a foto so pode
+    ser ingerida depois de a materia existir, e a materia so poderia declarar
+    ``media[]`` antes de a foto existir. A rota nova nao le nem escreve
+    ``sourceRevision`` e nao passa por ``staleRevision``, entao ela nao mexe na
+    reconciliacao de eventos — que era exatamente o efeito colateral que
+    impedia fechar isto pela resubmissao.
+
+    ``client`` e o MESMO ``CinerieClient`` ja usado para publicar o texto — so
+    a credencial de midia e separada, passada por ``api_key`` na propria
+    chamada, e o passo 3 usa a MESMA do passo 2 (escopo
+    ``editorial_media_ingest``, nenhuma variavel nova).
+
+    NADA ESCAPA DAQUI, e a razao e a POSICAO da chamada, nao a educacao do
+    codigo chamado. Quem chama esta funcao e ``_publish_to_cinerie``, DENTRO do
+    mesmo ``try`` que trata falha de publicacao — e o ``except`` de la devolve
+    ``None``. Uma excecao que vazasse desta funcao seria lida como "a
+    publicacao falhou" DEPOIS de o Cinerie ja ter aceitado a materia: o
+    ``article_id`` real seria descartado, o `CinerieStore` nao registraria o
+    desfecho e a materia publicada viraria uma falha no relatorio. Os modulos
+    chamados ja engolem tudo; os ``except`` daqui existem para que a garantia
+    nao dependa de eles continuarem se comportando — e o passo 3 ganhou o SEU
+    proprio, pelo mesmo motivo que o passo 2 tem o dele.
+    """
+    if not MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED:
+        return
+    article_id = getattr(result, "article_id", None)
+    if not article_id:
+        return
+    if not MNSCR_CINERIE_MEDIA_API_KEY:
+        logger.warning(
+            "[CINERIE_MEDIA] MNSCR_CINERIE_MEDIA_UPLOAD_ENABLED=true mas "
+            "MNSCR_CINERIE_MEDIA_API_KEY ausente; publicando sem hero"
+        )
+        return
+
+    candidates = getattr(draft, "media_candidates", None) or []
+    alt_fallback = getattr(getattr(draft, "content", None), "title", None)
+    try:
+        from .cinerie.media_selection import ingest_hero_image, select_hero_candidate
+        from .cinerie.request import primary_source_display_name
+
+        # A URL da capa e conhecida ANTES da ingestao (selecao pura); ela vira
+        # exclusao das imagens de corpo e proveniencia no registro local.
+        hero_candidate = select_hero_candidate(candidates, alt_fallback=alt_fallback)
+        media_result = ingest_hero_image(
+            article_id=str(article_id),
+            image_candidates=candidates,
+            source_name=primary_source_display_name(draft) or "",
+            client=client,
+            media_api_key=MNSCR_CINERIE_MEDIA_API_KEY,
+            alt_fallback=alt_fallback,
+        )
+    except Exception as exc:  # noqa: BLE001 - imagem NUNCA custa a materia publicada
+        logger.warning(
+            "[CINERIE_MEDIA] ingestao levantou %s para article_id=%s: %s; "
+            "a materia publicada segue valida, sem hero",
+            type(exc).__name__, article_id, exc,
+        )
+        return
+
+    _ingest_body_media_best_effort(
+        draft,
+        article_id=str(article_id),
+        client=client,
+        store=store,
+        hero_result=media_result,
+        hero_url=(hero_candidate or {}).get("url"),
+        hero_alt=(hero_candidate or {}).get("alt"),
+        alt_fallback=alt_fallback,
+    )
+
+    if media_result is None:
+        return
+
+    try:
+        from .cinerie.media_selection import point_hero_media
+
+        hero = point_hero_media(
+            article_id=str(article_id),
+            media_id=media_result.media_id,
+            client=client,
+            media_api_key=MNSCR_CINERIE_MEDIA_API_KEY,
+        )
+    except Exception as exc:  # noqa: BLE001 - a capa NUNCA custa a materia publicada
+        logger.warning(
+            "[CINERIE_MEDIA] passo da capa levantou %s para article_id=%s mediaId=%s: %s; "
+            "a materia publicada segue valida, sem capa",
+            type(exc).__name__, article_id, media_result.media_id, exc,
+        )
+        return
+
+    if hero is None:
+        # O motivo ja saiu classificado em `point_hero_media` — conflito de
+        # ESTADO ou recusa de outra natureza. Repetir aqui so somaria ruido.
+        return
+
+    logger.info(
+        "[CINERIE_MEDIA] capa apontada mediaId=%s -> article_id=%s outcome=%s previous=%s",
+        hero.media_id, hero.article_id, hero.outcome, hero.previous_media_id or "-",
+    )
+
+
+def _ingest_body_media_best_effort(
+    draft,
+    *,
+    article_id: str,
+    client,
+    store,
+    hero_result,
+    hero_url,
+    hero_alt,
+    alt_fallback,
+) -> None:
+    """Imagens de CORPO (ate 3, sem repetir a capa) + registro local dos ids.
+
+    Mesma promessa das demais etapas de midia: NADA escapa daqui. O registro em
+    ``cinerie_media_assets`` e o que permite a uma revisao legitima posterior
+    referenciar esses ``mediaId`` em ``media[]`` e blocos ``image`` — sem
+    revisao sintetica, sem reingerir bytes.
+    """
+    event_key = str(getattr(draft, "event_key", "") or "")
+    try:
+        from .cinerie.media_selection import ingest_body_images
+        from .cinerie.request import primary_source_display_name
+
+        body_images = ingest_body_images(
+            article_id=article_id,
+            image_candidates=getattr(draft, "media_candidates", None) or [],
+            exclude_urls=[hero_url] if hero_url else [],
+            exclude_content_hashes=(
+                [hero_result.content_hash] if hero_result is not None else []
+            ),
+            source_name=primary_source_display_name(draft) or "",
+            client=client,
+            media_api_key=MNSCR_CINERIE_MEDIA_API_KEY,
+            alt_fallback=alt_fallback,
+        )
+    except Exception as exc:  # noqa: BLE001 - imagem NUNCA custa a materia publicada
+        logger.warning(
+            "[CINERIE_MEDIA] imagens de corpo levantaram %s para article_id=%s: %s; seguindo",
+            type(exc).__name__, article_id, exc,
+        )
+        body_images = []
+
+    if store is None or not event_key:
+        return
+    try:
+        if hero_result is not None:
+            store.record_media_asset(
+                source_cluster_id=event_key,
+                article_id=article_id,
+                media_id=hero_result.media_id,
+                source_url=hero_url,
+                alt=hero_alt or alt_fallback,
+                role="hero",
+                outcome=hero_result.outcome,
+            )
+        for image in body_images:
+            store.record_media_asset(
+                source_cluster_id=event_key,
+                article_id=article_id,
+                media_id=image["media_id"],
+                source_url=image.get("url"),
+                alt=image.get("alt"),
+                role="inline",
+                outcome=image.get("outcome"),
+            )
+        if hero_result is not None or body_images:
+            logger.info(
+                "[CINERIE_MEDIA] registradas %s midia(s) para o cluster %s "
+                "(capa=%s, corpo=%s)",
+                (1 if hero_result is not None else 0) + len(body_images),
+                event_key,
+                getattr(hero_result, "media_id", None) or "-",
+                len(body_images),
+            )
+    except Exception as exc:  # noqa: BLE001 - registro local nunca custa a materia
+        logger.warning(
+            "[CINERIE_MEDIA] falha ao registrar midia local (%s) cluster=%s: %s",
+            type(exc).__name__, event_key, exc,
+        )
+
+
+def _publish_to_cinerie(draft, art_data):
+    """Pede publicacao governada ao Cinerie, quando o modo e AUTO_PUBLISH.
+
+    Canal SEPARADO do envio de rascunho acima: outro contrato, outro endpoint,
+    outro escopo. Roda por ultimo pelo mesmo motivo — o artefato local ja esta
+    gravado, entao uma falha aqui nunca custa a copia local.
+
+    O servico recusa antes de qualquer socket quando o gate bloqueou, quando o
+    contrato divergiu ou quando o pedido nao passa na validacao local.
+    """
+    from .cinerie_service import MODE_AUTO_PUBLISH, resolve_delivery_mode
+
+    try:
+        mode = resolve_delivery_mode(MNSCR_DELIVERY_MODE, environment=MNSCR_ENVIRONMENT)
+    except Exception as exc:  # noqa: BLE001 - configuracao invalida nunca publica
+        logger.error("[CINERIE_PUBLICATION] modo de entrega invalido (%s); nada foi enviado", exc)
+        return None
+
+    if mode != MODE_AUTO_PUBLISH:
+        return None
+
+    service = None
+    try:
+        from .cinerie.client import CinerieClient, CinerieConfig
+        from .cinerie.preflight import ContractPreflight
+        from .cinerie_service import CinerieService
+        from .cinerie_store import CinerieStore
+        from .delivery.retry import RetryPolicy
+
+        client = CinerieClient(
+            CinerieConfig(
+                base_url=PAYLOAD_INTERNAL_SERVICE_URL,
+                api_key=MNSCR_PAYLOAD_API_KEY,
+                timeout_seconds=MNSCR_CINERIE_TIMEOUT_SECONDS,
+            )
+        )
+        service = CinerieService(
+            store=CinerieStore(),
+            client=client,
+            public_author_id=MNSCR_PUBLIC_AUTHOR_ID,
+            attribution_mode=MNSCR_ATTRIBUTION_MODE,
+            delivery_mode=mode,
+            preflight=ContractPreflight(
+                client, ttl_seconds=MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS
+            ),
+            retry_policy=RetryPolicy(
+                max_attempts=MNSCR_CINERIE_MAX_ATTEMPTS,
+                base_seconds=MNSCR_CINERIE_RETRY_BASE_SECONDS,
+            ),
+            entity_resolver=_build_entity_resolver(),
+            entity_card_max=MNSCR_CINERIE_ENTITY_CARD_MAX,
+            entity_match_kinds=MNSCR_CINERIE_ENTITY_MATCH_KINDS,
+        )
+        result = service.publish_draft(
+            draft,
+            seo_source=getattr(draft, "seo_source", None) or art_data.get("_seo_source"),
+        )
+        logger.info("[CINERIE_PUBLICATION] draft_id=%s %s", draft.draft_id, result.safe_log_fields())
+        log_cinerie_quota_deferrals([result])
+        _ingest_hero_media_best_effort(draft, result, client, store=service.store)
+        return result
+    except Exception as exc:  # noqa: BLE001 - o draft local nunca pode ser perdido
+        logger.exception(
+            "[CINERIE_PUBLICATION] draft_id=%s falha inesperada (%s); "
+            "o draft local permanece intacto",
+            draft.draft_id, type(exc).__name__,
+        )
+        return None
+    finally:
+        if service is not None:
+            service.store.close()
+
+
+def log_cinerie_quota_deferrals(results) -> Dict[str, int]:
+    """Registra o que o servidor adiou, sem criar uma cota local concorrente."""
+    counts: Dict[str, int] = {}
+    deferred_total = 0
+    for result in results:
+        if getattr(result, "outcome", None) != "DEFERRED":
+            continue
+        deferred_total += 1
+        dimensions = [
+            code for code in (getattr(result, "reason_codes", None) or [])
+            if re.fullmatch(r"[A-Z0-9_]{1,80}_DAILY_LIMIT_REACHED", str(code))
+        ] or ["DIMENSION_NOT_DECLARED"]
+        for dimension in dimensions:
+            counts[dimension] = counts.get(dimension, 0) + 1
+
+    fields = " ".join(f"{name}={count}" for name, count in sorted(counts.items()))
+    logger.info(
+        "[CINERIE_QUOTA_DEFERRALS] deferred_total=%s dimensions=%s",
+        deferred_total,
+        fields or "none",
+    )
+    return counts
+
+
+def _load_local_draft(draft_id: str):
+    from .gate_service import draft_from_artifact
+
+    path = Path(LOCAL_DRAFT_DIR) / f"{draft_id}.json"
+    if not path.is_file():
+        return None
+    return draft_from_artifact(json.loads(path.read_text(encoding="utf-8")))
+
+
+@contextmanager
+def cinerie_dispatch_lock_heartbeat(
+    db_path: str,
+    owner: str,
+    *,
+    lease_seconds: int,
+):
+    """Renova o lock de processo enquanto uma passada pode estar em I/O remoto."""
+    from .cinerie_store import CinerieStore
+
+    stop = threading.Event()
+    lost = threading.Event()
+    interval = max(0.1, float(lease_seconds) / 3.0)
+
+    def maintain() -> None:
+        heartbeat_store = None
+        try:
+            heartbeat_store = CinerieStore(db_path)
+            while not stop.wait(interval):
+                try:
+                    renewed = heartbeat_store.acquire_dispatch_lock(
+                        owner=owner,
+                        lease_seconds=max(1, lease_seconds),
+                    )
+                except Exception:
+                    logger.exception("[CINERIE_DISPATCH_LOCK] state=heartbeat_failed")
+                    lost.set()
+                    return
+                if not renewed:
+                    lost.set()
+                    return
+        except Exception:
+            logger.exception("[CINERIE_DISPATCH_LOCK] state=heartbeat_start_failed")
+            lost.set()
+        finally:
+            if heartbeat_store is not None:
+                heartbeat_store.close()
+
+    thread = threading.Thread(target=maintain, daemon=True, name="cinerie-lock-heartbeat")
+    thread.start()
+    try:
+        yield lost
+    finally:
+        stop.set()
+        thread.join(timeout=interval + 5.0)
+
+
+def _dispatch_cinerie_pending_once() -> None:
+    """Executa uma passada finita fora da thread de ingestão."""
+    from .cinerie.client import CinerieClient, CinerieConfig
+    from .cinerie.preflight import ContractPreflight
+    from .cinerie_service import CinerieService
+    from .cinerie_store import CinerieStore
+    from .delivery.retry import RetryPolicy
+
+    owner = f"{os.getpid()}:{uuid.uuid4().hex}"
+    store = CinerieStore()
+    lock_acquired = False
+    try:
+        lock_acquired = store.acquire_dispatch_lock(
+            owner=owner,
+            lease_seconds=CINERIE_DISPATCH_LEASE_SECONDS,
+        )
+        if not lock_acquired:
+            logger.info("[CINERIE_DISPATCH] process_lock=busy action=skipped")
+            return
+
+        client = CinerieClient(
+            CinerieConfig(
+                base_url=PAYLOAD_INTERNAL_SERVICE_URL,
+                api_key=MNSCR_PAYLOAD_API_KEY,
+                timeout_seconds=MNSCR_CINERIE_TIMEOUT_SECONDS,
+            )
+        )
+        service = CinerieService(
+            store=store,
+            client=client,
+            public_author_id=MNSCR_PUBLIC_AUTHOR_ID,
+            attribution_mode=MNSCR_ATTRIBUTION_MODE,
+            delivery_mode="AUTO_PUBLISH",
+            preflight=ContractPreflight(
+                client, ttl_seconds=MNSCR_CONTRACT_PREFLIGHT_TTL_SECONDS
+            ),
+            retry_policy=RetryPolicy(
+                max_attempts=MNSCR_CINERIE_MAX_ATTEMPTS,
+                base_seconds=MNSCR_CINERIE_RETRY_BASE_SECONDS,
+            ),
+            entity_resolver=_build_entity_resolver(),
+            entity_card_max=MNSCR_CINERIE_ENTITY_CARD_MAX,
+            entity_match_kinds=MNSCR_CINERIE_ENTITY_MATCH_KINDS,
+        )
+        with cinerie_dispatch_lock_heartbeat(
+            store.db_path,
+            owner,
+            lease_seconds=max(1, CINERIE_DISPATCH_LEASE_SECONDS),
+        ) as lock_lost:
+            results = service.dispatch_pending(
+                worker_id=owner,
+                draft_loader=_load_local_draft,
+                limit=CINERIE_DISPATCH_LIMIT,
+                lease_seconds=CINERIE_DISPATCH_LEASE_SECONDS,
+            )
+            if lock_lost.is_set():
+                logger.error("[CINERIE_DISPATCH_LOCK] state=lost owner=%s", owner)
+        log_cinerie_quota_deferrals(results)
+    except Exception as exc:  # noqa: BLE001 - despacho não derruba ingestão
+        logger.exception("[CINERIE_DISPATCH] status=failed error=%s", type(exc).__name__)
+    finally:
+        if lock_acquired:
+            store.release_dispatch_lock(owner=owner)
+        store.close()
+
+
+def schedule_cinerie_dispatch() -> bool:
+    """Agenda sem bloquear o ciclo; não acumula passadas neste processo."""
+    from .cinerie_service import MODE_AUTO_PUBLISH, resolve_delivery_mode
+
+    try:
+        mode = resolve_delivery_mode(MNSCR_DELIVERY_MODE, environment=MNSCR_ENVIRONMENT)
+    except Exception as exc:  # noqa: BLE001 - startup valida; aqui falha fechado
+        logger.error(
+            "[CINERIE_DISPATCH] action=skipped reason=invalid_delivery_mode error=%s",
+            type(exc).__name__,
+        )
+        return False
+    if mode != MODE_AUTO_PUBLISH:
+        logger.info("[CINERIE_DISPATCH] action=skipped reason=delivery_mode_not_auto_publish")
+        return False
+
+    global _cinerie_dispatch_future
+    with _cinerie_dispatch_guard:
+        if _cinerie_dispatch_future is not None and not _cinerie_dispatch_future.done():
+            logger.info("[CINERIE_DISPATCH] process_lock=local_busy action=skipped")
+            return False
+        _cinerie_dispatch_future = _cinerie_dispatch_executor.submit(
+            _dispatch_cinerie_pending_once
+        )
+    return True
+
+
 def _run_factual_assessment(draft, art_data):
     """Build and persist the factual picture for this draft.
 
@@ -1873,7 +2778,9 @@ def _run_factual_assessment(draft, art_data):
     store = None
     try:
         assessment = build_factual_assessment(
-            draft, _source_material_for(art_data), claim_response=art_data.get("_claim_response")
+            draft,
+            _source_material_for(art_data),
+            claim_response=_claim_response_for(draft, art_data),
         )
         store = FactualStore()
         store.save_assessment(assessment)
@@ -1887,6 +2794,31 @@ def _run_factual_assessment(draft, art_data):
     finally:
         if store is not None:
             store.close()
+
+
+def _claim_response_for(draft, art_data):
+    """Resposta bruta da camada semântica de claims, quando o modo pede uma.
+
+    Um ``_claim_response`` já presente em ``art_data`` vence: é assim que o
+    replay reprocessa com a resposta original e que os testes injetam uma
+    resposta fixa sem tocar a rede.
+
+    Em ``deterministic`` não há chamada — e a ausência é registrada pelo próprio
+    ``build_factual_assessment`` como ``DETERMINISTIC_MODE_ONLY_PATTERN_CLAIMS``,
+    não aqui: um único lugar decide o que a ausência significa.
+    """
+    injected = art_data.get("_claim_response")
+    if injected is not None:
+        return injected
+
+    from .factual.states import MODE_DETERMINISTIC
+
+    if FACTUAL_ASSESSMENT_MODE == MODE_DETERMINISTIC:
+        return None
+
+    from .factual_ai import request_claim_extraction
+
+    return request_claim_extraction(draft)
 
 
 def _source_material_for(art_data):
@@ -1911,12 +2843,25 @@ def _source_material_for(art_data):
                 "canonical_url": doc.get("canonical_url"),
             }
         )
-    if not material and art_data.get("content"):
+    # No caminho de fonte unica o texto extraido vive em art_data['extracted'],
+    # nao no topo: o dicionario montado em worker_loop guarda a extracao inteira
+    # sob essa chave. Ler so o topo devolvia lista vazia para TODO artigo nao
+    # clusterizado, e a avaliacao factual saia com zero evidencia e cobertura
+    # 0.0 — sem erro nenhum no caminho, porque lista vazia e um valor legitimo.
+    extracted = art_data.get("extracted")
+    extracted = extracted if isinstance(extracted, dict) else {}
+    single_content = (
+        extracted.get("content")
+        or art_data.get("content")
+        or art_data.get("content_html")
+        or ""
+    )
+    if not material and single_content:
         material.append(
             {
                 "url": art_data.get("url") or art_data.get("canonical_url"),
-                "content": art_data.get("content"),
-                "title": art_data.get("title"),
+                "content": single_content,
+                "title": extracted.get("title") or art_data.get("title"),
                 "source_name": art_data.get("fonte_nome"),
                 "source_domain": art_data.get("domain"),
                 "is_primary": True,
@@ -2001,15 +2946,27 @@ def _resolve_input_event(art_data: Dict[str, Any]):
     if attached is not None:
         return attached
 
-    event_key = art_data.get("event_key") or (art_data.get("cluster_item") or {}).get("event_key")
+    event_ref = art_data.get("_input_event_ref")
+    if event_ref is not None:
+        if not isinstance(event_ref, dict) or event_ref.get("schema") != "rssprime-event-reference-v1":
+            logger.warning("[EVENT_REFERENCE] referencia de fila invalida ou desconhecida")
+            return None
+        event_key = event_ref.get("event_key")
+        revision = event_ref.get("revision")
+    else:
+        # Legacy payloads predate the event-reference queue format.  They are
+        # still consumable without rewriting their persisted JSON.
+        event_key = art_data.get("event_key") or (art_data.get("cluster_item") or {}).get("event_key")
+        revision = None
     if not event_key:
         return None
 
     store = None
     try:
         store = EventStore()
-        stored = store.get_event(str(event_key))
+        stored = store.get_event(str(event_key), int(revision) if revision is not None else None)
         if stored is None or not stored.normalized_payload:
+            logger.warning("[EVENT_REFERENCE] evento ausente event_key=%s revision=%s", event_key, revision)
             return None
         return stored.to_event()
     except Exception as exc:  # noqa: BLE001 - provenance is best-effort, never fatal
@@ -2054,6 +3011,7 @@ def apply_input_contract(
                 enriched = dict(item)
                 enriched["_input_event"] = outcome.event
                 enriched["event_key"] = outcome.event.event_key
+                enriched["event_revision"] = outcome.event.revision
                 enriched.setdefault("topic", outcome.event.topic)
                 accepted.append(enriched)
                 continue
@@ -2085,7 +3043,7 @@ def process_stored_event(event) -> Dict[str, Any]:
     """
     db = Database()
     try:
-        article = db.get_article_by_event_key(event.event_key)
+        article = db.get_article_by_event_key(event.event_key, event.revision)
         if article is None:
             raise RuntimeError(
                 f"Evento '{event.event_key}' nao tem artigo correspondente em seen_articles; "
@@ -2095,6 +3053,7 @@ def process_stored_event(event) -> Dict[str, Any]:
         article["db_id"] = article.get("id")
         article["_input_event"] = event
         article["event_key"] = event.event_key
+        article["event_revision"] = event.revision
         db.reset_article_for_replay(int(article["db_id"]))
     finally:
         db.close()
@@ -2104,7 +3063,7 @@ def process_stored_event(event) -> Dict[str, Any]:
 
     db = Database()
     try:
-        refreshed = db.get_article_by_event_key(event.event_key) or {}
+        refreshed = db.get_article_by_event_key(event.event_key, event.revision) or {}
     finally:
         db.close()
     return {
@@ -2123,13 +3082,18 @@ def _build_link_map_for_replay() -> Dict[str, Any]:
         return {}
 
 
-def run_pipeline_cycle():
-    """Read feeds and enqueue articles for the worker."""
+def run_pipeline_cycle(*, start_worker: bool = True, skip_pending_guard: bool = False):
+    """Read feeds and enqueue articles for the worker or a bounded synchronous run."""
     initialize_runtime()
-    ensure_worker_started()
-    if pipeline_has_pending_work():
-        logger.warning("[CYCLE_GUARD] Ciclo ignorado: worker/fila ainda processando ciclo anterior.")
-        return
+    reconcile_event_tasks()
+    schedule_cinerie_dispatch()
+    if start_worker:
+        ensure_worker_started()
+    # A persistent backlog is data, not proof that a worker is alive.  Queue
+    # uniqueness and claims make a fresh ingestion pass safe while the daemon
+    # drains; skipping here was the false-success path of --once.
+    if not skip_pending_guard:
+        pipeline_has_pending_work()
 
     logger.info("Starting new pipeline ingestion cycle.")
 

@@ -3,3 +3,8 @@
 *.sh  text eol=lf
 *.bat text eol=crlf
 *.ps1 text eol=crlf
+
+# O hash do contrato do Cinerie e calculado sobre os BYTES do arquivo. Qualquer
+# normalizacao de fim de linha mudaria o hash e faria o preflight recusar toda
+# publicacao — em outra maquina, sem nada no diff que explicasse por que.
+contracts/cinerie/** -text

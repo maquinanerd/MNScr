@@ -43,7 +43,9 @@ ESTRUTURA FIXA DO TOPO:
   "resultados": [ /* 1 ou N objetos, um por artigo, na mesma ordem da entrada */ ]
 }
 NUNCA devolva texto fora do JSON. NUNCA inclua comentários. NUNCA mude os nomes de chaves.
-Cada artigo DEVE conter: "titulo_final", "conteudo_final", "meta_description", "subtitle", "focus_keyphrase", "related_keyphrases", "slug", "categorias", "tags_sugeridas", "yoast_meta".
+Cada artigo DEVE conter: "titulo_final", "conteudo_final", "meta_description", "subtitle", "focus_keyphrase", "related_keyphrases", "slug", "categorias", "tags_sugeridas".
+Campos opcionais: "openGraphTitleSuggestion", "openGraphDescriptionSuggestion", "twitterTitleSuggestion", "twitterDescriptionSuggestion".
+NUNCA gere canonical, robots, noindex, JSON-LD, publisher, sitemap, datas de publicacao, post_status nem qualquer campo yoast_*: essas decisoes pertencem ao lado publico.
 
 **2. VALIDAÇÃO DE TÍTULO (titulo_final)**
 ✅ OBRIGATÓRIO: Cada título DEVE passar no CHECKLIST:
@@ -1053,9 +1055,14 @@ class AIProcessor:
                 logger.warning(f"AI returned a rejection error: {result['erro']}")
                 return result
 
+            # `yoast_meta` saiu da lista de obrigatorios: o objeto de um plugin
+            # de WordPress nao e mais parte da saida. As sugestoes sociais viraram
+            # campos neutros e OPCIONAIS — uma materia sem titulo de Open Graph e
+            # uma materia completa, e exigi-lo fazia toda a resposta ser
+            # descartada por causa de um campo acessorio.
             required_keys = [
                 "titulo_final", "conteudo_final", "meta_description",
-                "focus_keyphrase", "tags_sugeridas", "yoast_meta"
+                "focus_keyphrase", "tags_sugeridas"
             ]
             missing_keys = [key for key in required_keys if key not in result]
 
@@ -1087,9 +1094,14 @@ class AIProcessor:
                 # For now, returning None as the original logic did.
                 return None
 
+            # `yoast_meta` saiu da lista de obrigatorios: o objeto de um plugin
+            # de WordPress nao e mais parte da saida. As sugestoes sociais viraram
+            # campos neutros e OPCIONAIS — uma materia sem titulo de Open Graph e
+            # uma materia completa, e exigi-lo fazia toda a resposta ser
+            # descartada por causa de um campo acessorio.
             required_keys = [
                 "titulo_final", "conteudo_final", "meta_description",
-                "focus_keyphrase", "tags_sugeridas", "yoast_meta"
+                "focus_keyphrase", "tags_sugeridas"
             ]
 
             valid_results: List[Optional[Dict[str, Any]]] = []

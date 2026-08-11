@@ -1,0 +1,49 @@
+{
+  "sourceRepository": "screen-app",
+  "sourceCommit": "4279abd6d1cfdb5b42fbcfbffae7afe54bc9145b",
+  "sourceCommitShort": "4279abd",
+  "sourceCommitSubject": "estado de origin/main verificado em 2026-08-05",
+  "previousSourceCommit": "f4c49c4dd276c6a362285cd57b39b0b053580561",
+  "sourcePackage": "packages/editorial-contracts",
+  "contractName": "editorial-publication-request-v1",
+  "contractVersion": "1.0.0",
+  "schemaHash": "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8",
+  "schemaPath": "contracts/cinerie/editorial-publication-request-v1.schema.json",
+  "manifestPath": "contracts/cinerie/contract-manifest.json",
+  "seoPolicyPath": "contracts/cinerie/seo-policy.json",
+  "fixturesPath": "contracts/cinerie/fixtures/publication-fixtures.json",
+  "generation": {
+    "how": "z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' }) executado sobre o proprio Zod do Screen-App, seguido de canonicalJson() do repositorio de origem",
+    "why": "o JSON Schema gerado e a fonte cross-language; traduzir o Zod a mao criaria uma segunda fonte de verdade que diverge no primeiro campo novo",
+    "bytesAreCanonical": true,
+    "hashIsOverFileBytes": true
+  },
+  "revalidation": {
+    "at": "2026-08-05",
+    "from": "f4c49c4",
+    "to": "4279abd",
+    "verdict": "o contrato do PEDIDO nao mudou; nenhum artefato foi regerado",
+    "method": "comparacao dos blobs de packages/editorial-contracts/src nos dois commits via `gh api`, mais o hash publicado pelo proprio repo em docs/runbooks/mnscr-integration-contract.md no ref 4279abd",
+    "unchangedBlobs": {
+      "editorial-publication-request-v1.ts": "5b366dc15ff7c176f22bc38dda4a84c07cd3f81b",
+      "seo-proposal.ts": "d140e2688de65a28182b6cdf30828b47a141e484",
+      "publication-fixtures.ts": "15fa6d5aba0c1b3a2ae37b8fe60f3bd2cfcfad2c",
+      "manifest.ts": "8bc9241a0e42c4fc71188e5a3e27060e00470e42",
+      "editorial-draft-v1.ts": "fd33ec3d0724012de14bcdaf2a1cf3076a9565e7",
+      "cinerie-editorial-context-v1.ts": "29a419c6b493e2903ab76a8bcfedff1ceebb0348"
+    },
+    "changedBlobs": {
+      "blocks.ts": "33adddb -> e4b3143",
+      "common.ts": "1bb8412 -> 17e80ee",
+      "publication-event-v1.ts": "915fc5c -> bcfb9a9"
+    }
+  },
+  "notes": [
+    "Os bytes deste schema sao a serializacao CANONICA (chaves ordenadas, sem espacos) usada pelo Screen-App para calcular o hash. Por isso o Python confere o hash sobre os bytes do arquivo, sem reimplementar a canonicalizacao.",
+    "schemaHash NAO e uma constante permanente: e recalculado do arquivo em tempo de execucao e conferido contra o manifesto e contra o preflight. O valor acima registra o que foi copiado, nao o que o codigo assume.",
+    "As regras de superRefine do Zod (tamanho minimo de title/metaDescription, exigencia de fonte externa, update sem alvo, alt para midia ausente, deduplicacao de keyphrases) NAO sao representaveis em JSON Schema e ficam ausentes deste arquivo. Elas sao reimplementadas em app/cinerie/refinements.py e verificadas contra as fixtures invalidas do proprio Cinerie.",
+    "Por que `blocks.ts` e `common.ts` mudarem NAO muda o hash do pedido: as duas mudancas sao ADITIVAS e servem ao corpo PUBLICADO, nao ao pedido. `blocks.ts` ganhou `textMark`, `publishedParagraphBlock` e `publishedEditorialBlock` DEPOIS da definicao de `editorialBody` — que e o unico simbolo que o pedido importa de la. `common.ts` ganhou a chave `LIMITS.marks`, consumida so por `publishedParagraphBlock`. Nenhuma primitiva do pedido mudou de forma.",
+    "Isso tambem explica o unico hash que mudou no manifesto: `publication-event-v1`, que e o contrato de SAIDA e usa `publishedEditorialBlock`. O MNScr nao o consome — quem consome e o worker de projecao.",
+    "NAO CONFIRMADO: o hash de `publication-event-v1` (sha256:e9b0430a...) foi copiado do manifesto publicado para 4279abd, e NAO recomputado nesta maquina — recomputar exigiria clonar o monorepo privado e executar o gerador em TypeScript. A mudanca do blob de origem corrobora que ele mudou, mas o VALOR nao foi verificado aqui. Nenhum codigo do MNScr le essa entrada: `app/cinerie/contract.py` confere apenas a entrada do proprio contrato de pedido, e o preflight so compara a entrada de `editorial-publication-request-v1`."
+  ]
+}

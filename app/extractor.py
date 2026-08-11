@@ -10,6 +10,10 @@ import requests
 from bs4 import BeautifulSoup
 
 from .config import USER_AGENT
+from .safe_http import UnsafeUrlError, safe_get
+
+#: Teto de bytes de uma pagina de artigo.
+ARTICLE_MAX_BYTES = 8 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -463,12 +467,29 @@ def _html_word_count_without_x_embeds(content_html: str) -> int:
 
 # --- New helper functions from user prompt ---
 def _get(url, timeout=25, tries=2):
+    """Busca a pagina do artigo com destino verificado e corpo limitado.
+
+    A URL vem do feed, ou seja, de fora. `requests.get(..., allow_redirects=True)`
+    entregava o redirect sem exame nenhum: a primeira URL podia ser inocente e o
+    `Location` apontar para a rede interna. Ver `app/safe_http.py`.
+
+    `UnsafeUrlError` NAO e retentavel — insistir num destino proibido nao muda a
+    resposta, so repete a tentativa de alcancar a rede interna.
+    """
     last_err = None
     for _ in range(tries):
         try:
-            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout, allow_redirects=True)
-            if 200 <= r.status_code < 300 and "text/html" in r.headers.get("Content-Type",""):
-                return r
+            resultado = safe_get(
+                url,
+                headers={"User-Agent": USER_AGENT},
+                read_timeout=timeout,
+                max_bytes=ARTICLE_MAX_BYTES,
+            )
+            tipo = (resultado.headers.get("Content-Type") or "")
+            if 200 <= resultado.status_code < 300 and "text/html" in tipo:
+                return _RespostaCompativel(resultado)
+        except UnsafeUrlError:
+            raise
         except Exception as e:
             last_err = e
         time.sleep(0.6)
@@ -476,10 +497,54 @@ def _get(url, timeout=25, tries=2):
         raise last_err
     raise RuntimeError(f"HTTP error fetching {url}")
 
+
+class _RespostaCompativel:
+    """Casca com a forma de `requests.Response` que o resto do modulo espera.
+
+    Trocar o cliente nao deveria obrigar a reescrever quem consome o resultado;
+    aqui so os tres atributos usados a jusante sao expostos.
+    """
+
+    __slots__ = ("_resultado",)
+
+    def __init__(self, resultado):
+        self._resultado = resultado
+
+    @property
+    def content(self) -> bytes:
+        return self._resultado.content
+
+    @property
+    def text(self) -> str:
+        return self._resultado.content.decode("utf-8", errors="replace")
+
+    @property
+    def status_code(self) -> int:
+        return self._resultado.status_code
+
+    @property
+    def headers(self) -> dict:
+        return self._resultado.headers
+
+    @property
+    def url(self) -> str:
+        return self._resultado.url
+
 def _clean_text(s):
     if not s:
         return ""
     return re.sub(r"[ \t]+", " ", html.unescape(s)).strip()
+
+def _collapse_ws(s: str) -> str:
+    """Espacos em branco viram UM espaco. Complemento de `get_text(" ")`.
+
+    `get_text(" ")` poe um separador entre cada pedaco de texto; onde a marcacao
+    ja tinha espaco, sobram dois. Colapsar depois e o que deixa a legenda com o
+    espacamento que o leitor veria.
+    """
+    if not s:
+        return ""
+    return re.sub(r"\s+", " ", str(s)).strip()
 
 def _warn_trafilatura_unavailable(context: str) -> None:
     global _TRAFILATURA_WARNING_EMITTED
@@ -820,7 +885,12 @@ def _clean_english_captions(soup: BeautifulSoup, domain: str, base_url: str = ""
     """
     captured: Dict[str, str] = {}
     for figcaption in soup.find_all('figcaption'):
-        caption_text = figcaption.get_text(strip=True)
+        # COM separador. Sem ele o BeautifulSoup emenda os pedacos: a legenda
+        # `<span>'Made in Korea' Season 2</span><span>Disney/Hulu</span>` saia
+        # como `Season 2Disney/Hulu`, duas palavras coladas, e essa legenda vira
+        # texto publicado (`alt` da imagem, credito). Ver
+        # `collect_image_captions_from_article`, que ja fazia certo.
+        caption_text = _collapse_ws(figcaption.get_text(" ", strip=True))
         if caption_text and _is_likely_english_caption(caption_text):
             captured.update(_capture_figure_caption(figcaption, caption_text, base_url))
             logger.info(f"INFO ({domain}): Removendo legenda em inglês: {caption_text[:60]}")
@@ -974,7 +1044,10 @@ class ContentExtractor:
             fig = soup.new_tag('figure')
             img = soup.new_tag('img', src=img_url)
             cap = soup.new_tag('figcaption')
-            caption_text = div.get_text(strip=True)
+            # Mesmo defeito de `_clean_english_captions`: o `div` costuma ter
+            # legenda e credito em elementos irmaos, e sem separador os dois
+            # saem colados — aqui direto no `alt` da imagem.
+            caption_text = _collapse_ws(div.get_text(" ", strip=True))
             if caption_text:
                 cap.string = caption_text
                 img['alt'] = caption_text
