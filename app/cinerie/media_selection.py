@@ -16,7 +16,7 @@ SO em ``CinerieClient.ingest_editorial_media``, em ``client.py``):
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Final, Mapping, Optional, Sequence
 
 from .errors import MediaHeroError, MediaIngestError
 from .media_client import MAX_MEDIA_BYTES, MediaHeroResult, MediaIngestResult

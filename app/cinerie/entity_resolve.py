@@ -41,7 +41,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, Final, List, Mapping, Optional, Sequence, Tuple
 
 from .identity import is_stable_id
@@ -153,6 +153,12 @@ class EntityCandidate:
     quem aparece no titulo e no lead e sobre o que a materia trata, e quem
     aparece so no decimo paragrafo e mencao. Ela desempata o corte de
     ``MAX_RESOLVE_ITEMS`` — nao a escolha das fichas, que e por confianca.
+
+    ``tmdb_id`` e o SEGUNDO campo de identidade, e ele e opcional por
+    construcao: quando existe, a rota casa por `tmdb_id` (confianca 1.0, e o
+    vinculo nasce verificado no Cinerie); quando nao existe, o item viaja como
+    sempre viajou e casa no maximo a 0.85. Nao existe estado intermediario, e
+    nao existe id palpitado — ver ``app.tmdb_lookup``.
     """
 
     name: str
@@ -160,12 +166,18 @@ class EntityCandidate:
     year: Optional[int] = None
     #: 0 = titulo, 1 = lead, 2 = corpo. Menor e mais proeminente.
     prominence: int = 2
+    #: Id da TMDB, quando a busca resolveu SEM ambiguidade. Nunca um palpite.
+    tmdb_id: Optional[int] = None
 
-    def as_resolve_item(self) -> Dict[str, Any]:
+    def as_resolve_item(self, *, with_tmdb_id: bool = True) -> Dict[str, Any]:
         """O item do lote, no formato do contrato.
 
         ``title`` e ``name`` sao o MESMO campo com dois nomes, e os dois sao
         aceitos; cada um vai com o nome que o tipo torna legivel.
+
+        ``with_tmdb_id=False`` monta a MESMA pergunta sem o id externo. Nao e
+        cosmetico: e a segunda pergunta de ``resolve_in_two_passes``, e o motivo
+        esta la.
         """
         item: Dict[str, Any] = {"kind": self.kind}
         if self.kind == "person":
@@ -174,6 +186,8 @@ class EntityCandidate:
             item["title"] = self.name
             if self.year is not None:
                 item["year"] = self.year
+        if with_tmdb_id and self.tmdb_id is not None:
+            item["tmdbId"] = int(self.tmdb_id)
         return item
 
 
@@ -262,6 +276,128 @@ def collect_entity_candidates(
         )
         ordenados = ordenados[: max(0, limit)]
     return ordenados
+
+
+# ===========================================================================
+# Identidade externa (TMDB)
+# ===========================================================================
+
+#: O motivo que a rota devolve quando o `tmdbId` enviado nao existe no catalogo
+#: do Cinerie. Medido ao vivo, e o achado que desenha ``resolve_in_two_passes``:
+#: nesse caso a rota **nao volta ao nome**. O item com id inexistente devolve
+#: `null` mesmo quando o mesmo item, sem o id, resolveria por `exact_name`.
+TMDB_ID_NOT_IN_CATALOG: Final[str] = "tmdb_id_not_in_catalog"
+
+#: Assinatura da busca de id externo: `(kind, nome, ano)` -> id, ou ``None``.
+#: Um `Callable` em vez do cliente inteiro mantem este modulo sem transporte.
+TmdbLookup = Callable[[str, str, Optional[int]], Optional[int]]
+
+
+def enrich_with_tmdb_ids(
+    candidates: Sequence[EntityCandidate], lookup: Optional[TmdbLookup]
+) -> List[EntityCandidate]:
+    """Devolve os candidatos com ``tmdb_id`` preenchido onde a busca resolveu.
+
+    Sem `lookup`, ou com a busca falhando, sai a MESMA lista que entrou — e essa
+    e a garantia que torna ligar isto seguro: o pior caso e o comportamento de
+    ontem.
+
+    A busca nunca derruba a materia. Uma excecao aqui viraria zero ficha e zero
+    vinculo por causa de um enriquecimento de enriquecimento.
+    """
+    if lookup is None:
+        return list(candidates)
+
+    enriquecidos: List[EntityCandidate] = []
+    for candidato in candidates:
+        achado: Optional[int] = None
+        try:
+            achado = lookup(candidato.kind, candidato.name, candidato.year)
+        except Exception as exc:  # noqa: BLE001 - id externo nunca custa a materia
+            logger.warning(
+                "[TMDB] busca levantou %s para %r: %s; item segue so com nome",
+                type(exc).__name__, candidato.name[:60], exc,
+            )
+        enriquecidos.append(
+            candidato if achado is None else replace(candidato, tmdb_id=int(achado))
+        )
+    return enriquecidos
+
+
+def _retry_indices(results: Any, candidates: Sequence[EntityCandidate]) -> List[int]:
+    """Quem merece a segunda pergunta: id externo recusado, mas nome disponivel."""
+    alvos: List[int] = []
+    linhas = results if isinstance(results, list) else []
+    for posicao, linha in enumerate(linhas):
+        if not isinstance(linha, Mapping):
+            continue
+        indice = linha.get("index")
+        indice = int(indice) if isinstance(indice, int) else posicao
+        if not 0 <= indice < len(candidates):
+            continue
+        candidato = candidates[indice]
+        if candidato.tmdb_id is None or not candidato.name:
+            continue
+        if collapse(linha.get("reason")) == TMDB_ID_NOT_IN_CATALOG:
+            alvos.append(indice)
+    return alvos
+
+
+def resolve_in_two_passes(
+    candidates: Sequence[EntityCandidate], resolver: EntityResolver
+) -> Optional[list]:
+    """`results` alinhado a ``candidates``, perguntando de novo o que o id derrubou.
+
+    **O achado que exige isto:** a rota nao tem plano B. Um item com `tmdbId`
+    que o catalogo do Cinerie nao conhece volta `tmdb_id_not_in_catalog` e
+    `entityId: null` — mesmo quando o MESMO item, sem o id, teria casado por
+    `exact_name`. Medido ao vivo: `{"kind":"person","name":"Cillian Murphy"}`
+    resolve; `{...,"tmdbId":999999999}` nao resolve.
+
+    Sem esta segunda passada, mandar o id seria uma aposta: ganharia 1.0 nas
+    entidades que o catalogo indexa por TMDB e **perderia o vinculo inteiro**
+    nas outras. Com ela, o id so pode melhorar — o caminho antigo continua
+    aberto para quem ele nao alcanca.
+
+    Sao no maximo DUAS chamadas por materia, e a segunda so leva os itens que a
+    primeira derrubou. O teto da rota e 60 por minuto por credencial; uma
+    chamada por entidade e o que ele existe para impedir, e nao e isto.
+    """
+    resultados = resolver([c.as_resolve_item() for c in candidates])
+    if resultados is None or not isinstance(resultados, list):
+        return resultados
+
+    alvos = _retry_indices(resultados, candidates)
+    if not alvos:
+        return resultados
+
+    logger.info(
+        "[CINERIE_ENTITY] %s item(ns) com tmdbId fora do catalogo; "
+        "repetindo a pergunta so com o nome",
+        len(alvos),
+    )
+    segundos = resolver(
+        [candidates[i].as_resolve_item(with_tmdb_id=False) for i in alvos]
+    )
+    if segundos is None or not isinstance(segundos, list):
+        # A primeira resposta ja e a verdade que temos. Falhar aqui devolve
+        # `null` para esses itens — que e o mesmo que teriam sem esta funcao.
+        return resultados
+
+    mesclados = list(resultados)
+    for posicao, linha in enumerate(segundos):
+        if not isinstance(linha, Mapping):
+            continue
+        local = linha.get("index")
+        local = int(local) if isinstance(local, int) else posicao
+        if not 0 <= local < len(alvos):
+            continue
+        original = alvos[local]
+        # O `index` e reescrito para a posicao ORIGINAL: `parse_resolution`
+        # alinha por ele, e um indice do segundo lote apontaria para o candidato
+        # errado — exatamente a falha que este modulo existe para impedir.
+        mesclados[original] = {**dict(linha), "index": original}
+    return mesclados
 
 
 # ===========================================================================
@@ -653,6 +789,10 @@ __all__ = [
     "MAX_RESOLVE_ITEMS",
     "RESOLVABLE_KINDS",
     "ResolvedEntity",
+    "TMDB_ID_NOT_IN_CATALOG",
+    "TmdbLookup",
+    "enrich_with_tmdb_ids",
+    "resolve_in_two_passes",
     "attach_entity_cards",
     "collect_entity_candidates",
     "fold",

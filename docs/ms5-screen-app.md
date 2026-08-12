@@ -134,6 +134,10 @@ sobre direito de uso que o MNScr não pode tomar sozinho.
 
 ## Fora do escopo da MS-5
 
-Entity linking, Knowledge Graph, embeddings, busca vetorial, TMDB, upload de
-mídia, aprovação humana, publicação automática, alteração do RSS Prime e
-qualquer mudança visual no Screen-App.
+Knowledge Graph, embeddings, busca vetorial, aprovação humana, alteração do RSS
+Prime e qualquer mudança visual no Screen-App.
+
+**O que saiu desta lista depois que a MS-5 fechou** — registrado aqui porque a
+lista original era lida como decisão permanente, e não era: *entity linking* e
+*TMDB* entraram em 08–12/08/2026 (`docs/tipos-de-bloco-cinerie.md`), assim como
+*upload de mídia* e *publicação automática*.

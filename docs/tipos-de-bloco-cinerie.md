@@ -96,6 +96,8 @@ Regras de emissao, todas verificadas em `tests/test_cinerie_entity_cards.py`:
   titulo (`Titulo (2026)`). Sem ano a rota responde `title_requires_year`, e
   colar o primeiro ano do texto num titulo qualquer produziria
   `exact_title_year` — o casamento mais confiante da rota — ancorado num chute;
+- **o item leva `tmdbId` desde 12/08/2026**, quando a busca na TMDB resolve sem
+  ambiguidade — ver a secao abaixo;
 - **falha vira zero ficha**, nunca ficha aproximada e nunca materia perdida.
   `503 resolve_failed` existe justamente para que falha de leitura NAO chegue ao
   emissor como "nao existe".
@@ -103,6 +105,52 @@ Regras de emissao, todas verificadas em `tests/test_cinerie_entity_cards.py`:
 O array `entityLinks[]` de topo **passou a sair preenchido em 11/08/2026**, da
 mesma resolucao e com a confianca EXATA da rota: ver "Relacao com
 `entityLinks[]`" abaixo.
+
+#### `tmdbId`: o segundo campo de identidade — 12/08/2026
+
+A resolucao funcionava e nao bastava. Medido ao vivo sobre oito materias reais:
+25 de 25 vinculos casaram por `exact_name`, valor **0.85**. O corte de
+auto-verificacao do Cinerie e **0.9**. Ou seja: nenhum vinculo de materia real
+nascia verificado — nao "poucos", **zero**. Nao era lento, era nunca.
+
+Duas coisas mantinham o unico casamento de confianca 1.0 fora de alcance, e as
+duas precisavam cair juntas:
+
+1. o item enviado carregava so `kind` + `name`/`title`+`year`;
+2. o MNScr nao descobria o `tmdb_id`, porque a credencial no `.env` era um
+   **token v4** guardado numa variavel chamada `TMDB_API_KEY`, e o endpoint v3
+   responde 401 com ela. Corrigido sem pedir chave nova: o modo de autenticacao
+   passou a ser deduzido da FORMA do valor (JWT -> `Bearer`, 32 hex ->
+   `api_key`), e o nome canonico e `TMDB_ACCESS_TOKEN`.
+
+**O achado que desenhou a implementacao inteira:** a rota **nao volta ao nome**
+quando o `tmdbId` nao esta no catalogo. Verificado ao vivo —
+`{"kind":"person","name":"Cillian Murphy"}` resolve por `exact_name`;
+`{...,"tmdbId":999999999}` responde `tmdb_id_not_in_catalog` e `entityId: null`.
+Mandar o id seria, portanto, uma **aposta**: ganharia 1.0 onde o catalogo indexa
+por TMDB e perderia o vinculo INTEIRO onde nao indexa.
+
+Por isso a resolucao tem duas passadas (`resolve_in_two_passes`): a segunda
+repete, **so com o nome**, os itens que o id derrubou. Sao no maximo duas
+chamadas por materia, e o id so pode melhorar o resultado.
+
+Do lado da TMDB, a regra e a mesma do resto deste modulo — `None` e inofensivo,
+id errado e mentira publicada:
+
+| busca na TMDB | resposta |
+| --- | --- |
+| um resultado com o nome EXATO | o id dele |
+| dois ou mais com o nome exato | `None` (homonimo) |
+| nenhum com o nome exato | `None` |
+
+"Chris Evans" — o ator e o apresentador — e o caso que a ADR usa para recusar
+baixar o corte para 0.85, e e o caso que cai em `None` aqui. Desempatar por
+popularidade publicaria "o mais famoso parecido".
+
+**Medido depois, sobre as MESMAS oito materias:** 25 vinculos (identico), e
+**15 deles (60%) passaram a casar por `tmdb_id` a 1.0**. Os 10 restantes sao
+todos homonimos reais na TMDB — "Tom Holland" tem 6 registros com o nome exato,
+"Christopher Nolan" tem 4 — e continuam a 0.85, que e o resultado honesto.
 
 ## Nao emitidos
 
@@ -222,13 +270,19 @@ inteiro, ate o `maxItems: 100` do contrato. Um teto de fichas em zero cala o
 corpo e nao a Home.
 
 **O que a rota NAO resolve, e por isso nunca vira vinculo:** `season` e
-`episode` respondem `unsupported_kind` (verificado contra a rota em 11/08), e
-`tmdb_id` — o unico casamento com confianca 1.0 — exige um identificador externo
-no item, que o MNScr nao envia e nao tem de onde tirar; item com id externo e sem
-titulo volta como `no_input`. Na pratica os dois casamentos alcancaveis sao
-`exact_title_year` (0.90) e `exact_name` (0.85).
+`episode` respondem `unsupported_kind` (verificado contra a rota em 11/08).
+Nenhuma entidade desses tipos chega a existir no MNScr, entao nao ha arvore a
+subir aqui.
 
-Travado por `tests/test_cinerie_entity_cards.py`, secao "`entityLinks[]`".
+~~`tmdb_id` exige um identificador externo que o MNScr nao tem de onde tirar~~ —
+**caiu em 12/08/2026.** Ele passou a ser alcancavel, e os tres casamentos estao
+em uso: 60% dos vinculos das oito materias de referencia casam por `tmdb_id`
+(1.0), o resto por `exact_name` (0.85). Ver "`tmdbId`: o segundo campo de
+identidade" acima. Item com id externo e sem titulo continua voltando
+`no_input`, mas o MNScr sempre manda os dois.
+
+Travado por `tests/test_cinerie_entity_cards.py`, secao "`entityLinks[]`", e por
+`tests/test_tmdb_id_reachable.py`.
 
 ### `factBox` — falta dado estruturado
 

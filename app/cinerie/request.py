@@ -35,11 +35,14 @@ from .contract import ContractIdentity, local_identity
 from .entity_resolve import (
     MAX_ENTITY_LINKS,
     EntityResolver,
+    TmdbLookup,
     attach_entity_cards,
     collect_entity_candidates,
+    enrich_with_tmdb_ids,
     log_emitted_cards,
     log_emitted_links,
     parse_resolution,
+    resolve_in_two_passes,
     select_entity_cards,
     to_entity_links,
 )
@@ -322,6 +325,7 @@ def _attach_resolved_entity_cards(
     resolver: Optional[EntityResolver],
     maximum: int,
     match_kinds: Sequence[str],
+    tmdb_lookup: Optional[TmdbLookup] = None,
 ) -> _EntityOutcome:
     """Resolve as entidades do rascunho e insere as fichas no corpo. Nunca levanta.
 
@@ -340,6 +344,11 @@ def _attach_resolved_entity_cards(
     sobre o corpo da materia ("nao quero o corpo picotado"), nao sobre a Home; se
     ele calasse tambem os `entityLinks`, a secao "Destaques de hoje" ficaria
     vazia por causa de uma variavel que nao diz nada sobre ela.
+
+    ``tmdb_lookup`` acrescenta o SEGUNDO campo de identidade do item. Sem ele o
+    fluxo e identico ao de antes — e com ele o pior caso tambem e, porque a
+    segunda passada de ``resolve_in_two_passes`` reabre o caminho antigo para
+    quem o id externo nao alcancar.
     """
     if resolver is None or not match_kinds:
         return _SEM_ENTIDADE
@@ -352,7 +361,12 @@ def _attach_resolved_entity_cards(
         if not candidatos:
             return _SEM_ENTIDADE
 
-        resultados = resolver([candidato.as_resolve_item() for candidato in candidatos])
+        # O id externo entra DEPOIS do corte de ``MAX_RESOLVE_ITEMS`` (feito na
+        # coleta) e antes do envio: buscar id para candidato que nem seria
+        # enviado gastaria quota da TMDB para nada.
+        candidatos = enrich_with_tmdb_ids(candidatos, tmdb_lookup)
+
+        resultados = resolve_in_two_passes(candidatos, resolver)
         if resultados is None:
             # O resolvedor ja registrou o motivo. `None` e "nao sei", e "nao sei"
             # nunca vira bloco nem vinculo.
@@ -497,6 +511,7 @@ def build_publication_request(
     entity_resolver: Optional[EntityResolver] = None,
     entity_card_max: int = 0,
     entity_match_kinds: Sequence[str] = (),
+    tmdb_lookup: Optional[TmdbLookup] = None,
 ) -> BuiltRequest:
     """Monta o pedido. Nao valida e nao envia — ver ``validation`` e ``client``."""
     policy = seo_policy()
@@ -554,6 +569,7 @@ def build_publication_request(
         resolver=entity_resolver,
         maximum=entity_card_max,
         match_kinds=entity_match_kinds,
+        tmdb_lookup=tmdb_lookup,
     )
 
     # A midia REFERENCIADA precisa estar resolvida antes do corpo fechar, pelo

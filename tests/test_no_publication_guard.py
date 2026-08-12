@@ -369,11 +369,33 @@ def test_cinerie_never_reaches_into_the_screen_app_side():
 
 
 def test_cinerie_does_not_reach_for_out_of_scope_enrichment():
-    """TMDB, Knowledge Graph, embeddings e busca vetorial estao fora desta fase."""
+    """Knowledge Graph, embeddings e busca vetorial continuam fora desta fase."""
     for path in (APP_DIR / "cinerie").rglob("*.py"):
         source = path.read_text(encoding="utf-8").lower()
-        for marker in ("tmdb", "knowledge_graph", "embedding", "vector_search", "faiss"):
+        for marker in ("knowledge_graph", "embedding", "vector_search", "faiss"):
             assert marker not in source, f"{path.name} referencia {marker}"
+
+
+def test_cinerie_names_the_tmdb_id_but_never_goes_to_tmdb_itself():
+    """`tmdb` deixou de ser palavra proibida aqui — e a fronteira mudou de lugar.
+
+    Ate 11/08/2026 este arquivo proibia a palavra inteira dentro de
+    ``app/cinerie/``, e a proibicao fazia sentido enquanto o MNScr nao resolvia
+    identidade externa nenhuma. Ela parou de fazer: `tmdbId` e um campo do
+    contrato da rota `/api/internal/entity-resolve`, e `tmdb_id` e o nome de um
+    dos tres casamentos que ela devolve — o unico que vale 1.0 e faz o vinculo
+    nascer verificado. Um modulo que fala com a rota nao tem como nao nomear o
+    campo dela.
+
+    O que a proibicao protegia de verdade continua protegido, e e isto: o
+    ``app/cinerie/`` monta pedido, nao busca dado. O transporte ate a TMDB mora
+    em ``app/tmdb_lookup.py``, fora daqui, atras de um ``Callable`` injetado —
+    a mesma forma do resolvedor de entidade e da ingestao de midia.
+    """
+    for path in (APP_DIR / "cinerie").rglob("*.py"):
+        source = path.read_text(encoding="utf-8").lower()
+        for marker in ("themoviedb.org", "api.themoviedb", "tmdb_api_key", "tmdb_access_token"):
+            assert marker not in source, f"{path.name} fala com a TMDB ({marker})"
 
 
 def test_the_request_never_declares_technical_identity():

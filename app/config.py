@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
@@ -646,12 +646,85 @@ PIPELINE_CONFIG = {
 }
 
 # --- Configuração TMDb (The Movie Database) ---
+#
+# A TMDB emite DUAS credenciais e elas não são intercambiáveis:
+#
+# | credencial | forma | como viaja |
+# | --- | --- | --- |
+# | chave v3 | 32 hexadecimais | query param `api_key` |
+# | token v4 | JWT (`eyJ...`, três segmentos) | `Authorization: Bearer` |
+#
+# Mandar o token v4 como `api_key` responde **401**, e foi exatamente isso que
+# manteve a TMDB inalcançável enquanto `TMDB_API_KEY` guardava um JWT: o nome
+# dizia "chave", o conteúdo era token, e o erro parecia credencial inválida.
+#
+# Por isso o nome canônico agora é `TMDB_ACCESS_TOKEN` e o modo de autenticação
+# é **deduzido da forma do valor**, nunca do nome da variável — um valor no
+# lugar errado deixa de ser um 401 misterioso e vira uma linha de log.
+TMDB_ACCESS_TOKEN_VAR = 'TMDB_ACCESS_TOKEN'
+TMDB_LEGACY_KEY_VAR = 'TMDB_API_KEY'
+
+#: Modos de autenticação da TMDB. `bearer` = token v4, `query` = chave v3.
+TMDB_AUTH_BEARER = 'bearer'
+TMDB_AUTH_QUERY = 'query'
+
+_TMDB_V3_KEY = re.compile(r'^[0-9a-f]{32}$', re.IGNORECASE)
+
+
+def tmdb_auth_mode(value: str) -> str:
+    """O modo que a FORMA do valor exige. Nunca imprime o valor."""
+    credencial = (value or '').strip()
+    if credencial.startswith('eyJ') and credencial.count('.') == 2:
+        return TMDB_AUTH_BEARER
+    if _TMDB_V3_KEY.match(credencial):
+        return TMDB_AUTH_QUERY
+    return ''
+
+
+def tmdb_credential() -> Tuple[str, str]:
+    """``(credencial, modo)`` — ``('', '')`` quando não há nenhuma utilizável.
+
+    Lê o nome canônico primeiro e aceita `TMDB_API_KEY` como legado, porque é
+    onde o token v4 está hoje em máquina que já rodava. O legado avisa: uma
+    variável cujo nome mente sobre o conteúdo é armadilha para quem vier depois.
+
+    Formato desconhecido devolve ``('', '')`` em vez de tentar assim mesmo. Uma
+    tentativa cega volta 401 e o 401 lê-se como "credencial errada" — quando o
+    defeito é a credencial estar na FORMA errada, que é outra conversa.
+    """
+    canonico = (os.getenv(TMDB_ACCESS_TOKEN_VAR) or '').strip()
+    legado = (os.getenv(TMDB_LEGACY_KEY_VAR) or '').strip()
+
+    for nome, valor in ((TMDB_ACCESS_TOKEN_VAR, canonico), (TMDB_LEGACY_KEY_VAR, legado)):
+        if not valor:
+            continue
+        modo = tmdb_auth_mode(valor)
+        if not modo:
+            logger.warning(
+                '[TMDB] %s preenchida com formato desconhecido (%s caracteres); '
+                'esperado JWT v4 (eyJ..., três segmentos) ou chave v3 (32 hexadecimais)',
+                nome, len(valor),
+            )
+            continue
+        if nome == TMDB_LEGACY_KEY_VAR:
+            logger.warning(
+                '[TMDB] usando %s (legado). Renomeie para %s — a variável guarda '
+                'um %s, e o nome atual diz outra coisa.',
+                nome, TMDB_ACCESS_TOKEN_VAR,
+                'token v4' if modo == TMDB_AUTH_BEARER else 'chave v3',
+            )
+        return valor, modo
+
+    return '', ''
+
+
 TMDB_CONFIG = {
     'enabled': os.getenv('TMDB_ENABLED', 'false').lower() == 'true',
-    'api_key': os.getenv('TMDB_API_KEY', ''),
     'max_enrichments_per_article': int(os.getenv('TMDB_MAX_ENRICHMENTS', 3)),
     'extract_trending': os.getenv('TMDB_EXTRACT_TRENDING', 'false').lower() == 'true',
     'extract_upcoming': os.getenv('TMDB_EXTRACT_UPCOMING', 'false').lower() == 'true',
+    'language': (os.getenv('TMDB_LANGUAGE') or 'pt-BR').strip(),
+    'timeout_seconds': float(os.getenv('TMDB_REQUEST_TIMEOUT', 10) or 10),
 }
 
 

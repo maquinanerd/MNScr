@@ -2316,6 +2316,35 @@ def _build_entity_resolver():
     return cliente.resolve
 
 
+def _build_tmdb_lookup():
+    """A busca de `tmdb_id`, ou ``None`` quando nao ha credencial utilizavel.
+
+    Mesma regra do resolvedor acima, e pelo mesmo motivo: ``None`` NAO e erro.
+    Sem ela o item viaja so com nome e o vinculo casa no maximo a 0.85 — que era
+    o unico estado possivel antes disto existir. O que ela nao pode fazer e
+    faltar em silencio, e por isso `lookup_from_config` nomeia a variavel.
+
+    Nao ha flag propria de liga/desliga: a credencial JA e a chave. Uma segunda
+    variavel so para ligar criaria o estado "credencial presente, recurso mudo",
+    que e o mais caro de diagnosticar — nada no log, nada na materia.
+    """
+    try:
+        from .tmdb_lookup import lookup_from_config
+
+        buscador = lookup_from_config()
+    except Exception as exc:  # noqa: BLE001 - id externo nunca custa a materia
+        logger.warning(
+            "[TMDB] busca nao pode ser construida (%s): %s; itens seguem so com nome",
+            type(exc).__name__, exc,
+        )
+        return None
+
+    if buscador is None:
+        return None
+    logger.info("[TMDB] busca de id LIGADA (%r)", buscador.credential)
+    return buscador.find
+
+
 def _ingest_hero_media_best_effort(draft, result, client, store=None) -> None:
     """Os tres passos da imagem de destaque. Nenhum deles pode falhar a materia.
 
@@ -2564,6 +2593,7 @@ def _publish_to_cinerie(draft, art_data):
             entity_resolver=_build_entity_resolver(),
             entity_card_max=MNSCR_CINERIE_ENTITY_CARD_MAX,
             entity_match_kinds=MNSCR_CINERIE_ENTITY_MATCH_KINDS,
+            tmdb_lookup=_build_tmdb_lookup(),
         )
         result = service.publish_draft(
             draft,
@@ -2708,6 +2738,7 @@ def _dispatch_cinerie_pending_once() -> None:
             entity_resolver=_build_entity_resolver(),
             entity_card_max=MNSCR_CINERIE_ENTITY_CARD_MAX,
             entity_match_kinds=MNSCR_CINERIE_ENTITY_MATCH_KINDS,
+            tmdb_lookup=_build_tmdb_lookup(),
         )
         with cinerie_dispatch_lock_heartbeat(
             store.db_path,

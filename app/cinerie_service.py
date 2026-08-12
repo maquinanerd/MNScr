@@ -142,6 +142,7 @@ class CinerieService:
         entity_resolver: Optional[Any] = None,
         entity_card_max: int = 0,
         entity_match_kinds: Sequence[str] = (),
+        tmdb_lookup: Optional[Any] = None,
     ) -> None:
         if delivery_mode not in DELIVERY_MODES:
             raise ValueError(f"delivery_mode desconhecido: {delivery_mode!r}")
@@ -163,6 +164,10 @@ class CinerieService:
         self.entity_resolver = entity_resolver
         self.entity_card_max = entity_card_max
         self.entity_match_kinds = tuple(entity_match_kinds)
+        # O segundo campo de identidade do item, tambem injetado e tambem
+        # opcional. Ausente, os itens viajam so com nome e o casamento fica em
+        # 0.85 — que e o estado anterior a esta variavel existir, nao um defeito.
+        self.tmdb_lookup = tmdb_lookup
 
     # -- caminho principal -------------------------------------------------
 
@@ -257,6 +262,7 @@ class CinerieService:
                 entity_resolver=self.entity_resolver,
                 entity_card_max=self.entity_card_max,
                 entity_match_kinds=self.entity_match_kinds,
+                tmdb_lookup=self.tmdb_lookup,
             )
             ensure_valid(built.payload, identity=self.identity)
         except (RequestBuildError, SchemaValidationError, BlockedByPolicyError) as exc:
