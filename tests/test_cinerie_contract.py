@@ -46,15 +46,21 @@ from app.cinerie.validation import check_identity, ensure_valid, validate_reques
 #: O hash que o Screen-App declarou ao entregar o pacote. NAO e usado pelo codigo
 #: de producao — la o valor e recalculado do arquivo. Aqui ele existe para provar
 #: que o que foi copiado e o que foi prometido.
-DELIVERED_SCHEMA_HASH = "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8"
+DELIVERED_SCHEMA_HASH = "sha256:6a512cfcaed0635aed660dde9fba3589073917c6cb6c7945fbcd394684df6aae"
+
+#: O hash da 1.0.0, que o Cinerie continua ACEITANDO por estar declarado em
+#: `SUPERSEDED_CONTRACTS` do lado dele. Ele fica aqui porque foi ele que
+#: atravessou toda publicacao ate 28/08/2026: um log antigo com este valor nao e
+#: sinal de defeito.
+SUPERSEDED_SCHEMA_HASH = "sha256:930243294465802778f73151d53ee510a2313d44673de9e6e7866032bfe6c6f8"
 
 #: Commit do Screen-App contra o qual o snapshot foi revalidado.
 #:
-#: O hash acima NAO mudou de `f4c49c4` para `4279abd`, e isso e um fato sobre o
-#: contrato, nao sorte: `blocks.ts` e `common.ts` mudaram entre os dois, mas por
-#: acrescimo, e o acrescimo serve ao corpo PUBLICADO. Ver `revalidation` em
-#: contracts/cinerie/SOURCE.json para os blobs comparados.
-SOURCE_COMMIT = "4279abd"
+#: Ate `4279abd` o hash do PEDIDO nunca tinha mudado — `blocks.ts` e `common.ts`
+#: mexiam so no corpo PUBLICADO. Em `0493283` ele MUDOU, e de proposito: a 1.1.0
+#: levou `marks` para o paragrafo de ENTRADA, que e o que permite negrito,
+#: italico e link virem do pipeline.
+SOURCE_COMMIT = "0493283"
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +109,7 @@ def test_schema_hash_is_recomputed_from_the_file_bytes():
 def test_local_identity_matches_the_delivered_package():
     identity = local_identity()
     assert identity.contract_name == CONTRACT_NAME
-    assert identity.contract_version == "1.0.0"
+    assert identity.contract_version == "1.1.0"
     assert identity.schema_hash == DELIVERED_SCHEMA_HASH
     assert identity.source_commit == SOURCE_COMMIT
 
@@ -139,21 +145,34 @@ def test_snapshot_files_agree_on_the_source_commit():
     assert registro["sourceCommit"].startswith(SOURCE_COMMIT)
 
 
-def test_the_request_hash_survived_the_move_to_the_new_commit():
-    """`f4c49c4` -> `4279abd` nao mexeu no contrato do PEDIDO.
+def test_the_request_hash_changed_on_purpose_when_marks_entered():
+    """`4279abd` -> `0493283` MUDOU o contrato do pedido, e era essa a intencao.
 
-    Nao e sorte, e vale registrar por que: `blocks.ts` e `common.ts` mudaram
-    entre os dois commits, e ambos entram na geracao deste schema. As mudancas
-    sao aditivas e servem ao corpo PUBLICADO — `blocks.ts` ganhou `textMark` e
-    `publishedEditorialBlock` DEPOIS de `editorialBody`, que e o unico simbolo
-    que o pedido importa de la.
+    Ate aqui este teste media o contrario: `blocks.ts` mudava e o hash nao,
+    porque `textMark` vivia DEPOIS de `editorialBody` e so servia ao corpo
+    publicado. A 1.1.0 desfez essa separacao de proposito — `marks` entrou no
+    paragrafo de ENTRADA, que e o unico caminho para negrito, italico e link
+    nascerem no pipeline em vez de na mao de um humano.
 
-    Se um dia o hash mudar, este teste falha aqui — e nao em producao, com todo
-    pedido em voo virando 409 CONFLICT no instante do deploy.
+    O teste continua sendo o alarme que era: se o hash mudar SEM alguem vir aqui
+    trocar o valor, ele falha na maquina de quem mudou — e nao em producao, com
+    todo pedido em voo virando 409 CONFLICT no instante do deploy.
     """
     assert compute_schema_hash(schema_bytes()) == DELIVERED_SCHEMA_HASH
     assert manifest_entry()["schemaHash"] == DELIVERED_SCHEMA_HASH
     assert local_identity().source_commit == SOURCE_COMMIT
+
+
+def test_the_superseded_version_is_still_the_one_the_cinerie_accepts():
+    """A 1.0.0 nao virou lixo: ela e aceita do outro lado por estar declarada.
+
+    Foi isso que permitiu subir os dois lados sem parada simultanea — o MNScr
+    publicou a manha inteira de 28/08/2026 declarando 1.0.0 contra um CMS ja em
+    1.1.0. O valor fica registrado aqui para que um log antigo com este hash nao
+    pareca defeito.
+    """
+    assert SUPERSEDED_SCHEMA_HASH != DELIVERED_SCHEMA_HASH
+    assert SUPERSEDED_SCHEMA_HASH.startswith("sha256:930243294465")
 
 
 def test_schema_bytes_are_canonical():
