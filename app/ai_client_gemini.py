@@ -66,6 +66,21 @@ ARTICLE_RESPONSE_SCHEMA = {
                         "type": "array",
                         "items": {"type": "string"},
                     },
+                    # Obras citadas no texto. NAO e taxonomia: e o que a
+                    # resolucao de entidade pergunta ao catalogo do Cinerie.
+                    # Sem este campo, filme e serie so chegavam la quando o
+                    # texto trazia `Titulo (ano)` colado — o que a prosa em
+                    # portugues praticamente nunca faz.
+                    "obras_citadas": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "titulo": {"type": "string"},
+                                "ano": {"type": "integer"},
+                            },
+                        },
+                    },
                     "image_alt_texts": {"type": "object"},
                     # Sugestões sociais NEUTRAS. Este bloco era `yoast_meta`, o
                     # objeto de um plugin de WordPress: pedir aquele formato

@@ -250,8 +250,30 @@ def _fix_studio_punctuation(
                     correction.tipo,
                 )
 
-    fixed = re.sub(r"\b(Bros)\.\.+", r"\1.", fixed)
+    fixed = _collapse_studio_period(fixed, canonical_entities)
     return fixed, corrections
+
+
+def _collapse_studio_period(texto: str, canonical_entities: Dict[str, str]) -> str:
+    """`Warner Bros..` -> `Warner Bros.`, para estudio cujo nome termina em ponto.
+
+    Precisa rodar DEPOIS de toda correcao, e nao so dentro da correcao de
+    pontuacao, porque quem cria o ponto duplo e o passo seguinte: o candidato
+    `Warner Bros`, extraido de `Warner Bros. Discovery`, tem distancia 1 para o
+    canonico `Warner Bros.` e e substituido por ele — devolvendo o ponto que ja
+    estava la. Foi assim que "a Warner Bros.. Discovery" foi publicado no artigo
+    53 em 27/08/2026, com as duas correcoes registradas no log como aplicadas.
+
+    O corte e por entidade CONHECIDA, nunca por um generico "letra + dois
+    pontos": reticencia e pontuacao legitima, e colapsa-la seria reescrever o
+    texto do reporter.
+    """
+    corrigido = texto
+    for canonical in canonical_entities.values():
+        if not canonical.endswith(".") or _entity_type(canonical) != "estudio":
+            continue
+        corrigido = re.sub(re.escape(canonical) + r"\.+", canonical, corrigido)
+    return corrigido
 
 
 def _fix_anchor_entity_casing(
@@ -387,6 +409,10 @@ def validate_and_fix_entities(
 
     fixed_text, anchor_corrections = _fix_anchor_entity_casing(fixed_text, canonical_entities)
     corrections.extend(anchor_corrections)
+
+    # Ultima palavra sobre pontuacao de estudio: as correcoes por distancia
+    # acima podem ter recolocado o ponto que a primeira passada tirou.
+    fixed_text = _collapse_studio_period(fixed_text, canonical_entities)
 
     serialized = [
         {"original": item.original, "corrigido": item.corrigido, "tipo": item.tipo}

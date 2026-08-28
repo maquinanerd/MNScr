@@ -307,6 +307,10 @@ def build_editorial_draft(
         if isinstance(item, dict) and item.get("nome")
     ]
     tags = [str(item) for item in (rewritten.get("tags_sugeridas") or []) if item]
+    # `obras_citadas` e o campo que leva filme e serie ate a resolucao de
+    # entidade. Fora dele, o unico caminho era o texto trazer `Titulo (ano)`
+    # colado — e a prosa em portugues nao traz.
+    work_mentions = list(rewritten.get("obras_citadas") or [])
 
     content = DraftContent(
         title=title,
@@ -319,6 +323,7 @@ def build_editorial_draft(
         related_keyphrases=list(rewritten.get("related_keyphrases") or []),
         category_suggestions=categories,
         tag_suggestions=tags,
+        work_mentions=work_mentions,
     )
 
     draft_id = build_draft_id(

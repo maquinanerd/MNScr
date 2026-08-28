@@ -25,11 +25,19 @@ pessoa lendo a lista e escolhendo. Aqui nao existe ninguem: o que sair daqui
 vira bloco publicado. Quais dos tres podem virar bloco e decisao de fora
 (`accepted_match_kinds`), nunca um default escondido aqui.
 
-**Filme e serie so viajam com ano.** Sem `year` a rota responde
-`title_requires_year`, e nao ha ano para inventar: colar o primeiro ano do texto
-num titulo qualquer produziria `exact_title_year` sobre uma coincidencia — o
-casamento MAIS confiante da rota, ancorado num chute. So entra ano que o proprio
-texto declara COLADO ao titulo (`Titulo (2026)`).
+**Ano nao se inventa — mas obra sem ano nao e obra perdida.** Colar o primeiro
+ano do texto num titulo qualquer produziria `exact_title_year` sobre uma
+coincidencia: o casamento MAIS confiante da rota, ancorado num chute. Por isso o
+unico ano que este modulo extrai do texto e o que vem COLADO ao titulo
+(`Titulo (2026)`), e o unico ano que ele aceita da IA escritora e o que ela
+declara ter lido na fonte — e mesmo esse viaja ao lado de uma sonda SEM ano.
+
+Quem resolve obra sem ano e `exact_title`: titulo exato e UNICO no catalogo.
+A garantia e a mesma que sustenta `exact_name` para pessoa — unicidade, conferida
+do lado que tem o banco —, e ela existe porque a alternativa media zero: nas
+cinco materias publicadas em 27/08/2026, NENHUMA trazia `Titulo (ano)`, e obra
+anunciada (`The Brave and the Bold`) entra no catalogo com o ano vazio, onde
+`exact_title_year` nao alcanca por construcao.
 
 **Nome de pessoa nao precisa de ano, e por isso e o que mais resolve.** O que
 mantem `exact_name` honesto e a UNICIDADE, que a rota confere: dois homonimos
@@ -65,10 +73,21 @@ RESOLVABLE_KINDS: Final[Tuple[str, ...]] = ("movie", "tv", "person")
 #: errados aos itens errados. Aqui o corte acontece ANTES de enviar.
 MAX_RESOLVE_ITEMS: Final[int] = 50
 
+#: Teto de `entityLinks` do contrato (`maxItems: 100`). O corte acontece aqui,
+#: antes de montar o pedido: mandar 101 vinculos reprovaria o pedido INTEIRO na
+#: validacao de schema — e a materia morreria por causa do enriquecimento, que e
+#: exatamente o que nenhuma parte deste modulo aceita.
+MAX_ENTITY_LINKS: Final[int] = 100
+
 #: Prefixo dos ids dos blocos de ficha. Estavel entre revisoes da mesma materia
 #: porque nao e posicional: `ec1` continua sendo `ec1` quando um paragrafo entra
 #: antes dele. Um id posicional faria o CMS ler "outro bloco" a cada reescrita.
 _CARD_ID_PREFIX: Final[str] = "ec"
+
+#: Janela de ano que a rota aceita. Um ano fora dela nao e "quase certo": e
+#: ruido que gastaria item do lote para receber `null`.
+MIN_DECLARED_YEAR: Final[int] = 1870
+MAX_DECLARED_YEAR: Final[int] = 2200
 
 #: Ano de estreia plausivel, na janela que a propria rota aceita (1870-2200).
 _YEAR: Final[str] = r"(?:1[89]\d{2}|2[01]\d{2})"
@@ -222,11 +241,73 @@ def _work_candidates(texto: str, *, prominence: int, kinds: Sequence[str]) -> Li
     return achados
 
 
+#: Teto de obras DECLARADAS que entram no lote. Uma materia de noticia cita
+#: meia duzia de titulos; um numero muito maior nao e riqueza editorial, e sim
+#: sinal de que a lista veio errada — e cada obra custa ate quatro itens do lote.
+MAX_DECLARED_WORKS: Final[int] = 8
+
+
+def _declared_work_candidates(
+    declared: Sequence[Mapping[str, Any]],
+    *,
+    prominence: int,
+    kinds: Sequence[str],
+) -> List[EntityCandidate]:
+    """Obras que a IA escritora DECLAROU ter citado, em campo proprio.
+
+    O extrator por texto (`_work_candidates`) so enxerga `Titulo (ano)` colado, e
+    a prosa em portugues quase nunca escreve o ano ao lado do titulo: medido nas
+    cinco materias publicadas em 27/08/2026, foram 93 candidatos e ZERO obras.
+    Nenhum filme era sequer perguntado a rota.
+
+    Esta lista fecha esse buraco pedindo ao escritor o que ele acabou de
+    escrever. Duas decisoes sustentam a honestidade do resultado:
+
+    **O titulo vem da IA; a identidade vem da rota.** Um titulo alucinado nao
+    casa e some — a rota compara por igualdade exata contra o catalogo, e nada
+    aqui aproxima. Listar nomes e a parte que um modelo faz bem; decidir QUEM e
+    aquele nome continua sendo do lado que tem o banco.
+
+    **O ano declarado e sonda SECUNDARIA, nunca a unica.** Cada obra viaja em
+    duas formas: sem ano (que a rota resolve quando o titulo e UNICO no catalogo)
+    e, quando a IA declarou um ano plausivel, tambem com ele. O par existe porque
+    ano inventado tem um modo de falha caro e especifico: `Superman` com 1978
+    numa materia sobre o filme de 2025 casaria `exact_title_year` — o casamento
+    MAIS confiante da rota — sobre o filme errado. Mandando as duas formas, a
+    ambiguidade aparece do lado que sabe resolve-la: titulo repetido no catalogo
+    volta `ambiguous_title` e nao vira bloco.
+    """
+    achados: List[EntityCandidate] = []
+    for item in list(declared or [])[:MAX_DECLARED_WORKS]:
+        if not isinstance(item, Mapping):
+            continue
+        titulo = collapse(str(item.get("title") or item.get("titulo") or "")).strip(" .,;:!?—-\"'")
+        if len(titulo) < 2 or len(titulo) > 180:
+            continue
+        ano = item.get("year", item.get("ano"))
+        try:
+            ano_int: Optional[int] = int(ano) if ano is not None and str(ano).strip() else None
+        except (TypeError, ValueError):
+            ano_int = None
+        if ano_int is not None and not (MIN_DECLARED_YEAR <= ano_int <= MAX_DECLARED_YEAR):
+            ano_int = None
+        for kind in kinds:
+            achados.append(EntityCandidate(name=titulo, kind=kind, prominence=prominence))
+            if ano_int is not None:
+                achados.append(
+                    EntityCandidate(
+                        name=titulo, kind=kind, year=ano_int, prominence=prominence
+                    )
+                )
+    return achados
+
+
 def collect_entity_candidates(
     *,
     title: str,
     lead: str,
     blocks: Sequence[Mapping[str, Any]] = (),
+    declared_works: Sequence[Mapping[str, Any]] = (),
     limit: int = MAX_RESOLVE_ITEMS,
 ) -> List[EntityCandidate]:
     """As entidades candidatas do rascunho, do titulo para o corpo.
@@ -241,6 +322,12 @@ def collect_entity_candidates(
     for prominence, texto in ((0, title), (1, lead)):
         candidatos.extend(_person_candidates(texto, prominence=prominence))
         candidatos.extend(_work_candidates(texto, prominence=prominence, kinds=("movie", "tv")))
+    # Proeminencia 1: a obra declarada e assunto da materia, nao mencao de
+    # rodape — mas nao passa na frente de quem esta no titulo, que continua
+    # sendo o que a materia enuncia sobre si mesma.
+    candidatos.extend(
+        _declared_work_candidates(declared_works, prominence=1, kinds=("movie", "tv"))
+    )
     for paragrafo in _paragraph_texts(blocks):
         candidatos.extend(_person_candidates(paragrafo, prominence=2))
         candidatos.extend(_work_candidates(paragrafo, prominence=2, kinds=("movie", "tv")))
@@ -507,6 +594,65 @@ def attach_entity_cards(
         blocks.insert(alvo + 1, bloco)
 
     return avisos
+
+
+def entity_links_from(
+    resolved: Sequence[ResolvedEntity],
+    *,
+    limit: int = MAX_ENTITY_LINKS,
+) -> List[Dict[str, Any]]:
+    """As entidades resolvidas viram `entityLinks` do pedido.
+
+    ISTO ESTAVA CORTADO. Ate 27/08/2026 o MNScr resolvia entidade, punha a ficha
+    no corpo e mandava `entityLinks: []` — ninguem nunca passou o argumento. Do
+    outro lado, `entityLinks` e a UNICA porta para `entity_news_links`, que
+    sustenta tres superficies do Cinerie: a ficha do titulo dentro da materia,
+    os chips de entidade citada e "Noticias relacionadas" na pagina do filme e
+    da pessoa. Com o array vazio, a pagina do filme nunca soube que existia uma
+    materia sobre ele — medido: `/pt/filmes/signal-one/` sem uma linha de
+    noticia, com a materia sobre aquele filme publicada e no ar.
+
+    O bloco e o vinculo respondem a perguntas diferentes, e por isso o corte
+    tambem e diferente: FICHA e espaco na pagina (tres, por legibilidade);
+    VINCULO e indice (ate cem, do contrato). Limitar o vinculo ao que virou
+    ficha jogaria fora dezesseis entidades corretamente resolvidas — foi o que
+    aconteceria na materia da Saoirse Ronan, com 19 resolvidas e 3 fichas.
+
+    `relation` sai do texto, nao de palpite: quem a materia enuncia no TITULO e
+    `primary_subject`; o resto e `mentioned`. Nenhuma das outras relacoes do
+    contrato (`reviewed`, `compared`, ...) e afirmavel a partir do que este
+    modulo enxerga, e afirmar uma delas seria descrever a materia sem te-la
+    lido.
+
+    `confidence` e a da ROTA, repassada intacta: e ela que o CMS compara com
+    `EDITORIAL_ENTITY_LINK_AUTO_VERIFY_MIN_CONFIDENCE` para decidir se o vinculo
+    nasce verificado (ADR 0019). Arredondar para cima aqui seria mentir para
+    aquela decisao.
+    """
+    links: List[Dict[str, Any]] = []
+    vistos: set = set()
+    ordenados = sorted(
+        resolved or [],
+        key=lambda item: (item.candidate.prominence, -item.confidence, item.candidate.name),
+    )
+    for item in ordenados:
+        chave = (item.entity_kind, item.entity_id)
+        if chave in vistos or not is_stable_id(item.entity_id):
+            continue
+        vistos.add(chave)
+        links.append(
+            {
+                "entityKind": item.entity_kind,
+                "entityId": item.entity_id,
+                "relation": (
+                    "primary_subject" if item.candidate.prominence == 0 else "mentioned"
+                ),
+                "confidence": round(float(item.confidence), 4),
+            }
+        )
+        if len(links) >= max(0, limit):
+            break
+    return links
 
 
 def log_emitted_cards(cards: Sequence[ResolvedEntity]) -> None:

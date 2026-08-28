@@ -45,6 +45,24 @@ _REQUIRED_FIELDS = [
     "categorias",
 ]
 
+#: Campos que o VALIDADOR nao tem por que decidir e que, quando ele os omite da
+#: resposta, precisam voltar intactos do JSON do escritor.
+#:
+#: Nao sao obrigatorios — uma materia sem eles publica — e por isso nao entram na
+#: lista acima. Mas sumir com eles em silencio custa caro em dois lugares
+#: medidos: `obras_citadas` e a UNICA porta de filme e serie para a resolucao de
+#: entidade, e `subtitle` e o unico texto de apoio da materia. Na execucao de
+#: 27/08/2026 o validador devolveu um JSON sem NENHUM dos seis campos
+#: obrigatorios — todos vieram do fallback —, o que mostra que a resposta dele
+#: pode simplesmente nao trazer o que nao interessa a ele.
+_PRESERVED_FIELDS = [
+    "subtitle",
+    "obras_citadas",
+    "related_keyphrases",
+    "focus_keyphrase",
+    "image_alt_texts",
+]
+
 # Aliases para recuperar campos ausentes
 _FIELD_ALIASES: Dict[str, List[str]] = {
     "titulo_final":   ["title", "titulo", "headline"],
@@ -97,7 +115,10 @@ _ENTITY_CORRECTIONS: List[tuple[re.Pattern, str]] = [
     (re.compile(r'\bnaruto\b', re.IGNORECASE), "Naruto"),
     (re.compile(r'\battack\s+on\s+titan\b', re.IGNORECASE), "Attack on Titan"),
     # Studios
-    (re.compile(r'\bwarner\s+bros?\b', re.IGNORECASE), "Warner Bros."),
+    # O `\.?` no fim CONSOME o ponto que ja existe. Sem ele, o `\b` depois de
+    # "Bros" casa dentro de "Warner Bros. Discovery" e a substituicao devolve
+    # "Warner Bros.. Discovery" — que foi publicado assim no artigo 53.
+    (re.compile(r'\bwarner\s+bros?\b\.?', re.IGNORECASE), "Warner Bros."),
     (re.compile(r'\buniversal\s+pictures\b', re.IGNORECASE), "Universal Pictures"),
     (re.compile(r'\bparamount\s+pictures\b', re.IGNORECASE), "Paramount Pictures"),
     (re.compile(r'\bsony\s+pictures\b', re.IGNORECASE), "Sony Pictures"),
@@ -492,6 +513,10 @@ def _ensure_required_fields(data: Dict[str, Any], fallback: Dict[str, Any]) -> D
         if not result.get(field) and fallback.get(field):
             result[field] = fallback[field]
             logger.info("[AI_VALIDATOR] FIELD_FALLBACK_USED field=%s", field)
+    for field in _PRESERVED_FIELDS:
+        if not result.get(field) and fallback.get(field):
+            result[field] = fallback[field]
+            logger.info("[AI_VALIDATOR] FIELD_PRESERVED field=%s", field)
     return result
 
 
