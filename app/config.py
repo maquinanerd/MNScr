@@ -373,7 +373,7 @@ MNSCR_CINERIE_ENTITY_CARD_MAX = int(os.getenv('MNSCR_CINERIE_ENTITY_CARD_MAX', 3
 #: mais resolve. O default aceita os quatro casamentos EXATOS que a rota
 #: oferece; nenhum deles é aproximação (a rota não faz fuzzy nem prefixo).
 #:
-#: `exact_title` entrou depois dos outros três e é o que torna obra alcançável:
+#: `exact_title_unique` entrou depois dos outros três e é o que torna obra alcançável:
 #: título exato e ÚNICO no catálogo, sem ano. Sem ele, filme anunciado — que é
 #: metade do noticiário — nunca casa, porque obra sem data estreia no catálogo
 #: com o ano vazio e `exact_title_year` compara ano com ano. Título repetido
@@ -383,7 +383,7 @@ MNSCR_CINERIE_ENTITY_MATCH_KINDS = tuple(
     for item in (
         os.getenv(
             'MNSCR_CINERIE_ENTITY_MATCH_KINDS',
-            'tmdb_id,exact_title_year,exact_title,exact_name',
+            'tmdb_id,exact_title_year,exact_title_unique,exact_name',
         )
     ).split(',')
     if item.strip()

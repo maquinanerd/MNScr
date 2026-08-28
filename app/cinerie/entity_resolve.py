@@ -32,7 +32,7 @@ unico ano que este modulo extrai do texto e o que vem COLADO ao titulo
 (`Titulo (2026)`), e o unico ano que ele aceita da IA escritora e o que ela
 declara ter lido na fonte — e mesmo esse viaja ao lado de uma sonda SEM ano.
 
-Quem resolve obra sem ano e `exact_title`: titulo exato e UNICO no catalogo.
+Quem resolve obra sem ano e `exact_title_unique`: titulo exato e UNICO no catalogo.
 A garantia e a mesma que sustenta `exact_name` para pessoa — unicidade, conferida
 do lado que tem o banco —, e ela existe porque a alternativa media zero: nas
 cinco materias publicadas em 27/08/2026, NENHUMA trazia `Titulo (ano)`, e obra
