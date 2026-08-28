@@ -8,6 +8,7 @@ import logging
 import os
 import re
 from html import unescape
+from typing import Final
 from urllib.parse import urlparse
 
 from .content_limiter import truncate_html_by_visible_chars
@@ -223,6 +224,76 @@ def _extract_source(cluster: dict, extractor, url: str, index: int, min_chars: i
         return doc
 
 
+#: Palavras que aparecem em manchete de qualquer assunto e nao identificam
+#: NENHUM. Elas existem aqui porque duas materias sem nada em comum podem
+#: compartilhar meia manchete: "Kit Harington Breaks Silence on Industry" e "Dan
+#: Stevens Breaks Silence on RoboCop" dividem `Breaks` e `Silence`, e foi
+#: exatamente esse par que fez o cacho falso de 28/08/2026 parecer legitimo.
+_HEADLINE_NOISE: Final[frozenset] = frozenset(
+    {
+        "breaks", "silence", "officially", "exclusive", "reveals", "confirms",
+        "first", "look", "trailer", "teaser", "season", "final", "series",
+        "movie", "film", "show", "star", "stars", "actor", "director", "casting",
+        "release", "date", "update", "report", "reportedly", "everything",
+        "about", "what", "wants", "with", "from", "that", "this", "will",
+        "after", "before", "into", "over", "more", "than", "just", "still",
+        "original", "returns", "return", "joins", "sets", "gets", "adds",
+        "netflix", "hbo", "max", "disney", "prime", "video", "apple", "hulu",
+        "paramount", "peacock", "amazon", "marvel", "warner", "sony",
+    }
+)
+
+#: Quantos tokens distintivos a fonte secundaria precisa compartilhar com a
+#: primaria. UM basta: e quase impossivel duas materias de assuntos diferentes
+#: compartilharem um nome proprio distintivo, e exigir dois recusaria cobertura
+#: legitima que chama a mesma obra por nomes diferentes.
+_MIN_SHARED_SUBJECT_TOKENS: Final[int] = 1
+
+
+def _subject_tokens(texto: str) -> set:
+    """Os tokens que IDENTIFICAM o assunto de uma manchete.
+
+    Palavra de quatro letras ou mais, dobrada, fora da lista de ruido de
+    manchete. Numero e pontuacao ficam de fora: "5" de "temporada 5" nao
+    identifica nada.
+    """
+    from .cinerie.entity_resolve import fold
+
+    return {
+        token
+        for token in re.findall(r"[^\W\d_]{4,}", fold(texto or ""), flags=re.UNICODE)
+        if token not in _HEADLINE_NOISE
+    }
+
+
+def _talks_about_the_same_thing(primaria: dict, secundaria: dict) -> bool:
+    """A secundaria fala do MESMO acontecimento que a primaria?
+
+    O RSS Prime agrupa por similaridade e erra: em 28/08/2026 ele juntou
+    "Kit Harington ... Industry" (Collider) com "Dan Stevens ... RoboCop"
+    (ComicBook), e o MNScr mesclou 1.871 palavras de dois assuntos diferentes
+    num texto so, publicando as duas na lista de fontes. O Editorial Gate ainda
+    registrou `GATE_MULTI_SOURCE` como sinal de QUALIDADE — duas fontes soa
+    melhor que uma.
+
+    A checagem compara o assunto da MANCHETE primaria com o TEXTO INTEIRO da
+    secundaria, e nao manchete com manchete: cobertura legitima do mesmo fato
+    quase sempre repete o nome proprio no corpo, mesmo quando escolhe outro
+    angulo para o titulo.
+
+    Sem titulo na primaria a checagem se abstem e devolve `True`: recusar por
+    falta de dado nosso descartaria fonte boa por defeito de extracao.
+    """
+    assunto = _subject_tokens(primaria.get("title") or "")
+    if not assunto:
+        return True
+
+    texto_secundario = _subject_tokens(
+        " ".join([secundaria.get("title") or "", secundaria.get("content") or ""])
+    )
+    return len(assunto & texto_secundario) >= _MIN_SHARED_SUBJECT_TOKENS
+
+
 def build_multi_source_payload(cluster: dict, extractor, min_chars: int = MIN_CHARS_DEFAULT) -> dict | None:
     """
     Extrai e qualifica fontes do cluster.
@@ -255,10 +326,24 @@ def build_multi_source_payload(cluster: dict, extractor, min_chars: int = MIN_CH
         seen_urls.add(canonical)
 
         doc = _extract_source(cluster, extractor, url, index, min_chars)
-        if doc.get("status") == "ARTICLE_BODY_OK":
-            sources_used.append(doc)
-        else:
+        if doc.get("status") != "ARTICLE_BODY_OK":
             sources_skipped.append(doc)
+            continue
+
+        # A PRIMEIRA fonte define o assunto; as demais precisam falar dele.
+        if sources_used and not _talks_about_the_same_thing(sources_used[0], doc):
+            doc = {**doc, "status": "OFF_TOPIC"}
+            sources_skipped.append(doc)
+            logger.warning(
+                "[MULTI_SOURCE] fonte descartada por ASSUNTO: %s nao fala do mesmo "
+                "que a primaria (%r vs %r)",
+                doc.get("domain"),
+                (sources_used[0].get("title") or "")[:70],
+                (doc.get("title") or "")[:70],
+            )
+            continue
+
+        sources_used.append(doc)
 
     basis = "multi_source"
     if len(sources_used) < 2:

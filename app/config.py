@@ -595,11 +595,14 @@ PROMPT_FILE_PATH = os.path.join(
 
 AI_MODEL = os.getenv('AI_MODEL', 'gemini-3.1-flash-lite')
 
-AI_GENERATION_CONFIG = {
-    'temperature': 0.7,
-    'top_p': 1.0,
-    'max_output_tokens': 8192,
-}
+# `AI_GENERATION_CONFIG` foi REMOVIDO daqui, e o motivo vale a linha: ele
+# declarava `temperature: 0.7` e ninguém o lia. A configuração real do escritor
+# está em `app/ai_processor.py` (`temperature: 0.2`, `top_p: 0.9`,
+# `max_output_tokens: 32000`), a do validador em `app/ai_validator.py` (0.1).
+#
+# Uma constante morta com nome bom é pior que ausência: numa auditoria de
+# fidelidade em 28/08/2026 ela foi a primeira coisa encontrada, e teria
+# respondido a pergunta errada sobre o comportamento do modelo.
 
 AI_POST_WRITER_BUDGET_TOKENS = int(os.getenv('AI_POST_WRITER_BUDGET_TOKENS', '16000'))
 AI_POST_WRITER_BUDGET_PER_1K_SOURCE = int(os.getenv('AI_POST_WRITER_BUDGET_PER_1K_SOURCE', '6000'))

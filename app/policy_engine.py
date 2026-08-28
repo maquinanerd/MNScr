@@ -86,10 +86,32 @@ def calculate_dynamic_word_policy(
             allow_expansion = True
             reason = "very_long_news_preserve_depth"
 
+    # ------------------------------------------------------------------
+    # TETO DE SEGURANCA, e nao politica editorial.
+    #
+    # Ate 28/08/2026 estes numeros eram 550 e 1000, e eles ANULAVAM a regra
+    # proporcional acima em toda fonte grande. Medido na materia 128: fonte de
+    # 1.879 palavras, minimo proporcional de 1.409, minimo aplicado de 550 — o
+    # escritor entregou 562, doze acima do piso, e a expansao foi dispensada com
+    # `proportional_output_ok`. Trinta por cento da fonte, e o texto do veiculo
+    # original ficou visivelmente mais completo que o nosso.
+    #
+    # Os numeros novos sao teto de SEGURANCA — existem para que uma fonte
+    # anomala (uma pagina de 12 mil palavras, um erro de extracao que concatena
+    # o site inteiro) nao vire pedido de materia impossivel nem conta de token
+    # inesperada. Eles ficam ACIMA do que qualquer materia real precisa, e por
+    # isso deixam de decidir o tamanho: quem decide volta a ser a proporcao.
+    #
+    # `max_output_tokens` do escritor e 32.000, entao 1.800 palavras cabem com
+    # folga. Configuraveis porque sao politica de custo, nao invariante.
+    # ------------------------------------------------------------------
+    piso_maximo = int(os.getenv("MNSCR_WORD_POLICY_MIN_CAP", "1200"))
+    teto_maximo = int(os.getenv("MNSCR_WORD_POLICY_MAX_CAP", "1800"))
+
     min_calculated = min_acceptable
     max_calculated = max_recommended
-    min_acceptable = min(min_calculated, 550)
-    max_recommended = min(max_calculated, 1000)
+    min_acceptable = min(min_calculated, piso_maximo)
+    max_recommended = min(max_calculated, teto_maximo)
     target = min(target, max_recommended)
     logger.info(
         "[WORD_POLICY_CAP] source_words=%s min_calculado=%s min_aplicado=%s max_calculado=%s max_aplicado=%s db_id=%s",

@@ -24,9 +24,11 @@ def _cluster_payload_from_policy(source_words: int) -> dict:
 def test_cluster_target_min_does_not_exceed_max_and_stays_int():
     payload = _cluster_payload_from_policy(1452)
 
-    assert payload["target_words"] == 1000
-    assert payload["min_acceptable_words"] == 550
-    assert payload["max_recommended_words"] == 1000
+    # Fonte de 1.452 palavras: a proporcao pede 1.089 de piso e 1.307 de alvo.
+    # Ate 28/08/2026 o teto de 550/1000 esmagava os tres numeros aqui.
+    assert payload["target_words"] == 1306
+    assert payload["min_acceptable_words"] == 1089
+    assert payload["max_recommended_words"] == 1597
 
     fields = AIProcessor._build_prompt_fields(payload)
 

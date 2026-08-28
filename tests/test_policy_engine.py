@@ -44,18 +44,26 @@ class TestDynamicWordPolicy:
         assert p["allow_expansion"] is True
 
     def test_list_article_proportional(self):
-        """Lista (1200 palavras): min >= 900."""
+        """Lista (1200 palavras): a proporcao manda, e ela pede 900."""
         p = calculate_dynamic_word_policy(source_words=1200, article_type="list")
-        assert p["min_acceptable_words"] == 550
-        assert p["max_recommended_words"] == 1000
+        assert p["min_acceptable_words"] == 900
+        assert p["max_recommended_words"] == 1320
         assert p["target_words"] <= p["max_recommended_words"]
         assert p["allow_expansion"] is True
 
     def test_word_policy_caps_long_sources(self):
+        """O teto continua existindo — mas como SEGURANCA, nao como politica.
+
+        Ate 28/08/2026 ele era 550/1000 e anulava a proporcao em toda fonte
+        grande: a materia 128 saiu com 565 palavras de uma fonte de 1.879, e o
+        texto do veiculo original ficou visivelmente mais completo. Os numeros
+        novos ficam ACIMA do que materia real precisa, e por isso deixam de
+        decidir o tamanho.
+        """
         p = calculate_dynamic_word_policy(source_words=2655, article_type="guide", db_id=17943)
-        assert p["min_acceptable_words"] == 550
-        assert p["max_recommended_words"] == 1000
-        assert p["target_words"] == 1000
+        assert p["min_acceptable_words"] == 1200
+        assert p["max_recommended_words"] == 1800
+        assert p["target_words"] == 1800
 
     def test_superfeed_budget_higher(self):
         """Superfeed tem budget maior que fallback."""
