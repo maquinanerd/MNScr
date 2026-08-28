@@ -466,7 +466,54 @@ def parse_resolution(
             )
         )
 
+    drop_cross_kind_ambiguity(resolution)
     return resolution
+
+
+def drop_cross_kind_ambiguity(resolution: EntityResolution) -> None:
+    """O MESMO titulo casando como FILME e como SERIE nao vira ficha nenhuma.
+
+    O texto nao diz de que tipo a obra e — por isso o candidato viaja nos dois
+    `kind`, e a rota responde por cada um. Enquanto obra so casava com ano, os
+    dois casarem era raro. Sem ano, e comum: medido em 28/08/2026, `Get Out`,
+    `The Exorcist` e `Backrooms` casaram como filme E como serie, cada par com a
+    MESMA confianca (0.85). Com o empate, quem escolhe a ficha passa a ser a
+    ordem da lista — e a materia sobre o filme *Corra!* publicaria a ficha de
+    uma serie chamada *Get Out*, com toda a cara de certa.
+
+    A rota fez o trabalho dela: dentro de cada tipo, o titulo era unico. A
+    ambiguidade e ENTRE tipos, e ela so existe deste lado, onde o `kind` foi
+    inventado por nos. Resolve-la por heuristica ("filme primeiro") acertaria
+    na maioria e erraria em silencio no resto, que e o negocio que este modulo
+    recusa desde a primeira linha: um ``null`` e inofensivo; um id errado e uma
+    mentira publicada.
+
+    Cai o par inteiro — nao entra como ficha nem como vinculo.
+    """
+    por_nome: Dict[str, List[ResolvedEntity]] = {}
+    for item in resolution.resolved:
+        por_nome.setdefault(fold(item.candidate.name), []).append(item)
+
+    descartados: set = set()
+    for nome, itens in por_nome.items():
+        tipos = {item.entity_kind for item in itens}
+        if len(tipos) > 1 and tipos <= {"movie", "tv"}:
+            descartados.add(nome)
+            resolution.reasons["ambiguidade_filme_ou_serie"] = (
+                resolution.reasons.get("ambiguidade_filme_ou_serie", 0) + len(itens)
+            )
+            logger.info(
+                "[CINERIE_ENTITY] %r casou como filme E como serie; nenhum dos dois "
+                "vira ficha (o texto nao diz qual e)",
+                itens[0].candidate.name,
+            )
+
+    if descartados:
+        resolution.resolved = [
+            item
+            for item in resolution.resolved
+            if fold(item.candidate.name) not in descartados
+        ]
 
 
 # ===========================================================================

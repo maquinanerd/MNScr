@@ -748,3 +748,103 @@ def test_an_entity_that_did_not_become_a_card_still_becomes_a_link():
     assert len(fichas) == 1
     assert [link["entityId"] for link in vinculos] == ["4210", "4211", "4212"]
     assert {link["relation"] for link in vinculos} == {"mentioned"}
+
+
+def test_a_title_that_matches_as_movie_and_as_series_becomes_no_card_at_all():
+    """Medido em 28/08/2026: `Get Out` casou como filme (Corra!) E como serie.
+
+    As duas fichas vem com a MESMA confianca, entao o desempate viraria ordem de
+    lista — e a materia sobre o filme publicaria a ficha da serie com cara de
+    certa. A rota fez o trabalho dela: dentro de cada tipo o titulo era unico. A
+    ambiguidade e ENTRE tipos, e ela nasce aqui, onde o `kind` foi inventado por
+    nos.
+    """
+    candidatos = [
+        EntityCandidate(name="Get Out", kind="movie", prominence=1),
+        EntityCandidate(name="Get Out", kind="tv", prominence=1),
+    ]
+    resultados = [
+        {
+            "index": 0,
+            "entityKind": "movie",
+            "entityId": "15703",
+            "matchedBy": "exact_title_unique",
+            "confidence": 0.85,
+            "canonicalTitle": "Corra!",
+        },
+        {
+            "index": 1,
+            "entityKind": "tv",
+            "entityId": "13880",
+            "matchedBy": "exact_title_unique",
+            "confidence": 0.85,
+            "canonicalTitle": "Get Out",
+        },
+    ]
+
+    resolucao = parse_resolution(
+        resultados, candidatos, accepted_match_kinds=(*TODOS_OS_CASAMENTOS, "exact_title_unique")
+    )
+
+    assert resolucao.resolved == []
+    assert resolucao.reasons["ambiguidade_filme_ou_serie"] == 2
+    assert entity_links_from(resolucao.resolved) == []
+
+
+def test_a_title_that_matches_only_as_one_kind_still_becomes_a_card():
+    """A recusa e do EMPATE entre tipos, nao da obra sem ano."""
+    candidatos = [
+        EntityCandidate(name="Nosferatu", kind="movie", prominence=1),
+        EntityCandidate(name="Nosferatu", kind="tv", prominence=1),
+    ]
+    resultados = [
+        {
+            "index": 0,
+            "entityKind": "movie",
+            "entityId": "8470",
+            "matchedBy": "exact_title_unique",
+            "confidence": 0.85,
+            "canonicalTitle": "Nosferatu",
+        },
+        {"index": 1, "entityId": None, "matchedBy": None, "reason": "not_found"},
+    ]
+
+    resolucao = parse_resolution(
+        resultados, candidatos, accepted_match_kinds=(*TODOS_OS_CASAMENTOS, "exact_title_unique")
+    )
+
+    assert [item.entity_id for item in resolucao.resolved] == ["8470"]
+
+
+def test_a_person_and_a_work_sharing_a_name_are_not_treated_as_the_same_ambiguity():
+    """`Steve Jobs` e pessoa E filme, e as duas respostas estao certas.
+
+    Essa convivencia e deliberada e antiga; o descarte novo e so entre `movie` e
+    `tv`, onde o tipo foi inventado por nos e o texto nao decide.
+    """
+    candidatos = [
+        EntityCandidate(name="Steve Jobs", kind="person", prominence=0),
+        EntityCandidate(name="Steve Jobs", kind="movie", year=2015, prominence=0),
+    ]
+    resultados = [
+        {
+            "index": 0,
+            "entityKind": "person",
+            "entityId": "1",
+            "matchedBy": "exact_name",
+            "confidence": 0.85,
+        },
+        {
+            "index": 1,
+            "entityKind": "movie",
+            "entityId": "2",
+            "matchedBy": "exact_title_year",
+            "confidence": 0.9,
+        },
+    ]
+
+    resolucao = parse_resolution(
+        resultados, candidatos, accepted_match_kinds=TODOS_OS_CASAMENTOS
+    )
+
+    assert {item.entity_id for item in resolucao.resolved} == {"1", "2"}
