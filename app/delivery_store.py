@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .config import DB_PATH
 from .delivery import states as S
 from .sqlite_utils import connect_sqlite
 
@@ -92,7 +93,7 @@ class DeliveryRecord:
 class DeliveryStore:
     """SQLite persistence for the delivery layer."""
 
-    def __init__(self, db_path: str = "data/app.db"):
+    def __init__(self, db_path: str = DB_PATH):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self.conn = connect_sqlite(db_path, row_factory=sqlite3.Row)

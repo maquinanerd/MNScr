@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .config import DB_PATH
 from .editorial.models import (
     DraftContent,
     DraftProvenance,
@@ -181,7 +182,7 @@ class GateService:
         gate_store: Optional[GateStore] = None,
         *,
         draft_dir: Optional[str] = None,
-        db_path: str = "data/app.db",
+        db_path: str = DB_PATH,
     ):
         from app import config
 

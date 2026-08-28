@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from .config import DB_PATH
 from .factual import states as S
 from .factual.errors import AssessmentNotFoundError
 from .factual.models import FactualAssessment
@@ -64,7 +65,7 @@ class FactualService:
         store: Optional[FactualStore] = None,
         *,
         draft_dir: Optional[str] = None,
-        db_path: str = "data/app.db",
+        db_path: str = DB_PATH,
     ):
         from . import config
 

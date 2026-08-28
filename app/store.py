@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .config import PIPELINE_ORDER, RSS_FEEDS
+from .config import DB_PATH, PIPELINE_ORDER, RSS_FEEDS
 from .feeds import canonicalize_url, normalize_title_for_match
 from .sqlite_utils import connect_sqlite
 
@@ -49,7 +49,7 @@ class Article:
 class Database:
     """Handles all database operations for the application."""
 
-    def __init__(self, db_path: str = 'data/app.db'):
+    def __init__(self, db_path: str = DB_PATH):
         """
         Initializes the database connection.
 

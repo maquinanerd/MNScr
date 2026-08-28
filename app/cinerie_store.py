@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .config import DB_PATH
 from .sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
@@ -158,7 +159,7 @@ class PublicationRecord:
 class CinerieStore:
     """Duas tabelas: publicacoes e tentativas."""
 
-    def __init__(self, db_path: str = "data/app.db"):
+    def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = connect_sqlite(db_path)

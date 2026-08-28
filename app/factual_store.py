@@ -14,6 +14,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .config import DB_PATH
 from .factual import states as S
 from .factual.models import (
     ClaimEvidenceLink,
@@ -44,7 +45,7 @@ def _loads(value: Any, fallback: Any) -> Any:
 class FactualStore:
     """SQLite persistence for the factual layer."""
 
-    def __init__(self, db_path: str = "data/app.db"):
+    def __init__(self, db_path: str = DB_PATH):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self.conn = connect_sqlite(db_path, row_factory=sqlite3.Row)

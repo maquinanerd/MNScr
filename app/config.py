@@ -83,6 +83,12 @@ USER_AGENT = os.getenv(
     'MNScr/1.0 (+editorial draft pipeline; contact: editorial@cinerie)',
 )
 
+# --- Banco de dados principal ---
+# Relativo ao diretório de trabalho por padrão (comportamento inalterado).
+# Em container o disco é efêmero: aponte para um volume montado (ex.
+# /data/app.db) via MNSCR_DB_PATH — ver docs/operations/mnscr-easypanel.md.
+DB_PATH = os.getenv('MNSCR_DB_PATH', 'data/app.db')
+
 # --- Saída editorial (MS-1) ---
 # MNScr produz drafts. WordPress foi removido do caminho canônico.
 OUTPUT_MODE = os.getenv('MNSCR_OUTPUT_MODE', 'local').strip().lower()

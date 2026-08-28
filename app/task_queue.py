@@ -11,14 +11,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-from .config import RSS_FEEDS
+from .config import DB_PATH, RSS_FEEDS
 from .sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
 
 class ArticleQueue:
-    def __init__(self, db_path: str = "data/app.db"):
+    def __init__(self, db_path: str = DB_PATH):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_table()

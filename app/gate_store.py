@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .config import DB_PATH
 from .editorial_gate.models import (
     GATE_BLOCKED,
     GATE_REVIEW_REQUIRED,
@@ -38,7 +39,7 @@ def _dumps(value: Any) -> str:
 class GateStore:
     """SQLite persistence for gate results."""
 
-    def __init__(self, db_path: str = "data/app.db"):
+    def __init__(self, db_path: str = DB_PATH):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self.conn = connect_sqlite(db_path, row_factory=sqlite3.Row)

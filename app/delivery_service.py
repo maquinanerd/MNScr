@@ -23,6 +23,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from .config import DB_PATH
 from .delivery import states as S
 from .delivery.builder import build_delivery_payload, check_deliverable
 from .delivery.contract import EditorialDeliveryPayload, ensure_valid
@@ -72,7 +73,7 @@ class DeliveryService:
         store: Optional[DeliveryStore] = None,
         destination: Optional[Any] = None,
         *,
-        db_path: str = "data/app.db",
+        db_path: str = DB_PATH,
         retry_policy: Optional[RetryPolicy] = None,
         sleeper: Optional[Sleeper] = None,
         clock: Optional[Clock] = None,
