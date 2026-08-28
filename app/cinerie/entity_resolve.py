@@ -252,6 +252,7 @@ def _declared_work_candidates(
     *,
     prominence: int,
     kinds: Sequence[str],
+    headline: str = "",
 ) -> List[EntityCandidate]:
     """Obras que a IA escritora DECLAROU ter citado, em campo proprio.
 
@@ -276,7 +277,18 @@ def _declared_work_candidates(
     MAIS confiante da rota — sobre o filme errado. Mandando as duas formas, a
     ambiguidade aparece do lado que sabe resolve-la: titulo repetido no catalogo
     volta `ambiguous_title` e nao vira bloco.
+
+    **A obra que esta no TITULO da materia e o assunto dela.** Sem essa
+    distincao, toda obra declarada saia como `mentioned` e nenhuma como
+    `primary_subject` — e a consequencia apareceu publicada: a materia sobre
+    *Spider-Man: Brand New Day* citava dois Vingadores de passagem, e a ficha
+    grande do rodape mostrou *Vingadores: Doutor Destino*, porque o Cinerie
+    escolhe a ficha da materia pela ORDEM em que os vinculos chegaram
+    (`orderBy: id asc`, em `news-pages.ts`), nao por relacao. Marcar a obra do
+    titulo com proeminencia 0 corrige as duas pontas de uma vez: ela vira
+    `primary_subject` no pedido e viaja PRIMEIRO na lista.
     """
+    titulo_dobrado = fold(headline or "")
     achados: List[EntityCandidate] = []
     for item in list(declared or [])[:MAX_DECLARED_WORKS]:
         if not isinstance(item, Mapping):
@@ -284,6 +296,11 @@ def _declared_work_candidates(
         titulo = collapse(str(item.get("title") or item.get("titulo") or "")).strip(" .,;:!?—-\"'")
         if len(titulo) < 2 or len(titulo) > 180:
             continue
+        # A comparacao usa a MESMA dobra do casamento: o titulo da materia
+        # escreve a obra em portugues e com pontuacao propria, e um `in` cru
+        # erraria em "Homem-Aranha:" contra "Homem-Aranha".
+        dobrado = fold(titulo)
+        prominencia = 0 if dobrado and dobrado in titulo_dobrado else prominence
         ano = item.get("year", item.get("ano"))
         try:
             ano_int: Optional[int] = int(ano) if ano is not None and str(ano).strip() else None
@@ -292,11 +309,11 @@ def _declared_work_candidates(
         if ano_int is not None and not (MIN_DECLARED_YEAR <= ano_int <= MAX_DECLARED_YEAR):
             ano_int = None
         for kind in kinds:
-            achados.append(EntityCandidate(name=titulo, kind=kind, prominence=prominence))
+            achados.append(EntityCandidate(name=titulo, kind=kind, prominence=prominencia))
             if ano_int is not None:
                 achados.append(
                     EntityCandidate(
-                        name=titulo, kind=kind, year=ano_int, prominence=prominence
+                        name=titulo, kind=kind, year=ano_int, prominence=prominencia
                     )
                 )
     return achados
@@ -326,7 +343,9 @@ def collect_entity_candidates(
     # rodape — mas nao passa na frente de quem esta no titulo, que continua
     # sendo o que a materia enuncia sobre si mesma.
     candidatos.extend(
-        _declared_work_candidates(declared_works, prominence=1, kinds=("movie", "tv"))
+        _declared_work_candidates(
+            declared_works, prominence=1, kinds=("movie", "tv"), headline=title
+        )
     )
     for paragrafo in _paragraph_texts(blocks):
         candidatos.extend(_person_candidates(paragrafo, prominence=2))

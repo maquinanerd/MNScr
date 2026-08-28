@@ -848,3 +848,52 @@ def test_a_person_and_a_work_sharing_a_name_are_not_treated_as_the_same_ambiguit
     )
 
     assert {item.entity_id for item in resolucao.resolved} == {"1", "2"}
+
+
+def test_the_work_named_in_the_headline_is_the_subject_not_a_mention():
+    """A materia do Homem-Aranha nao pode ter a ficha dos Vingadores no rodape.
+
+    Foi o que saiu publicado: `Spider-Man: Brand New Day` citava dois Vingadores
+    de passagem e a ficha grande do rodape mostrou *Vingadores: Doutor Destino*.
+    O Cinerie escolhe aquela ficha pela ORDEM em que os vinculos chegaram
+    (`orderBy: id asc`), nao por relacao — entao a obra do titulo precisa sair
+    marcada E na frente.
+    """
+    candidatos = collect_entity_candidates(
+        title="Spider-Man: Brand New Day quebra recorde de bilheteria da Marvel",
+        lead="",
+        declared_works=[
+            {"title": "Avengers: Doomsday"},
+            {"title": "Spider-Man: Brand New Day"},
+            {"title": "Avengers: Endgame"},
+        ],
+    )
+    por_nome = {c.name: c.prominence for c in candidatos if c.kind == "movie"}
+    assert por_nome["Spider-Man: Brand New Day"] == 0
+    assert por_nome["Avengers: Doomsday"] == 1
+    assert por_nome["Avengers: Endgame"] == 1
+
+
+def test_the_subject_travels_first_and_as_primary_subject():
+    """Ordem e relacao saem juntas, porque as duas pontas leem coisas
+    diferentes: o contrato le `relation`, e a pagina do Cinerie le a ordem."""
+    def resolvida(nome, entity_id, prominencia):
+        return ResolvedEntity(
+            candidate=EntityCandidate(name=nome, kind="movie", prominence=prominencia),
+            entity_kind="movie",
+            entity_id=entity_id,
+            matched_by="exact_title_unique",
+            confidence=0.85,
+        )
+
+    vinculos = entity_links_from(
+        [
+            resolvida("Avengers: Doomsday", "9528", 1),
+            resolvida("Spider-Man: Brand New Day", "12", 0),
+            resolvida("Avengers: Endgame", "7369", 1),
+        ]
+    )
+
+    assert vinculos[0]["entityId"] == "12"
+    assert vinculos[0]["relation"] == "primary_subject"
+    assert {v["relation"] for v in vinculos[1:]} == {"mentioned"}
