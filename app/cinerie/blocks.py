@@ -404,6 +404,126 @@ def node_text(node: Any) -> str:
     return "".join(pedacos)
 
 
+#: Tag HTML -> tipo de marcacao do contrato. Fechada de proposito: `<span>` com
+#: classe, `<mark>`, `<u>` e afins nao viram nada. O que nao esta aqui vira texto
+#: limpo, que e o comportamento de sempre.
+_MARK_BY_TAG: Final[Dict[str, str]] = {
+    "strong": "bold",
+    "b": "bold",
+    "em": "italic",
+    "i": "italic",
+    "a": "link",
+}
+
+#: Teto de marcacoes por paragrafo (`LIMITS.marks` do contrato). Acima disso o
+#: pedido inteiro seria recusado — o corte acontece aqui, e o texto sai inteiro
+#: com menos enfase, nunca a materia recusada por causa de enfase.
+_MAX_MARKS_PER_PARAGRAPH: Final[int] = 200
+
+
+def _marked_paragraph(node: Any, *, limit: int) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
+    """Texto limpo + `marks`, com offsets no texto FINAL.
+
+    O contrato nao aceita HTML: a enfase viaja como intervalo `start`/`end` sobre
+    o texto ja normalizado. Isso torna a ORDEM das operacoes o problema inteiro —
+    calcular offset sobre o texto cru e normalizar depois desalinha tudo, porque
+    `collapse` muda o comprimento. Aqui a normalizacao acontece DURANTE a
+    montagem, e o offset nasce ja no espaco final.
+
+    Devolve ``None`` quando nao ha texto aproveitavel ou quando o texto carrega
+    markup proibido — o chamador segue pelo caminho de sempre.
+    """
+    from bs4 import NavigableString
+
+    pedacos: List[str] = []
+    tamanho = 0
+    marcas: List[Dict[str, Any]] = []
+
+    def escrever(bruto: str) -> None:
+        nonlocal tamanho
+        texto = re.sub(r"\s+", " ", bruto)
+        if not texto:
+            return
+        # Junta sem criar espaco duplo: `collapse` colapsaria, e o offset ja
+        # gravado apontaria para o lugar errado depois.
+        if texto.startswith(" ") and (tamanho == 0 or pedacos[-1].endswith(" ")):
+            texto = texto.lstrip(" ")
+        if not texto:
+            return
+        pedacos.append(texto)
+        tamanho += len(texto)
+
+    def andar(atual: Any) -> None:
+        for filho in getattr(atual, "children", []) or []:
+            if isinstance(filho, NavigableString):
+                escrever(str(filho))
+                continue
+            tag = (getattr(filho, "name", "") or "").lower()
+            if tag in ("script", "style", "noscript"):
+                continue
+            tipo = _MARK_BY_TAG.get(tag)
+            href: Optional[str] = None
+            if tipo == "link":
+                href = collapse(filho.get("href"))
+                # Link relativo ou `javascript:` nao vira marcacao: o contrato so
+                # aceita http(s), e mandar outra coisa reprova o pedido inteiro.
+                if not href.lower().startswith(("http://", "https://")):
+                    tipo = None
+            inicio = tamanho
+            andar(filho)
+            if tipo is not None and tamanho > inicio:
+                marca: Dict[str, Any] = {"start": inicio, "end": tamanho, "type": tipo}
+                if href:
+                    marca["href"] = href
+                marcas.append(marca)
+
+    andar(node)
+
+    texto = "".join(pedacos)
+    # `collapse` tira as pontas; o deslocamento da esquerda precisa ser
+    # descontado de toda marcacao, senao a enfase anda para a direita.
+    esquerda = len(texto) - len(texto.lstrip(" "))
+    texto = texto.strip(" ")
+    if not texto:
+        return None
+
+    cortado = plain_text(texto, max_length=limit)
+    if not cortado or find_forbidden_markup(cortado) is not None:
+        return None
+
+    limite = len(cortado)
+    finais: List[Dict[str, Any]] = []
+    for marca in marcas:
+        inicio = marca["start"] - esquerda
+        fim = min(marca["end"] - esquerda, limite)
+        if inicio < 0 or fim <= inicio:
+            # Marcacao que ficou toda fora do texto truncado. Some sem aviso: o
+            # que ela marcava tambem sumiu.
+            continue
+        nova = dict(marca)
+        nova["start"] = _utf16_offset(cortado, inicio)
+        nova["end"] = _utf16_offset(cortado, fim)
+        finais.append(nova)
+
+    return cortado, finais[:_MAX_MARKS_PER_PARAGRAPH]
+
+
+def _utf16_offset(texto: str, indice: int) -> int:
+    """Indice de PONTO DE CODIGO (Python) -> indice de unidade UTF-16 (JavaScript).
+
+    O contrato diz, com todas as letras, que os offsets sao unidades UTF-16 — a
+    mesma que `String.prototype.slice` usa no render. Python conta pontos de
+    codigo, e as duas contagens so divergem fora do BMP: um emoji vale 1 aqui e
+    2 la.
+
+    Sem esta conversao, um 🎬 no comeco do paragrafo empurraria toda a enfase
+    seguinte uma casa para a esquerda no site — e o pior e que o pedido passaria
+    na validacao dos dois lados, porque o intervalo continua dentro do texto. O
+    erro so apareceria na pagina, com a palavra errada em negrito.
+    """
+    return len(texto[:indice].encode("utf-16-le")) // 2
+
+
 def _paragraph_texts(node: Any, *, limit: int) -> List[str]:
     """Um ``<p>`` que carrega varios paragrafos vira varios blocos.
 
@@ -779,21 +899,31 @@ def html_to_blocks(body_html: str, *, article_title: str = "") -> BlockConversio
     videos: List[str] = []
     quotes_promoted = 0
 
-    def emit_paragraph(text: str) -> None:
+    def emit_paragraph(text: str, *, marks: Optional[List[Dict[str, Any]]] = None) -> None:
         """Paragrafo — ou a citacao que ele carrega, promovida a bloco proprio.
 
         Promover e PARTIR, nao duplicar: o que vem antes e o que vem depois da
         fala continuam como paragrafo. Repetir o texto nos dois lugares
         publicaria a mesma frase duas vezes na mesma pagina.
+
+        Quando a citacao e promovida, a MARCACAO CAI. Ela e um intervalo sobre
+        este texto, e partir o texto em tres move todo offset — remapear daria
+        trabalho para o caso em que a enfase menos importa (fala entre aspas ja
+        vira bloco proprio, com desenho proprio). Enfase errada e pior que enfase
+        ausente, entao aqui ela sai.
         """
         nonlocal quotes_promoted
 
+        bloco_simples: Dict[str, Any] = {"type": BLOCK_PARAGRAPH, "text": text}
+        if marks:
+            bloco_simples["marks"] = marks
+
         if quotes_promoted >= _MAX_PROMOTED_QUOTES:
-            emit({"type": BLOCK_PARAGRAPH, "text": text})
+            emit(bloco_simples)
             return
         split = split_promotable_quote(text, dominant=speaker)
         if split is None:
-            emit({"type": BLOCK_PARAGRAPH, "text": text})
+            emit(bloco_simples)
             return
 
         quotes_promoted += 1
@@ -896,7 +1026,17 @@ def html_to_blocks(body_html: str, *, article_title: str = "") -> BlockConversio
                 result.credit_block_id = result.blocks[-1]["id"]
             continue
 
-        for pedaco in _paragraph_texts(node, limit=paragraph_limit):
+        pedacos = _paragraph_texts(node, limit=paragraph_limit)
+        # A enfase so viaja quando o `<p>` e UM paragrafo. Quando ele carrega
+        # varios (geracao degradada, ver `_paragraph_texts`), a divisao acontece
+        # sobre o texto e os offsets do DOM deixam de valer — sai sem marcacao,
+        # que e o comportamento de antes, e nunca marcacao no lugar errado.
+        if len(pedacos) == 1 and not _looks_like_youtube(pedacos[0]):
+            marcado = _marked_paragraph(node, limit=paragraph_limit)
+            if marcado is not None and marcado[1] and marcado[0] == pedacos[0]:
+                emit_paragraph(marcado[0], marks=marcado[1])
+                continue
+        for pedaco in pedacos:
             if _looks_like_youtube(pedaco):
                 collect_video(pedaco, origem="paragrafo")
                 continue
