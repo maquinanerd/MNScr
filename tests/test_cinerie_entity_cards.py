@@ -24,9 +24,14 @@ from app.cinerie.blocks import BLOCK_PARAGRAPH, BLOCK_SOURCE_LIST
 from app.cinerie.contract import local_identity
 from app.cinerie.entity_resolve import (
     BLOCK_ENTITY_CARD,
+    MAX_DECLARED_WORKS,
     MAX_RESOLVE_ITEMS,
+    EntityCandidate,
+    EntityResolution,
+    ResolvedEntity,
     attach_entity_cards,
     collect_entity_candidates,
+    entity_links_from,
     fold,
     parse_resolution,
     select_entity_cards,
@@ -99,6 +104,62 @@ def test_a_work_only_travels_with_a_year_the_text_itself_declared():
         lead="A serie foi lancada. Isso aconteceu em 2022, segundo o estudio.",
     )
     assert [c for c in sem_ano if c.kind in ("movie", "tv")] == []
+
+
+def test_a_declared_work_travels_without_a_year_because_the_route_checks_uniqueness():
+    """O caminho que faz filme existir: `obras_citadas`.
+
+    Medido em 27/08/2026: cinco materias publicadas, 93 candidatos, ZERO obras —
+    nenhuma delas escrevia `Titulo (ano)`, que era a unica forma que o extrator
+    por texto enxergava. A obra declarada entra sem ano e quem confere unicidade
+    e a rota, do lado que tem o catalogo.
+    """
+    candidatos = collect_entity_candidates(
+        title="Filme ganha data de estreia",
+        lead="O longa chega em setembro.",
+        declared_works=[{"titulo": "Signal One"}],
+    )
+    obras = {(c.name, c.kind, c.year) for c in candidatos if c.kind in ("movie", "tv")}
+    assert obras == {("Signal One", "movie", None), ("Signal One", "tv", None)}
+
+
+def test_a_declared_year_is_a_second_probe_and_never_the_only_one():
+    """Ano declarado pela IA nao pode ser a unica forma de perguntar.
+
+    `Superman` com 1978 numa materia sobre o filme de 2025 casaria
+    `exact_title_year` — o casamento mais confiante da rota — sobre o filme
+    ERRADO. Mandando as duas formas, titulo repetido no catalogo volta
+    `ambiguous_title` em vez de virar bloco.
+    """
+    candidatos = collect_entity_candidates(
+        title="Superman ganha continuacao",
+        lead="",
+        declared_works=[{"titulo": "Superman", "ano": 2025}],
+    )
+    anos = {c.year for c in candidatos if c.name == "Superman" and c.kind == "movie"}
+    assert anos == {None, 2025}
+
+
+def test_an_implausible_declared_year_is_dropped_and_the_title_survives():
+    """Ano fora da janela da rota nao derruba a obra: ele so nao viaja."""
+    candidatos = collect_entity_candidates(
+        title="Filme antigo",
+        lead="",
+        declared_works=[{"titulo": "Metropolis", "ano": 12}],
+    )
+    anos = {c.year for c in candidatos if c.name == "Metropolis" and c.kind == "movie"}
+    assert anos == {None}
+
+
+def test_declared_works_are_capped_before_the_batch_is_built():
+    """Uma lista longa demais e sinal de lista errada, e cada obra custa ate
+    quatro itens do lote de 50."""
+    declaradas = [{"titulo": f"Obra Numero {indice}"} for indice in range(30)]
+    candidatos = collect_entity_candidates(
+        title="Retrospectiva", lead="", declared_works=declaradas
+    )
+    titulos = {c.name for c in candidatos if c.kind == "movie"}
+    assert len(titulos) == MAX_DECLARED_WORKS
 
 
 def test_a_work_is_sent_as_both_kinds_because_the_text_does_not_say_which():
@@ -561,25 +622,129 @@ def test_a_resolver_that_returns_none_produces_no_card_and_a_warning():
     assert built.payload["qa"]["passed"] is True
 
 
-def test_the_top_level_entity_links_array_is_left_untouched_by_the_resolver():
-    """Curadoria humana nao e sobrescrita por robo.
-
-    `entityLinks` carrega `verified`, que e decisao de gente, e o CMS nem
-    reaplica o campo em `update` (`ENTITY_LINK_NOT_REAPPLIED`). A resolucao
-    alimenta SO o corpo; o array de topo continua saindo como quem chama mandou.
-    """
-
+def _resolver_fixo(entity_id="4210", kind="person", matched_by="exact_name", confidence=0.85):
     def resolver(items):
         return [
             {
                 "index": indice,
-                "entityKind": "person",
-                "entityId": "4210",
-                "matchedBy": "exact_name",
-                "confidence": 0.85,
+                "entityKind": kind,
+                "entityId": entity_id,
+                "matchedBy": matched_by,
+                "confidence": confidence,
             }
             for indice, _item in enumerate(items)
         ]
 
-    built = _build(resolver=resolver)
-    assert built.payload["entityLinks"] == []
+    return resolver
+
+
+def test_the_work_the_writer_declared_reaches_the_route_from_the_draft():
+    """Ponta a ponta: `obras_citadas` do escritor -> item do lote da rota.
+
+    O caminho inteiro so vale se o campo atravessar o draft. Ele nasce em
+    `DraftContent.work_mentions`, sobrevive ao validador (`FIELD_PRESERVED`) e e
+    lido aqui, na montagem do pedido.
+    """
+    enviados: list = []
+
+    def resolver(items):
+        enviados.extend(items)
+        return [
+            {"index": indice, "entityId": None, "matchedBy": None, "reason": "not_found"}
+            for indice, _item in enumerate(items)
+        ]
+
+    draft = _draft()
+    draft.content.work_mentions = [{"title": "Signal One"}]
+    build_publication_request(
+        draft,
+        public_author_id="1",
+        attribution_mode="newsroom",
+        contract=local_identity(),
+        entity_resolver=resolver,
+        entity_card_max=3,
+        entity_match_kinds=TODOS_OS_CASAMENTOS,
+    )
+    obras = [item for item in enviados if item.get("title") == "Signal One"]
+    assert {item["kind"] for item in obras} == {"movie", "tv"}
+    assert all("year" not in item for item in obras)
+
+
+def test_what_the_route_resolved_becomes_entity_links_in_the_request():
+    """O elo que estava cortado: resolver e nao vincular nao liga nada.
+
+    `entityLinks` e a UNICA porta para `entity_news_links`, e e ele que leva a
+    materia para a pagina do filme e da pessoa. Ate 27/08/2026 este array saia
+    vazio em toda publicacao — ninguem passava o argumento —, e a ficha do filme
+    ficava sem uma linha de noticia com a materia no ar.
+    """
+    built = _build(resolver=_resolver_fixo())
+    assert built.payload["entityLinks"] == [
+        {
+            "entityKind": "person",
+            "entityId": "4210",
+            "relation": "primary_subject",
+            "confidence": 0.85,
+        }
+    ]
+
+
+def test_the_confidence_travels_untouched_because_the_cms_decides_with_it():
+    """`confidence` decide se o vinculo nasce verificado no CMS (ADR 0019).
+
+    Arredondar para cima aqui compraria auto-verificacao com numero que a rota
+    nao devolveu.
+    """
+    built = _build(resolver=_resolver_fixo(matched_by="exact_title_year", kind="movie", confidence=0.9))
+    assert [link["confidence"] for link in built.payload["entityLinks"]] == [0.9]
+
+
+def test_a_link_declared_by_the_caller_is_not_downgraded_by_the_resolver():
+    """Curadoria humana continua vencendo.
+
+    O que muda e o array deixar de sair vazio; o que NAO muda e quem manda: uma
+    relacao declarada de fora (`reviewed`) nao vira `mentioned` porque a rota
+    resolveu o mesmo par (tipo, id).
+    """
+    curado = {
+        "entityKind": "person",
+        "entityId": "4210",
+        "relation": "reviewed",
+        "confidence": 1.0,
+    }
+    built = build_publication_request(
+        _draft(),
+        public_author_id="1",
+        attribution_mode="newsroom",
+        contract=local_identity(),
+        entity_resolver=_resolver_fixo(),
+        entity_card_max=3,
+        entity_match_kinds=TODOS_OS_CASAMENTOS,
+        entity_links=[curado],
+    )
+    assert built.payload["entityLinks"] == [curado]
+
+
+def test_an_entity_that_did_not_become_a_card_still_becomes_a_link():
+    """Ficha e espaco na pagina; vinculo e indice. Os tetos sao diferentes.
+
+    Limitar o vinculo ao que virou ficha jogaria fora entidade corretamente
+    resolvida — na materia da Saoirse Ronan foram 19 resolvidas e 3 fichas.
+    """
+    resolucao = EntityResolution(
+        resolved=[
+            ResolvedEntity(
+                candidate=EntityCandidate(name=nome, kind="person", prominence=2),
+                entity_kind="person",
+                entity_id=str(4210 + indice),
+                matched_by="exact_name",
+                confidence=0.85,
+            )
+            for indice, nome in enumerate(["Ana Souza", "Bruno Lima", "Carla Dias"])
+        ]
+    )
+    fichas = select_entity_cards(resolucao, maximum=1)
+    vinculos = entity_links_from(resolucao.resolved)
+    assert len(fichas) == 1
+    assert [link["entityId"] for link in vinculos] == ["4210", "4211", "4212"]
+    assert {link["relation"] for link in vinculos} == {"mentioned"}

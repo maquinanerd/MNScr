@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Final, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Final, List, Mapping, Optional, Sequence, Tuple
 
 from .blocks import (
     BlockConversion,
@@ -33,9 +33,11 @@ from .blocks import (
 )
 from .contract import ContractIdentity, local_identity
 from .entity_resolve import (
+    MAX_ENTITY_LINKS,
     EntityResolver,
     attach_entity_cards,
     collect_entity_candidates,
+    entity_links_from,
     log_emitted_cards,
     parse_resolution,
     select_entity_cards,
@@ -304,7 +306,8 @@ def _attach_resolved_entity_cards(
     resolver: Optional[EntityResolver],
     maximum: int,
     match_kinds: Sequence[str],
-) -> List[Any]:
+    declared_works: Sequence[Mapping[str, Any]] = (),
+) -> Tuple[List[Any], List[Any]]:
     """Resolve as entidades do rascunho e insere as fichas no corpo. Nunca levanta.
 
     Uma chamada por MATERIA, em lote — nao uma por entidade. A rota tem teto de
@@ -312,29 +315,34 @@ def _attach_resolved_entity_cards(
     de um laco descontrolado; uma chamada por nome transformaria uma materia com
     doze nomes em doze chamadas para responder a mesma pergunta.
 
-    Devolve as fichas emitidas, para o relatorio. Toda falha vira zero fichas:
+    Devolve DOIS conjuntos, e a diferenca importa: as fichas EMITIDAS no corpo
+    (no maximo ``maximum``, por legibilidade) e TUDO o que a rota resolveu (que
+    vira ``entityLinks`` e nao ocupa espaco na pagina). Toda falha vira zero fichas:
     esta e a mesma regra da imagem — enriquecimento nao derruba materia —, e aqui
     ela e ainda mais estrita, porque a alternativa a "sem ficha" nao e "ficha
     aproximada", e sim "ficha apontando para a obra errada, com 201 na
     auditoria".
     """
     if resolver is None or maximum <= 0 or not match_kinds:
-        return []
+        return [], []
 
     try:
         lead = lead_text_of(conversion.blocks)
         candidatos = collect_entity_candidates(
-            title=title, lead=lead, blocks=conversion.blocks
+            title=title,
+            lead=lead,
+            blocks=conversion.blocks,
+            declared_works=declared_works,
         )
         if not candidatos:
-            return []
+            return [], []
 
         resultados = resolver([candidato.as_resolve_item() for candidato in candidatos])
         if resultados is None:
             # O resolvedor ja registrou o motivo. `None` e "nao sei", e "nao sei"
             # nunca vira bloco.
             conversion.warnings.append("ENTITY_RESOLVE_INDISPONIVEL")
-            return []
+            return [], []
 
         resolution = parse_resolution(
             resultados, candidatos, accepted_match_kinds=match_kinds
@@ -348,7 +356,9 @@ def _attach_resolved_entity_cards(
 
         escolhidas = select_entity_cards(resolution, maximum=maximum)
         if not escolhidas:
-            return []
+            # Sem ficha, mas o vinculo continua valendo: ele nao ocupa espaco na
+            # pagina e e o que leva a materia para a ficha do filme.
+            return [], list(resolution.resolved)
 
         # Um lugar reservado para o `sourceList`, que entra depois e e o bloco
         # que NAO pode ficar de fora: a atribuicao da fonte vale mais que a ficha.
@@ -358,14 +368,14 @@ def _attach_resolved_entity_cards(
             )
         )
         log_emitted_cards(escolhidas)
-        return list(escolhidas)
+        return list(escolhidas), list(resolution.resolved)
     except Exception as exc:  # noqa: BLE001 - ficha NUNCA custa a materia publicada
         logger.warning(
             "[CINERIE_ENTITY] resolucao levantou %s: %s; materia segue sem ficha",
             type(exc).__name__, exc,
         )
         conversion.warnings.append("ENTITY_RESOLVE_FALHOU")
-        return []
+        return [], []
 
 
 def _qa_from_draft(draft: Any, *, seo: SeoProposal, extra_warnings: Sequence[str]) -> Dict[str, Any]:
@@ -522,12 +532,13 @@ def build_publication_request(
     # ordem nao e arbitraria: `sourceList` e sempre o ULTIMO bloco, e a ficha se
     # posiciona pelo paragrafo em que a entidade e mencionada — o que exige o
     # corpo pronto e a lista de fontes ainda fora.
-    entity_cards = _attach_resolved_entity_cards(
+    entity_cards, entity_resolved = _attach_resolved_entity_cards(
         conversion,
         title=getattr(content, "title", "") or "",
         resolver=entity_resolver,
         maximum=entity_card_max,
         match_kinds=entity_match_kinds,
+        declared_works=getattr(content, "work_mentions", ()) or (),
     )
 
     # A midia REFERENCIADA precisa estar resolvida antes do corpo fechar, pelo
@@ -619,7 +630,12 @@ def build_publication_request(
         "summary": summary,
         "blocks": conversion.blocks,
         "externalSources": external_sources,
-        "entityLinks": _normalize_entity_links(entity_links),
+        # Curadoria de quem chama PRIMEIRO: na deduplicacao o primeiro vence, e
+        # um vinculo declarado por gente nao pode ser substituido pelo que a
+        # rota achou do mesmo par (tipo, id).
+        "entityLinks": _normalize_entity_links(
+            [*entity_links, *entity_links_from(entity_resolved)]
+        ),
         "media": media_entries,
         "seo": seo.to_contract(),
         "provenance": _provenance_from_draft(draft),
@@ -692,6 +708,14 @@ def _normalize_entity_links(links: Sequence[Mapping[str, Any]]) -> List[Dict[str
 
     Sem um id interno verificavel a sugestao e descartada: apontar para uma
     entidade inexistente e pior do que nao apontar.
+
+    DEDUPLICA por `(entityKind, entityId)` e o PRIMEIRO vence. A ordem de
+    chamada e quem decide: a lista de quem chama entra antes da resolucao
+    automatica, entao uma relacao declarada por gente ("reviewed") nao e
+    rebaixada para "mentioned" porque a rota resolveu o mesmo id.
+
+    CORTA no teto do contrato. Passar de `maxItems: 100` reprovaria o pedido
+    inteiro no schema — o enriquecimento derrubaria a materia.
     """
     allowed_kinds = {"movie", "tv", "season", "episode", "person", "character", "franchise"}
     allowed_relations = {
@@ -703,7 +727,10 @@ def _normalize_entity_links(links: Sequence[Mapping[str, Any]]) -> List[Dict[str
         "compared",
     }
     entries: List[Dict[str, Any]] = []
+    vistos: set = set()
     for item in links or []:
+        if len(entries) >= MAX_ENTITY_LINKS:
+            break
         if not isinstance(item, Mapping):
             continue
         kind = collapse(item.get("entityKind"))
@@ -716,6 +743,10 @@ def _normalize_entity_links(links: Sequence[Mapping[str, Any]]) -> List[Dict[str
             continue
         if not isinstance(confidence, (int, float)) or not 0.0 <= float(confidence) <= 1.0:
             continue
+        chave = (kind, entity_id)
+        if chave in vistos:
+            continue
+        vistos.add(chave)
         entries.append(
             {
                 "entityKind": kind,

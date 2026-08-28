@@ -112,6 +112,40 @@ def _clean(value: Any) -> Optional[str]:
     return text or None
 
 
+def _clean_work_mentions(value: Any) -> list[dict]:
+    """Normaliza a lista de obras citadas para ``{"title": str, "year": int|None}``.
+
+    Aceita as duas grafias que o JSON da IA usa (``titulo``/``ano`` e
+    ``title``/``year``) porque o prompt e escrito em portugues e o modelo
+    responde na lingua do prompt com frequencia suficiente para nao valer uma
+    aposta. Ano fora de faixa vira ``None`` em vez de derrubar o item: o titulo
+    sozinho ainda e uma pergunta valida para o catalogo.
+    """
+    limpas: list[dict] = []
+    vistos: set = set()
+    for item in value or []:
+        if isinstance(item, str):
+            item = {"title": item}
+        if not isinstance(item, dict):
+            continue
+        titulo = _clean(item.get("title") or item.get("titulo"))
+        if not titulo:
+            continue
+        chave = titulo.casefold()
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        bruto = item.get("year", item.get("ano"))
+        try:
+            ano: Optional[int] = int(str(bruto).strip()) if bruto not in (None, "") else None
+        except (TypeError, ValueError):
+            ano = None
+        if ano is not None and not 1870 <= ano <= 2200:
+            ano = None
+        limpas.append({"title": titulo, "year": ano})
+    return limpas
+
+
 @dataclass
 class SourceReference:
     """One source document that fed the draft."""
@@ -217,6 +251,13 @@ class DraftContent:
     related_keyphrases: list[str] = field(default_factory=list)
     category_suggestions: list[str] = field(default_factory=list)
     tag_suggestions: list[str] = field(default_factory=list)
+    #: Obras (filme/serie) que a IA escritora declarou ter citado no texto:
+    #: ``[{"title": str, "year": int | None}]``. NAO e taxonomia e nao vira tag:
+    #: e a lista que a resolucao de entidade usa para perguntar ao catalogo do
+    #: Cinerie quem sao aqueles titulos. Existe porque a prosa em portugues
+    #: quase nunca escreve `Titulo (ano)`, que era a UNICA forma que o extrator
+    #: por texto enxergava — e sem ela nenhum filme era sequer perguntado.
+    work_mentions: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.title = str(self.title or "").strip()
@@ -235,6 +276,7 @@ class DraftContent:
         self.tag_suggestions = [
             text for text in (_clean(item) for item in self.tag_suggestions or []) if text
         ]
+        self.work_mentions = _clean_work_mentions(self.work_mentions)
 
 
 @dataclass

@@ -736,6 +736,26 @@ Antes de gerar o JSON final, revise mentalmente:
 Se qualquer resposta indicar problema, corrija antes de gerar o JSON.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OBRAS CITADAS (obras_citadas) — OBRIGATÓRIO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Liste os filmes e as séries que APARECEM no texto que você acabou de escrever.
+Essa lista não é tag e não é categoria: ela é a pergunta que o sistema faz ao
+catálogo do Cinerie para ligar a matéria à ficha da obra. Uma obra fora dessa
+lista não é ligada a nada.
+
+- "titulo": copie EXATAMENTE como está no seu texto — sem aspas, sem itálico,
+  sem o ano dentro do campo, sem subtítulo que você mesmo inventou.
+- "ano": SÓ quando a fonte declarar o ano daquela obra. Não deduza pelo que você
+  sabe, não estime por elenco nem por contexto. Ano errado liga a matéria ao
+  filme ERRADO — um remake, uma refilmagem, outro filme de mesmo nome. Na
+  dúvida, omita o campo "ano": o título sozinho continua sendo uma pergunta
+  válida.
+- NÃO liste: franquia sem obra ("universo DC", "MCU"), temporada isolada
+  ("2ª temporada"), estúdio, plataforma, prêmio, evento ou nome de pessoa.
+- Se a matéria não cita nenhuma obra com título próprio, devolva [].
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FASE 4 — EMPACOTAMENTO FINAL EM JSON
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -758,6 +778,9 @@ Gere exclusivamente o objeto JSON abaixo, contendo o array 'resultados' com um �
         }
       ],
       "tags_sugeridas": ["tag-1", "tag-2", "tag-3", "tag-4", "tag-5"],
+      "obras_citadas": [
+        {"titulo": "Título do filme ou da série como ele aparece no seu texto", "ano": 2026}
+      ],
       "image_alt_texts": {
         "nome-da-imagem.jpg": "Descrição da imagem com obra, personagem, ator ou contexto."
       },

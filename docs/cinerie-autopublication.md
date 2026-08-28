@@ -267,8 +267,18 @@ testar prova apenas que ela foi chamada. Por isso eles **não** usam a fixture
   Em consequência, imagens do corpo são descartadas (com aviso) e
   `imageAltSuggestions` sai vazio — a conversão existe e é testada, mas não tem a
   que se ligar.
-- `entityLinks` sai vazio enquanto não houver id verificável do catálogo. O MNScr
-  não cria entidade.
+- `entityLinks` carrega **todas** as entidades que a rota de resolução casou —
+  não só as três que viram `entityCard`. Ficha é espaço na página (limitada por
+  legibilidade); vínculo é índice (até 100, do contrato), e é ele que leva a
+  matéria para "Notícias relacionadas" na página do filme e da pessoa. Entidade
+  sem id verificável do catálogo continua de fora: o MNScr não cria entidade.
+
+  O vínculo só aparece no site depois de **verificado**. O CMS verifica sozinho
+  quando `confidence >= EDITORIAL_ENTITY_LINK_AUTO_VERIFY_MIN_CONFIDENCE` (ADR
+  0019), cujo default é `0.9`. Com esse default, `exact_title_year` (0.9) nasce
+  verificado e `exact_name` / `exact_title_unique` (0.85) esperam um humano no
+  admin. Para que pessoa e obra sem ano também apareçam sozinhas, o corte
+  precisa ser `0.85` — é variável de ambiente, não exige deploy de código.
 - Não existe bloco de lista nem de passos no contrato, então `HowTo` e `ItemList`
   nunca são recomendados: seria structured data falso.
 

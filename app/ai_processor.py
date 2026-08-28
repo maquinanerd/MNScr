@@ -43,8 +43,15 @@ ESTRUTURA FIXA DO TOPO:
   "resultados": [ /* 1 ou N objetos, um por artigo, na mesma ordem da entrada */ ]
 }
 NUNCA devolva texto fora do JSON. NUNCA inclua comentários. NUNCA mude os nomes de chaves.
-Cada artigo DEVE conter: "titulo_final", "conteudo_final", "meta_description", "subtitle", "focus_keyphrase", "related_keyphrases", "slug", "categorias", "tags_sugeridas".
+Cada artigo DEVE conter: "titulo_final", "conteudo_final", "meta_description", "subtitle", "focus_keyphrase", "related_keyphrases", "slug", "categorias", "tags_sugeridas", "obras_citadas".
 Campos opcionais: "openGraphTitleSuggestion", "openGraphDescriptionSuggestion", "twitterTitleSuggestion", "twitterDescriptionSuggestion".
+
+**OBRAS CITADAS (obras_citadas)** — lista de filmes e séries que APARECEM no texto que você escreveu:
+  "obras_citadas": [{"titulo": "Signal One", "ano": 2026}, {"titulo": "The Brave and the Bold"}]
+  - Copie o título EXATAMENTE como ele aparece no seu texto, sem aspas, sem itálico, sem o ano dentro do campo "titulo".
+  - "ano" SÓ quando a fonte declarar o ano daquela obra. Não deduza, não estime, não complete pela memória: ano errado liga a matéria ao filme errado. Sem ano declarado, omita o campo.
+  - Não inclua franquia sem obra ("universo DC"), temporada ("2ª temporada"), evento, estúdio, plataforma nem nome de pessoa — só obra com título próprio.
+  - Lista vazia é resposta válida: matéria que não cita obra nenhuma devolve [].
 NUNCA gere canonical, robots, noindex, JSON-LD, publisher, sitemap, datas de publicacao, post_status nem qualquer campo yoast_*: essas decisoes pertencem ao lado publico.
 
 **2. VALIDAÇÃO DE TÍTULO (titulo_final)**

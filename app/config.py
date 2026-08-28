@@ -376,14 +376,20 @@ MNSCR_CINERIE_ENTITY_CARD_MAX = int(os.getenv('MNSCR_CINERIE_ENTITY_CARD_MAX', 3
 #: Limiar de confiança: quais `matchedBy` da rota podem virar bloco publicado.
 #: Configurável porque é uma decisão editorial, não técnica — apertar para
 #: `exact_title_year` derruba a resolução por nome de pessoa, que hoje é a que
-#: mais resolve. O default aceita os três casamentos exatos que a rota oferece;
-#: nenhum deles é aproximação (a rota não faz fuzzy nem prefixo).
+#: mais resolve. O default aceita os quatro casamentos EXATOS que a rota
+#: oferece; nenhum deles é aproximação (a rota não faz fuzzy nem prefixo).
+#:
+#: `exact_title_unique` entrou depois dos outros três e é o que torna obra alcançável:
+#: título exato e ÚNICO no catálogo, sem ano. Sem ele, filme anunciado — que é
+#: metade do noticiário — nunca casa, porque obra sem data estreia no catálogo
+#: com o ano vazio e `exact_title_year` compara ano com ano. Título repetido
+#: continua voltando `ambiguous_title`, que é `null`, que não vira bloco.
 MNSCR_CINERIE_ENTITY_MATCH_KINDS = tuple(
     item.strip()
     for item in (
         os.getenv(
             'MNSCR_CINERIE_ENTITY_MATCH_KINDS',
-            'tmdb_id,exact_title_year,exact_name',
+            'tmdb_id,exact_title_year,exact_title_unique,exact_name',
         )
     ).split(',')
     if item.strip()
