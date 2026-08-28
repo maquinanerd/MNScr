@@ -116,7 +116,7 @@ def test_a_declared_work_travels_without_a_year_because_the_route_checks_uniquen
     """
     candidatos = collect_entity_candidates(
         title="Filme ganha data de estreia",
-        lead="O longa chega em setembro.",
+        lead="Signal One chega em setembro.",
         declared_works=[{"titulo": "Signal One"}],
     )
     obras = {(c.name, c.kind, c.year) for c in candidatos if c.kind in ("movie", "tv")}
@@ -144,7 +144,7 @@ def test_an_implausible_declared_year_is_dropped_and_the_title_survives():
     """Ano fora da janela da rota nao derruba a obra: ele so nao viaja."""
     candidatos = collect_entity_candidates(
         title="Filme antigo",
-        lead="",
+        lead="Metropolis completa cem anos.",
         declared_works=[{"titulo": "Metropolis", "ano": 12}],
     )
     anos = {c.year for c in candidatos if c.name == "Metropolis" and c.kind == "movie"}
@@ -156,7 +156,9 @@ def test_declared_works_are_capped_before_the_batch_is_built():
     quatro itens do lote de 50."""
     declaradas = [{"titulo": f"Obra Numero {indice}"} for indice in range(30)]
     candidatos = collect_entity_candidates(
-        title="Retrospectiva", lead="", declared_works=declaradas
+        title="Retrospectiva",
+        lead=" ".join(obra["titulo"] for obra in declaradas),
+        declared_works=declaradas,
     )
     titulos = {c.name for c in candidatos if c.kind == "movie"}
     assert len(titulos) == MAX_DECLARED_WORKS
@@ -655,7 +657,7 @@ def test_the_work_the_writer_declared_reaches_the_route_from_the_draft():
         ]
 
     draft = _draft()
-    draft.content.work_mentions = [{"title": "Signal One"}]
+    draft.content.work_mentions = [{"title": "Morgan Freeman"}]
     build_publication_request(
         draft,
         public_author_id="1",
@@ -665,7 +667,7 @@ def test_the_work_the_writer_declared_reaches_the_route_from_the_draft():
         entity_card_max=3,
         entity_match_kinds=TODOS_OS_CASAMENTOS,
     )
-    obras = [item for item in enviados if item.get("title") == "Signal One"]
+    obras = [item for item in enviados if item.get("title") == "Morgan Freeman"]
     assert {item["kind"] for item in obras} == {"movie", "tv"}
     assert all("year" not in item for item in obras)
 
@@ -861,7 +863,7 @@ def test_the_work_named_in_the_headline_is_the_subject_not_a_mention():
     """
     candidatos = collect_entity_candidates(
         title="Spider-Man: Brand New Day quebra recorde de bilheteria da Marvel",
-        lead="",
+        lead="O filme superou Avengers: Endgame e antecede Avengers: Doomsday.",
         declared_works=[
             {"title": "Avengers: Doomsday"},
             {"title": "Spider-Man: Brand New Day"},
@@ -897,3 +899,40 @@ def test_the_subject_travels_first_and_as_primary_subject():
     assert vinculos[0]["entityId"] == "12"
     assert vinculos[0]["relation"] == "primary_subject"
     assert {v["relation"] for v in vinculos[1:]} == {"mentioned"}
+
+
+def test_a_work_the_writer_read_but_did_not_write_about_never_becomes_a_card():
+    """Medido na materia 128, publicada em 28/08/2026.
+
+    O escritor declarou `Game of Thrones` e `A Tale of Two Cities` em
+    `obras_citadas`. As duas estavam na FONTE que ele leu; NENHUMA foi escrita na
+    materia que ele entregou — ele comprimiu 1.879 palavras de fonte em 565. As
+    duas viraram ficha assim mesmo, e a pagina passou a anunciar duas obras sobre
+    as quais o texto nao diz uma linha.
+
+    `obras_citadas` e uma declaracao SOBRE o texto. Quando ela nao bate com o
+    texto, quem manda e o texto.
+    """
+    candidatos = collect_entity_candidates(
+        title="Kit Harington confirma filmagens da temporada final de Industry",
+        lead="O ator falou sobre o roteiro do desfecho.",
+        blocks=[{"type": "paragraph", "text": "As filmagens de Industry comecaram em Londres."}],
+        declared_works=[
+            {"title": "Industry"},
+            {"title": "Game of Thrones"},
+            {"title": "A Tale of Two Cities"},
+        ],
+    )
+    obras = {c.name for c in candidatos if c.kind in ("movie", "tv")}
+    assert obras == {"Industry"}
+
+
+def test_a_work_only_in_the_lead_still_counts():
+    """O corpo inclui o lead: a obra citada so ali nao e invencao."""
+    candidatos = collect_entity_candidates(
+        title="Serie ganha data",
+        lead="A nova temporada de Ruptura estreia em janeiro.",
+        blocks=[{"type": "paragraph", "text": "O anuncio veio pela plataforma."}],
+        declared_works=[{"title": "Ruptura"}],
+    )
+    assert {c.name for c in candidatos if c.kind == "tv"} == {"Ruptura"}

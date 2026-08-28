@@ -253,6 +253,7 @@ def _declared_work_candidates(
     prominence: int,
     kinds: Sequence[str],
     headline: str = "",
+    body: str = "",
 ) -> List[EntityCandidate]:
     """Obras que a IA escritora DECLAROU ter citado, em campo proprio.
 
@@ -289,6 +290,7 @@ def _declared_work_candidates(
     `primary_subject` no pedido e viaja PRIMEIRO na lista.
     """
     titulo_dobrado = fold(headline or "")
+    corpo_dobrado = fold(body or "")
     achados: List[EntityCandidate] = []
     for item in list(declared or [])[:MAX_DECLARED_WORKS]:
         if not isinstance(item, Mapping):
@@ -300,6 +302,17 @@ def _declared_work_candidates(
         # escreve a obra em portugues e com pontuacao propria, e um `in` cru
         # erraria em "Homem-Aranha:" contra "Homem-Aranha".
         dobrado = fold(titulo)
+        # A obra precisa estar no TEXTO PUBLICADO, nao so na cabeca da IA.
+        #
+        # Medido na materia 128: o escritor declarou `Game of Thrones` e `A Tale
+        # of Two Cities` — as duas citadas na FONTE que ele leu, nenhuma escrita
+        # na materia que ele entregou. Viraram ficha assim mesmo, e a pagina
+        # ficou anunciando duas obras sobre as quais o texto nao diz uma linha.
+        #
+        # `obras_citadas` e uma declaracao sobre o texto; quando ela nao bate
+        # com o texto, quem manda e o texto.
+        if dobrado and dobrado not in titulo_dobrado and dobrado not in corpo_dobrado:
+            continue
         prominencia = 0 if dobrado and dobrado in titulo_dobrado else prominence
         ano = item.get("year", item.get("ano"))
         try:
@@ -344,7 +357,11 @@ def collect_entity_candidates(
     # sendo o que a materia enuncia sobre si mesma.
     candidatos.extend(
         _declared_work_candidates(
-            declared_works, prominence=1, kinds=("movie", "tv"), headline=title
+            declared_works,
+            prominence=1,
+            kinds=("movie", "tv"),
+            headline=title,
+            body=" ".join([lead, *_paragraph_texts(blocks)]),
         )
     )
     for paragrafo in _paragraph_texts(blocks):
