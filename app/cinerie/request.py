@@ -517,9 +517,21 @@ def build_publication_request(
         payload_hash=payload_hash,
     )
 
+    # Os UNICOS destinos que podem virar link no corpo: as fontes que a propria
+    # materia declara. Todo `<a>` que sobrevive a limpeza foi escrito pela IA, e
+    # ela inventa endereco — a materia 128 saiu com um link para
+    # `cinerie.com.br/tag/industry`, dominio errado e caminho que nao existe.
+    # A lista e fechada; o que nao estiver nela perde a ancora e mantem o texto.
     conversion = html_to_blocks(
         getattr(content, "body_html", ""),
         article_title=getattr(content, "title", "") or "",
+        allowed_link_hrefs=[
+            url
+            for url in (
+                collapse(getattr(source, "url", "")) for source in (getattr(draft, "sources", None) or [])
+            )
+            if url
+        ],
     )
     if conversion.is_empty:
         raise RequestBuildError("corpo do draft nao produziu nenhum bloco editorial")

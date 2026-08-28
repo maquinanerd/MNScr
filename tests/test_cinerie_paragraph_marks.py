@@ -20,8 +20,15 @@ Duas armadilhas com nome proprio:
 from app.cinerie.blocks import BLOCK_PARAGRAPH, html_to_blocks
 
 
-def _paragrafos(html: str):
-    return [b for b in html_to_blocks(html).blocks if b["type"] == BLOCK_PARAGRAPH]
+def _paragrafos(html: str, *, links: tuple = ()):
+    """Blocos de paragrafo do HTML.
+
+    `links` e a lista FECHADA de destinos que podem virar ancora — as fontes que
+    a materia declara. Vazia por padrao de proposito: link que a materia nao
+    declarou foi a IA que inventou.
+    """
+    conversao = html_to_blocks(html, allowed_link_hrefs=links)
+    return [b for b in conversao.blocks if b["type"] == BLOCK_PARAGRAPH]
 
 
 def _trecho(bloco, marca):
@@ -39,7 +46,10 @@ def test_bold_and_italic_land_on_the_words_they_wrap():
 
 
 def test_a_link_carries_the_href_and_only_the_anchor_text():
-    bloco = _paragrafos('<p>Leia <a href="https://variety.com/x">a reportagem</a> completa.</p>')[0]
+    bloco = _paragrafos(
+        '<p>Leia <a href="https://variety.com/x">a reportagem</a> completa.</p>',
+        links=("https://variety.com/x",),
+    )[0]
     marca = bloco["marks"][0]
     assert marca["type"] == "link"
     assert marca["href"] == "https://variety.com/x"
@@ -83,7 +93,8 @@ def test_a_paragraph_without_emphasis_has_no_marks_key():
 
 def test_nested_emphasis_inside_a_link_keeps_both_marks():
     bloco = _paragrafos(
-        '<p>Veja <a href="https://exemplo.com/a"><strong>o anuncio</strong></a> agora.</p>'
+        '<p>Veja <a href="https://exemplo.com/a"><strong>o anuncio</strong></a> agora.</p>',
+        links=("https://exemplo.com/a",),
     )[0]
     tipos = {marca["type"]: _trecho(bloco, marca) for marca in bloco["marks"]}
     assert tipos["link"] == "o anuncio"
@@ -96,3 +107,28 @@ def test_a_paragraph_that_carries_several_paragraphs_travels_without_marks():
     blocos = _paragrafos("<p>Primeiro com <strong>enfase</strong>.\n\nSegundo pedaco.</p>")
     assert len(blocos) == 2
     assert all("marks" not in bloco for bloco in blocos)
+
+
+def test_a_link_the_writer_invented_never_becomes_an_anchor():
+    """A materia 128 saiu com `https://www.cinerie.com.br/tag/industry` no corpo.
+
+    Dominio errado (o site e `.com`) e caminho de tag do WordPress, que o Cinerie
+    nao tem. Foi a IA inventando link interno — e, com `marks` atravessando, a
+    invencao virou ancora clicavel numa pagina publicada. Link quebrado e pior
+    que texto sem link: o leitor nao tem como saber que ele nao existia.
+    """
+    html = '<p>A serie <a href="https://www.cinerie.com.br/tag/industry">explora o poder</a> em Londres.</p>'
+    blocos = _paragrafos(html)
+    assert blocos[0]["text"] == "A serie explora o poder em Londres."
+    assert "marks" not in blocos[0]
+
+
+def test_a_link_to_a_declared_source_survives():
+    """A recusa e do INVENTADO, nao do link. Fonte declarada continua clicavel."""
+    fonte = "https://collider.com/industry-final-season-5"
+    html = f'<p>Segundo o <a href="{fonte}">Collider</a>, as filmagens comecaram.</p>'
+    bloco = _paragrafos(html, links=(fonte,))[0]
+    marca = bloco["marks"][0]
+    assert marca["type"] == "link"
+    assert marca["href"] == fonte
+    assert _trecho(bloco, marca) == "Collider"

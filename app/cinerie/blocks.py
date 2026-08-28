@@ -37,7 +37,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Dict, Final, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Final, FrozenSet, List, Optional, Sequence, Tuple
 
 from .contract import load_schema
 from .identity import is_stable_id
@@ -421,7 +421,9 @@ _MARK_BY_TAG: Final[Dict[str, str]] = {
 _MAX_MARKS_PER_PARAGRAPH: Final[int] = 200
 
 
-def _marked_paragraph(node: Any, *, limit: int) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
+def _marked_paragraph(
+    node: Any, *, limit: int, allowed_hrefs: FrozenSet[str] = frozenset()
+) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
     """Texto limpo + `marks`, com offsets no texto FINAL.
 
     O contrato nao aceita HTML: a enfase viaja como intervalo `start`/`end` sobre
@@ -469,6 +471,18 @@ def _marked_paragraph(node: Any, *, limit: int) -> Optional[Tuple[str, List[Dict
                 # aceita http(s), e mandar outra coisa reprova o pedido inteiro.
                 if not href.lower().startswith(("http://", "https://")):
                     tipo = None
+                # E o destino precisa ser um que a MATERIA declarou.
+                #
+                # Todo `<a>` que sobra no corpo depois da limpeza foi escrito
+                # pela IA, e ela inventa endereco com naturalidade: na materia
+                # 128 saiu `https://www.cinerie.com.br/tag/industry` — dominio
+                # errado (o site e `.com`) e caminho de tag do WordPress, que o
+                # Cinerie nem tem. Um link quebrado publicado e pior do que
+                # texto sem link, e o leitor nao tem como saber que ele foi
+                # inventado.
+                elif href not in allowed_hrefs:
+                    tipo = None
+                    href = None
             inicio = tamanho
             andar(filho)
             if tipo is not None and tamanho > inicio:
@@ -865,12 +879,22 @@ def split_promotable_quote(
     return None
 
 
-def html_to_blocks(body_html: str, *, article_title: str = "") -> BlockConversion:
+def html_to_blocks(
+    body_html: str,
+    *,
+    article_title: str = "",
+    allowed_link_hrefs: Sequence[str] = (),
+) -> BlockConversion:
     """Converte o corpo HTML do draft na lista de blocos do contrato.
 
     ``article_title`` alimenta a deteccao do sujeito dominante — quem assina as
     citacoes com verbo de fala sem nome. Sem titulo a deteccao ainda funciona,
     so perde a chance de trocar "Murphy" pela grafia completa do titulo.
+
+    ``allowed_link_hrefs`` e a lista FECHADA de destinos que podem virar
+    marcacao de link. Vazia por padrao: sem ela, nenhum `<a>` do corpo vira
+    link, e e assim que deve ser quando quem chama nao sabe dizer o que a
+    materia declarou.
     """
     from bs4 import BeautifulSoup
 
@@ -1032,7 +1056,9 @@ def html_to_blocks(body_html: str, *, article_title: str = "") -> BlockConversio
         # sobre o texto e os offsets do DOM deixam de valer — sai sem marcacao,
         # que e o comportamento de antes, e nunca marcacao no lugar errado.
         if len(pedacos) == 1 and not _looks_like_youtube(pedacos[0]):
-            marcado = _marked_paragraph(node, limit=paragraph_limit)
+            marcado = _marked_paragraph(
+                node, limit=paragraph_limit, allowed_hrefs=frozenset(allowed_link_hrefs)
+            )
             if marcado is not None and marcado[1] and marcado[0] == pedacos[0]:
                 emit_paragraph(marcado[0], marks=marcado[1])
                 continue
