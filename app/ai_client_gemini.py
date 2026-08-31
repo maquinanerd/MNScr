@@ -334,6 +334,19 @@ class AIClient:
                             or 0
                         )
 
+                        # Modelo com raciocinio gasta token que NAO aparece no
+                        # texto. Em 31/08/2026 o db 226 foi morto como runaway
+                        # com `Saida=31985` contra teto de 32000 — e o texto
+                        # bruto salvo tem 4.577 bytes, ~1.150 tokens. Os outros
+                        # 30 mil nao estavam na resposta, e ninguem sabia dizer
+                        # onde estavam porque este campo nunca foi lido.
+                        thoughts_tokens = (
+                            getattr(resp.usage_metadata, "thoughts_token_count", None)
+                            or getattr(resp.usage_metadata, "thoughtsTokenCount", None)
+                            or 0
+                        )
+                        api_total = getattr(resp.usage_metadata, "total_token_count", None)
+
                         if prompt_tokens is not None:
                             tokens_info["prompt_tokens"] = int(prompt_tokens)
                         if completion_tokens is not None:
@@ -342,12 +355,20 @@ class AIClient:
                                 int(completion_tokens) * 100 >= max_output_tokens * 95
                             )
                         tokens_info["cached_tokens"] = int(cached_tokens)
+                        tokens_info["thoughts_tokens"] = int(thoughts_tokens)
 
-                        total_tokens = tokens_info["prompt_tokens"] + tokens_info["completion_tokens"]
+                        # O total da API inclui raciocinio; a soma manual nao.
+                        total_tokens = (
+                            int(api_total)
+                            if api_total is not None
+                            else tokens_info["prompt_tokens"] + tokens_info["completion_tokens"]
+                        )
                         logging.info(
-                            "TOKENS CAPTURADOS: Entrada=%s | Saida=%s | Total=%s | Cache=%s | Modelo=%s",
+                            "TOKENS CAPTURADOS: Entrada=%s | Saida=%s | Raciocinio=%s | "
+                            "Total=%s | Cache=%s | Modelo=%s",
                             tokens_info["prompt_tokens"],
                             tokens_info["completion_tokens"],
+                            tokens_info["thoughts_tokens"],
                             total_tokens,
                             tokens_info["cached_tokens"],
                             model,

@@ -878,6 +878,68 @@ def collect_image_captions_from_article(soup: BeautifulSoup, base_url: str = "")
     return captions
 
 
+#: Frases que identificam chamada para acao — nao texto editorial.
+_CTA_PHRASES: Tuple[str, ...] = (
+    'thank you for reading',
+    "don't forget to subscribe",
+    'subscribe now',
+    'click here',
+    'read more',
+    'sign up',
+    'thanks for reading',
+    'thanks for visiting',
+    'please subscribe',
+    'subscribe to our',
+    'stay tuned',
+    'keep up to date',
+    'follow us',
+    'obrigado por ler',
+    'obrigada por ler',
+    'não esqueça de se inscrever',
+    'se inscreva',
+    'clique aqui',
+    'leia mais',
+    'cadastre-se',
+)
+
+#: Um CTA e uma LINHA, nao uma materia. Acima disto o elemento e corpo COM um
+#: CTA dentro, e remove-lo leva a materia junto.
+_MAX_PALAVRAS_DE_CTA: int = 40
+
+
+def _remove_cta_elements(article_body, domain: str) -> int:
+    """Remove chamada para acao sem levar o corpo da materia junto.
+
+    Ate 31/08/2026 esta regra existia em QUATRO copias identicas (Collider,
+    GameRant, ComicBook, ScreenRant) e todas varriam `div`, `article` e
+    `section` — contêineres —, decompondo o elemento inteiro quando a frase
+    aparecia em QUALQUER LUGAR dentro dele. Um `click here` perdido num widget
+    derrubava a materia inteira.
+
+    Medido na pagina `harry-potter-season-1-hbo-hogwarts-letter`: um `<section>`
+    de 1.247 palavras foi decomposto por essa substring, e o limpador
+    especifico devolveu ZERO palavra. O fallback generico salvava — varrendo a
+    pagina inteira junto, que e como uma nota sobre uma carta de Hogwarts virou
+    materia de 1.215 palavras com 25 blocos.
+
+    Duas travas, e a segunda e a que importa: so elemento de TEXTO (nunca
+    contêiner) e so quando o proprio elemento e curto o bastante para SER uma
+    linha de CTA.
+    """
+    removidos = 0
+    for elem in list(article_body.find_all(['p', 'span', 'blockquote', 'li'])):
+        if not elem.parent:
+            continue
+        texto = (elem.get_text(strip=True) or "").lower()
+        if len(texto.split()) > _MAX_PALAVRAS_DE_CTA:
+            continue
+        if any(cta in texto for cta in _CTA_PHRASES):
+            logger.info("INFO (%s): Removendo CTA: %s", domain, texto[:60])
+            elem.decompose()
+            removidos += 1
+    return removidos
+
+
 def _clean_english_captions(soup: BeautifulSoup, domain: str, base_url: str = "") -> Dict[str, str]:
     """
     Remove or blank out figcaption elements that are in English.
@@ -1279,38 +1341,10 @@ class ContentExtractor:
             article_soup = BeautifulSoup(content_html, 'lxml')
             self._remove_forbidden_blocks(article_soup)
 
-            # 9.5) REMOVER CTAs AGRESSIVAMENTE (NOVO)
-            # Remove qualquer parágrafo/div que contenha frases de CTA
-            cta_phrases = [
-                'thank you for reading',
-                "don't forget to subscribe",
-                'subscribe now',
-                'click here',
-                'read more',
-                'sign up',
-                'thanks for reading',
-                'thanks for visiting',
-                'please subscribe',
-                'subscribe to our',
-                'stay tuned',
-                'keep up to date',
-                'follow us',
-                'obrigado por ler',
-                'obrigada por ler',
-                'não esqueça de se inscrever',
-                'se inscreva',
-                'clique aqui',
-                'leia mais',
-                'cadastre-se',
-            ]
-
-            for elem in list(article_soup.find_all(['p', 'div', 'span', 'article', 'blockquote', 'section'])):
-                if not elem.parent:
-                    continue
-                text = (elem.get_text(strip=True) or "").lower()
-                if any(cta in text for cta in cta_phrases):
-                    logger.warning(f"CTA REMOVIDO: {text[:60]}")
-                    elem.decompose()
+            # 9.5) Remove chamada para acao — mesma regra dos limpadores
+            # especificos: o generico tinha o MESMO defeito de contêiner, e
+            # e ele quem resgata quando o especifico falha.
+            _remove_cta_elements(article_soup, "generico")
 
             # 10) Seleciona imagens do corpo (excluindo a destacada)
             # A `collect_images_from_article` já aplica `is_valid_article_image`
@@ -1454,30 +1488,7 @@ class ContentExtractor:
                 fig.decompose()
 
         # 7. Remove CTAs e "Thank you" messages
-        for elem in list(article_body.find_all(['p', 'div', 'span', 'article', 'blockquote', 'section'])):
-            if not elem.parent:
-                continue
-
-            text = (elem.get_text(strip=True) or "").lower()
-
-            # Remove CTAs - lista mais agressiva
-            if any(cta in text for cta in [
-                'thank you for reading',
-                "don't forget to subscribe",
-                'subscribe now',
-                'click here',
-                'read more',
-                'sign up',
-                'thanks for reading',
-                'thanks for visiting',
-                'please subscribe',
-                'subscribe to our',
-                'stay tuned',
-                'keep up to date',
-                'follow us',
-            ]):
-                logger.info(f"INFO (Collider): Removendo CTA: {text[:60]}")
-                elem.decompose()
+        _remove_cta_elements(article_body, "Collider")
 
         # 8. Remove English captions from images
         _clean_english_captions(article_body, "Collider")
@@ -1595,29 +1606,7 @@ class ContentExtractor:
                 fig.decompose()
 
         # 8. Remove parágrafos com CTAs
-        for elem in list(article_body.find_all(['p', 'div', 'span', 'article', 'blockquote', 'section'])):
-            if not elem.parent:
-                continue
-            text = (elem.get_text(strip=True) or "").lower()
-
-            # Remove CTAs - lista mais agressiva
-            if any(cta in text for cta in [
-                'thank you for reading',
-                "don't forget to subscribe",
-                'subscribe now',
-                'click here',
-                'read more',
-                'sign up',
-                'thanks for reading',
-                'thanks for visiting',
-                'please subscribe',
-                'subscribe to our',
-                'stay tuned',
-                'keep up to date',
-                'follow us',
-            ]):
-                logger.info(f"INFO (GameRant): Removendo CTA: {text[:60]}")
-                elem.decompose()
+        _remove_cta_elements(article_body, "GameRant")
 
         # 9. Remove English captions from images
         _clean_english_captions(article_body, "GameRant")
@@ -1743,29 +1732,7 @@ class ContentExtractor:
                 fig.decompose()
 
         # 9. Remove parágrafos com "Thank you for reading" ou "Subscribe"
-        for elem in list(article_body.find_all(['p', 'div', 'span', 'article', 'blockquote', 'section'])):
-            if not elem.parent:
-                continue
-            text = (elem.get_text(strip=True) or "").lower()
-
-            # Remove CTAs - lista mais agressiva
-            if any(cta in text for cta in [
-                'thank you for reading',
-                "don't forget to subscribe",
-                'subscribe now',
-                'click here',
-                'read more',
-                'sign up',
-                'thanks for reading',
-                'thanks for visiting',
-                'please subscribe',
-                'subscribe to our',
-                'stay tuned',
-                'keep up to date',
-                'follow us',
-            ]):
-                logger.info(f"INFO (ComicBook): Removendo CTA: {text[:60]}")
-                elem.decompose()
+        _remove_cta_elements(article_body, "ComicBook")
 
         # 10. Remove English captions from images
         _clean_english_captions(article_body, "ComicBook")
@@ -1889,29 +1856,7 @@ class ContentExtractor:
 
         # 8. Remove parágrafos com "Thank you for reading" ou "Subscribe" e outras CTAs
         # Busca TUDO - p, div, span, article, blockquote, section
-        for elem in list(article_body.find_all(['p', 'div', 'span', 'article', 'blockquote', 'section'])):
-            if not elem.parent:
-                continue
-            text = (elem.get_text(strip=True) or "").lower()
-
-            # Remove CTAs - lista mais agressiva
-            if any(cta in text for cta in [
-                'thank you for reading',
-                "don't forget to subscribe",
-                'subscribe now',
-                'click here',
-                'read more',
-                'sign up',
-                'thanks for reading',
-                'thanks for visiting',
-                'please subscribe',
-                'subscribe to our',
-                'stay tuned',
-                'keep up to date',
-                'follow us',
-            ]):
-                logger.info(f"INFO (ScreenRant): Removendo CTA: {text[:60]}")
-                elem.decompose()
+        _remove_cta_elements(article_body, "ScreenRant")
 
         # 9. Remove English captions from images
         _clean_english_captions(article_body, "ScreenRant")
