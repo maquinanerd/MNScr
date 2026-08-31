@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 AI_VALIDATOR_ENABLED: bool = os.getenv("AI_VALIDATOR_ENABLED", "true").lower() == "true"
 AI_VALIDATOR_MODEL: str = os.getenv("AI_VALIDATOR_MODEL", "gemini-2.5-flash-lite")
 AI_VALIDATOR_MAX_RETRIES: int = int(os.getenv("AI_VALIDATOR_MAX_RETRIES", "1"))
+#: Reenvios extras concedidos APENAS quando o modelo devolve corpo vazio.
+AI_VALIDATOR_EMPTY_RETRIES: int = int(os.getenv("AI_VALIDATOR_EMPTY_RETRIES", "1"))
 AI_VALIDATOR_FAIL_OPEN: bool = os.getenv("AI_VALIDATOR_FAIL_OPEN", "true").lower() == "true"
 
 # Campos obrigatorios no JSON da IA 1
@@ -387,7 +389,15 @@ def validate_and_fix_ai_json(
     t_start = time.perf_counter()
     logger.info("[AI_VALIDATOR] start db_id=%s", db_id)
 
-    for attempt in range(1, AI_VALIDATOR_MAX_RETRIES + 1):
+    # Resposta VAZIA ganha tentativa propria. Em 31/08/2026 o db 228 recebeu
+    # `Saida=0` — o modelo nao respondeu nada — e o validador foi direto para o
+    # fail-open, como se tivesse tentado. Uma resposta vazia custa zero token de
+    # saida e e transitoria; recusa mal formada (nao vazia) custa a saida
+    # inteira e repetir raramente ajuda, entao so a primeira ganha reenvio.
+    tentativas_permitidas = AI_VALIDATOR_MAX_RETRIES
+    attempt = 0
+    while attempt < tentativas_permitidas:
+        attempt += 1
         try:
             json_input = json.dumps(result, ensure_ascii=False, indent=None)
             prompt = _VALIDATOR_PROMPT.replace("{json_input}", json_input)
@@ -419,6 +429,16 @@ def validate_and_fix_ai_json(
                 fixed['_validator_total_tokens'] = p_tokens + c_tokens
 
                 return fixed
+            elif (
+                not (raw_response or "").strip()
+                and tentativas_permitidas < AI_VALIDATOR_MAX_RETRIES + AI_VALIDATOR_EMPTY_RETRIES
+            ):
+                tentativas_permitidas += 1
+                logger.warning(
+                    "[AI_VALIDATOR] attempt=%d resposta_vazia elapsed=%.2fs "
+                    "action=reenviar db_id=%s",
+                    attempt, elapsed, db_id,
+                )
             else:
                 logger.warning(
                     "[AI_VALIDATOR] attempt=%d json_parse_failed elapsed=%.2fs db_id=%s",

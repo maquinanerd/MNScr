@@ -333,6 +333,16 @@ def _is_runaway_ai_failure(reason: Optional[str]) -> bool:
 
 def _handle_ai_processing_failure(db: Database, article_id: int, reason: str) -> str:
     if _is_runaway_ai_failure(reason):
+        # Terminal de proposito — ver `test_ai_runaway.py`. A tentacao de dar uma
+        # segunda chance aqui foi medida e recusada em 31/08/2026: o db 226
+        # aparecia com `Saida=31985` contra teto de 32000, mas o `raw_text`
+        # salvo em `debug/failed_ai_*.json.txt` (gravado INTEIRO, sem corte) tem
+        # 4.577 bytes — ~1.150 tokens. Os outros ~30 mil nao estao no texto.
+        #
+        # Ou seja: nao da para afirmar que isto e "o modelo escrevendo demais"
+        # sem saber quanto foi RACIOCINIO. O SDK expoe `thoughts_token_count` e
+        # o cliente nunca leu — agora le, e o proximo caso responde a pergunta
+        # com dado em vez de palpite. Ate la, o comportamento nao muda.
         db.update_article_status(
             article_id,
             'FAILED_PERMANENT',

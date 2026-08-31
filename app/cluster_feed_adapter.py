@@ -25,6 +25,35 @@ def is_superfeed_item(entry: dict) -> bool:
     return entry.get("origin") == "superfeed" or bool(entry.get("is_cluster"))
 
 
+def secondary_urls(entry: dict) -> list:
+    """As URLs irmas do item, sem a principal.
+
+    `urls` e a lista completa (principal inclusa); `additional_urls` e a
+    derivada dela. Nem todo produtor de item escreve as duas, e quem le e so
+    `build_multi_source_payload`, que le a derivada.
+
+    Isso ja custou o multi-fonte inteiro: a task reconstruida por
+    `reconcile_rssprime_event_tasks` escrevia so `urls`, entao todo cacho que
+    passou por reconciliacao foi extraido como fonte unica — as irmas estavam
+    no dicionario, a uma chave de distancia, e ninguem as buscava. Nao havia
+    erro para ver: `fontes_descartadas=0` porque nenhuma chegou a ser tentada.
+
+    Derivar aqui, da uniao das duas listas, fecha a porta para a proxima
+    divergencia de formato: um produtor novo pode escrever qualquer uma das
+    duas (ou as duas) que o resultado e o mesmo.
+    """
+    primaria = (entry.get("url") or "").strip()
+    irmas: list = []
+    for url in [*(entry.get("urls") or []), *(entry.get("additional_urls") or [])]:
+        if not isinstance(url, str):
+            continue
+        url = url.strip()
+        if not url or url == primaria or url in irmas:
+            continue
+        irmas.append(url)
+    return irmas
+
+
 def normalize_cluster_item(entry: dict) -> dict:
     """
     Garante que um item de cluster tenha todos os campos esperados
@@ -47,6 +76,7 @@ def normalize_cluster_item(entry: dict) -> dict:
         "primary_source":  entry.get("primary_source", ""),
         "all_sources":     entry.get("all_sources", []),
         "cluster_size":    entry.get("cluster_size", 1),
-        "additional_urls": entry.get("additional_urls", []),
+        # Derivada, nunca copiada: ver `secondary_urls`.
+        "additional_urls": secondary_urls(entry),
         "topic":           entry.get("topic", ""),
     }

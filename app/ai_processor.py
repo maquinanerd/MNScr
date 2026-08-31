@@ -425,10 +425,11 @@ class AIProcessor:
                     ceiling = int(tokens_info.get("max_output_tokens") or generation_config["max_output_tokens"])
                     for batch_item in batch_data:
                         logger.error(
-                            "[AI_RUNAWAY] db_id=%s output_tokens=%s ceiling=%s "
+                            "[AI_RUNAWAY] db_id=%s output_tokens=%s raciocinio=%s ceiling=%s "
                             "classification=%s action=terminal",
                             batch_item.get("db_id", "?"),
                             completion_tokens,
+                            tokens_info.get("thoughts_tokens", 0),
                             ceiling,
                             TRUNCATED_BY_TOKEN_CEILING,
                         )
@@ -567,10 +568,11 @@ class AIProcessor:
                 if tokens_info.get("truncated_by_token_ceiling"):
                     ceiling = int(tokens_info.get("max_output_tokens") or generation_config["max_output_tokens"])
                     logger.error(
-                        "[AI_RUNAWAY] db_id=%s output_tokens=%s ceiling=%s "
+                        "[AI_RUNAWAY] db_id=%s output_tokens=%s raciocinio=%s ceiling=%s "
                         "classification=%s action=terminal",
                         kwargs.get("db_id", "?"),
                         completion_tokens,
+                        tokens_info.get("thoughts_tokens", 0),
                         ceiling,
                         TRUNCATED_BY_TOKEN_CEILING,
                     )

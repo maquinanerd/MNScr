@@ -758,6 +758,7 @@ class Database:
                     continue
                 topic = str(payload.get("topic") or "movies")
                 source_id = f"rssprime_{topic}" if f"rssprime_{topic}" in RSS_FEEDS else "rssprime_movies"
+                event_urls = [s.get("url") for s in sources if isinstance(s, dict) and s.get("url")]
                 item = {
                     "id": f"event:{row['event_key']}:{int(row['revision'])}",
                     "title": payload.get("title") or row["event_key"],
@@ -771,7 +772,10 @@ class Database:
                     "multi_source": len(sources) > 1,
                     "source_count": len(sources) or 1,
                     "all_sources": sources,
-                    "urls": [s.get("url") for s in sources if isinstance(s, dict) and s.get("url")],
+                    "urls": event_urls,
+                    # Sem isto o cacho reconstruido chegava ao extrator como
+                    # fonte unica: quem busca as irmas le `additional_urls`.
+                    "additional_urls": [u for u in event_urls if u != url],
                     "fonte_nome": primary.get("name") or primary.get("source_name"),
                     "primary_source": primary.get("url"),
                     "_input_event_ref": {
