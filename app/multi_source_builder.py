@@ -243,11 +243,26 @@ _HEADLINE_NOISE: Final[frozenset] = frozenset(
     }
 )
 
-#: Quantos tokens distintivos a fonte secundaria precisa compartilhar com a
-#: primaria. UM basta: e quase impossivel duas materias de assuntos diferentes
-#: compartilharem um nome proprio distintivo, e exigir dois recusaria cobertura
-#: legitima que chama a mesma obra por nomes diferentes.
-_MIN_SHARED_SUBJECT_TOKENS: Final[int] = 1
+#: Quantas palavras do inicio do corpo primario contam como LEAD. O lead de uma
+#: noticia diz quem, o que e quando; o que ele repete da manchete e o assunto.
+_LEAD_PALAVRAS: Final[int] = 30
+
+#: Quanto do assunto da primaria a secundaria precisa cobrir.
+#:
+#: Contar tokens compartilhados NAO funciona, e a medicao contra texto real e
+#: inequivoca: com o corpo inteiro da secundaria em maos (nao o slug), exigir
+#: UM token distintivo aceitou 5 dos 6 cachos podres de 31/08/2026. Um artigo
+#: de 12 mil caracteres quase sempre contem, em algum lugar, uma palavra da
+#: manchete alheia — e duas materias que so citam a mesma franquia ("Halloween
+#: Horror Nights **Stranger Things** House" x "Stephen King meets **Stranger
+#: Things** in Flanagan's Carrie") compartilham o nome da franquia inteiro.
+#:
+#: Proporcao sobre as ANCORAS separa: nos 16 pares reais rotulados a mao,
+#: contaminado nunca passou de 0,50 e legitimo nunca ficou abaixo de 0,80.
+#: 0,65 e o meio dessa faixa. Qualquer valor entre 0,55 e 0,70 acerta os 16.
+_MIN_COBERTURA_DO_ASSUNTO: Final[float] = float(
+    os.getenv("MNSCR_CLUSTER_MIN_SUBJECT_COVERAGE", "0.65")
+)
 
 
 def _subject_tokens(texto: str) -> set:
@@ -266,6 +281,34 @@ def _subject_tokens(texto: str) -> set:
     }
 
 
+def _subject_anchors(primaria: dict) -> set:
+    """O assunto da primaria: o que a MANCHETE e o LEAD repetem.
+
+    Manchete sozinha nao serve de assunto — ela carrega decoracao que nao
+    identifica nada ("Fantastic", "Epic Effort", "Perfect") e, quando e isca de
+    clique, pode nao nomear nada ("Prime Video's New 5-Book Mystery Crime
+    Series Announces Perfect Casting"). Cruzar com o lead resolve as duas
+    pontas: o que sobra sao os nomes que a materia repete porque e sobre eles.
+
+    Nos pares reais medidos, as ancoras saem reconheciveis — ``{cullen,
+    optimus, peter, voice}``, ``{badgley, everyone, family, killed}``.
+    """
+    titulo = _subject_tokens(primaria.get("title") or "")
+    lead = _subject_tokens(" ".join((primaria.get("content") or "").split()[:_LEAD_PALAVRAS]))
+    return titulo & lead
+
+
+def subject_coverage(primaria: dict, secundaria: dict) -> float | None:
+    """Quanto do assunto da primaria a secundaria cobre. ``None`` = sem medida."""
+    ancoras = _subject_anchors(primaria)
+    if not ancoras:
+        return None
+    texto_secundario = _subject_tokens(
+        " ".join([secundaria.get("title") or "", secundaria.get("content") or ""])
+    )
+    return len(ancoras & texto_secundario) / len(ancoras)
+
+
 def _talks_about_the_same_thing(primaria: dict, secundaria: dict) -> bool:
     """A secundaria fala do MESMO acontecimento que a primaria?
 
@@ -276,22 +319,21 @@ def _talks_about_the_same_thing(primaria: dict, secundaria: dict) -> bool:
     registrou `GATE_MULTI_SOURCE` como sinal de QUALIDADE — duas fontes soa
     melhor que uma.
 
-    A checagem compara o assunto da MANCHETE primaria com o TEXTO INTEIRO da
-    secundaria, e nao manchete com manchete: cobertura legitima do mesmo fato
-    quase sempre repete o nome proprio no corpo, mesmo quando escolhe outro
-    angulo para o titulo.
+    A checagem compara o ASSUNTO da primaria com o TEXTO INTEIRO da secundaria,
+    e nao manchete com manchete: cobertura legitima do mesmo fato quase sempre
+    repete o nome proprio no corpo, mesmo quando escolhe outro angulo para o
+    titulo. O que mudou em 31/08/2026 foi o criterio — de "compartilha ao menos
+    um token" para "cobre a maior parte das ancoras" —, porque contra o corpo
+    real da secundaria o criterio antigo aceitava quase tudo. Ver
+    `_MIN_COBERTURA_DO_ASSUNTO`.
 
-    Sem titulo na primaria a checagem se abstem e devolve `True`: recusar por
-    falta de dado nosso descartaria fonte boa por defeito de extracao.
+    Sem ancoras a checagem se abstem e devolve `True`: recusar por falta de dado
+    NOSSO descartaria fonte boa por defeito de extracao.
     """
-    assunto = _subject_tokens(primaria.get("title") or "")
-    if not assunto:
+    cobertura = subject_coverage(primaria, secundaria)
+    if cobertura is None:
         return True
-
-    texto_secundario = _subject_tokens(
-        " ".join([secundaria.get("title") or "", secundaria.get("content") or ""])
-    )
-    return len(assunto & texto_secundario) >= _MIN_SHARED_SUBJECT_TOKENS
+    return cobertura >= _MIN_COBERTURA_DO_ASSUNTO
 
 
 def build_multi_source_payload(cluster: dict, extractor, min_chars: int = MIN_CHARS_DEFAULT) -> dict | None:
@@ -335,11 +377,13 @@ def build_multi_source_payload(cluster: dict, extractor, min_chars: int = MIN_CH
             doc = {**doc, "status": "OFF_TOPIC"}
             sources_skipped.append(doc)
             logger.warning(
-                "[MULTI_SOURCE] fonte descartada por ASSUNTO: %s nao fala do mesmo "
-                "que a primaria (%r vs %r)",
+                "[MULTI_SOURCE] fonte descartada por ASSUNTO: %s cobertura=%.2f "
+                "minimo=%.2f (%r vs %r)",
                 doc.get("domain"),
-                (sources_used[0].get("title") or "")[:70],
-                (doc.get("title") or "")[:70],
+                subject_coverage(sources_used[0], doc) or 0.0,
+                _MIN_COBERTURA_DO_ASSUNTO,
+                (sources_used[0].get("title") or "")[:60],
+                (doc.get("title") or "")[:60],
             )
             continue
 

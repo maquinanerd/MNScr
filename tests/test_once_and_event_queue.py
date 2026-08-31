@@ -68,6 +68,12 @@ def test_reconciliation_creates_one_task_for_an_accepted_event_revision(tmp_path
     created = db.reconcile_rssprime_event_tasks()
     assert len(created) == 1
     assert created[0]["event_revision"] == payload["revision"]
+    # A task reconstruida tem de carregar as fontes irmas: quem as busca le
+    # `additional_urls`, e enquanto isto faltou todo cacho reconciliado foi
+    # extraido como fonte unica, sem erro nenhum no log.
+    urls_do_evento = [source["url"] for source in payload["sources"]]
+    assert created[0]["urls"] == urls_do_evento
+    assert created[0]["additional_urls"] == urls_do_evento[1:]
     assert db.reconcile_rssprime_event_tasks() == []
     row = db.get_article_by_event_key(payload["event_key"], payload["revision"])
     db.close()

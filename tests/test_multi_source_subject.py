@@ -40,12 +40,60 @@ def test_legitimate_coverage_of_the_same_event_is_accepted():
 
 
 def test_a_secondary_that_only_repeats_the_subject_in_the_BODY_is_accepted():
-    """Manchete com outro angulo e comum; o corpo quase sempre repete o nome."""
+    """Manchete com outro angulo e comum; o corpo quase sempre repete o nome.
+
+    O corpo aqui nomeia as DUAS ancoras da primaria (a pessoa e a obra). Ate
+    30/08/2026 ele nomeava so a pessoa e o teste passava, porque bastava um
+    token compartilhado — e era essa folga que deixava passar materia sobre a
+    mesma pessoa em obra diferente. Ver o teste logo abaixo.
+    """
     outra = {
         "title": "HBO renova drama financeiro para desfecho",
-        "content": "A emissora confirmou o retorno de Kit Harington para o encerramento.",
+        "content": (
+            "A emissora confirmou o retorno de Kit Harington para o "
+            "encerramento de Industry."
+        ),
     }
     assert _talks_about_the_same_thing(COLLIDER, outra) is True
+
+
+def test_the_same_person_in_a_DIFFERENT_work_is_refused():
+    """O buraco que a contagem de tokens deixava aberto.
+
+    "Kit Harington" sozinho nao identifica acontecimento: ele aparece tanto na
+    materia sobre `Industry` quanto numa sobre um filme da Marvel. Compartilhar
+    UM token distintivo bastava, e as duas eram mescladas num texto so.
+    """
+    outro_trabalho = {
+        "title": "Kit Harington Joins Marvel's Next Blockbuster",
+        "content": "The actor was cast in a Marvel feature, his first since leaving HBO.",
+    }
+    assert _talks_about_the_same_thing(COLLIDER, outro_trabalho) is False
+
+
+def test_the_same_franchise_in_a_DIFFERENT_event_is_refused():
+    """A colisao de franquia, medida contra o texto real de 31/08/2026.
+
+    "Halloween Horror Nights 'Stranger Things' House" e "Stephen King meets
+    Stranger Things in Flanagan's Carrie" sao acontecimentos diferentes que
+    dividem o nome inteiro da franquia. Com o corpo real da secundaria em maos,
+    o criterio de contagem aceitava 5 dos 6 cachos podres do dia.
+    """
+    casa_do_horror = {
+        "title": "Inside the Halloween Horror Nights Stranger Things House",
+        "content": (
+            "The Halloween Horror Nights house recreates the Stranger Things "
+            "world with an epic effort from the Duffer Brothers."
+        ),
+    }
+    carrie = {
+        "title": "Stephen King Meets Stranger Things in Mike Flanagan's Carrie",
+        "content": (
+            "Mike Flanagan adapts Stephen King's Carrie for television, and the "
+            "series shares a cast member with Stranger Things."
+        ),
+    }
+    assert _talks_about_the_same_thing(casa_do_horror, carrie) is False
 
 
 def test_headline_noise_alone_never_counts_as_subject():
@@ -103,3 +151,42 @@ def test_the_dead_generation_config_is_gone():
     import app.config as config
 
     assert not hasattr(config, "AI_GENERATION_CONFIG")
+
+
+def test_headline_decoration_never_becomes_an_anchor():
+    """A ancora e o que a manchete E o lead repetem.
+
+    "Fantastic" enfeita a manchete e some no lead; "Industry" e "Harington"
+    ficam. Sem esse cruzamento, a decoracao entra na conta e faz o denominador
+    crescer com palavras que nao identificam nada.
+    """
+    from app.multi_source_builder import _subject_anchors
+
+    assert _subject_anchors(COLLIDER) == {"harington", "industry"}
+
+
+def test_without_a_lead_the_check_abstains():
+    """Sem corpo nao ha ancora, e sem ancora a checagem se cala.
+
+    Nao e alcancavel em producao — so documento com `ARTICLE_BODY_OK` chega
+    aqui — mas a escolha e a mesma de sempre: na duvida por defeito de dado
+    NOSSO, a fonte entra e as outras regras decidem.
+    """
+    from app.multi_source_builder import subject_coverage
+
+    so_titulo = {"title": "Industry Sets Final Season", "content": ""}
+    assert subject_coverage(so_titulo, {"title": "x", "content": "y"}) is None
+    assert _talks_about_the_same_thing(so_titulo, {"title": "x", "content": "y"}) is True
+
+
+def test_the_threshold_sits_in_the_middle_of_the_measured_band():
+    """0,65 nao e chute: e o meio da faixa que acerta os 16 pares reais.
+
+    Medido em 31/08/2026 com o corpo baixado dos dois veiculos de cada par:
+    contaminado nunca passou de 0,50, legitimo nunca ficou abaixo de 0,80.
+    Se este numero for afrouxado sem uma nova medicao, a colisao de franquia
+    volta — foi assim que ela entrou.
+    """
+    from app.multi_source_builder import _MIN_COBERTURA_DO_ASSUNTO
+
+    assert 0.55 <= _MIN_COBERTURA_DO_ASSUNTO <= 0.70
