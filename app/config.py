@@ -35,7 +35,7 @@ PIPELINE_ORDER: List[str] = [
 RSS_FEEDS: Dict[str, Dict[str, Any]] = {
     'rssprime_movies': {
         'type': 'rss',
-        'urls': ['https://rss.thepeg.site/feeds/superfeed/movies/rss'],
+        'urls': ['https://rss.kalel.online/feeds/superfeed/movies/rss'],
         'category': 'Filmes',
         'source_name': 'RSSPRIME Superfeed',
         'origin': 'superfeed',
@@ -44,7 +44,7 @@ RSS_FEEDS: Dict[str, Dict[str, Any]] = {
     },
     'rssprime_tv': {
         'type': 'rss',
-        'urls': ['https://rss.thepeg.site/feeds/superfeed/tv/rss'],
+        'urls': ['https://rss.kalel.online/feeds/superfeed/tv/rss'],
         'category': 'Séries',
         'source_name': 'RSSPRIME Superfeed',
         'origin': 'superfeed',
