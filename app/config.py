@@ -33,9 +33,14 @@ PIPELINE_ORDER: List[str] = [
 
 # --- Feeds RSS (padronizados, sem "synthetic_from") ---
 RSS_FEEDS: Dict[str, Dict[str, Any]] = {
+    # Superfeeds do Cinerie no RSS Prime: Variety, ScreenRant e The Wrap. O
+    # outro portal lê os demais veículos (cinema_mn/series_mn), então os dois
+    # deixam de escrever a partir do mesmo texto. As chaves e o `topic`
+    # continuam movies/tv: é a taxonomia do MNScr, a dos fallbacks, e é por
+    # `rssprime_<topic>` que a reconciliação reencontra a fonte de um evento.
     'rssprime_movies': {
         'type': 'rss',
-        'urls': ['https://rss.kalel.online/feeds/superfeed/movies/rss'],
+        'urls': ['https://rss.kalel.online/feeds/superfeed/cinema_cinerie/rss'],
         'category': 'Filmes',
         'source_name': 'RSSPRIME Superfeed',
         'origin': 'superfeed',
@@ -44,7 +49,7 @@ RSS_FEEDS: Dict[str, Dict[str, Any]] = {
     },
     'rssprime_tv': {
         'type': 'rss',
-        'urls': ['https://rss.kalel.online/feeds/superfeed/tv/rss'],
+        'urls': ['https://rss.kalel.online/feeds/superfeed/series_cinerie/rss'],
         'category': 'Séries',
         'source_name': 'RSSPRIME Superfeed',
         'origin': 'superfeed',
