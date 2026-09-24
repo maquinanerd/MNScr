@@ -20,6 +20,16 @@ from .sqlite_utils import connect_sqlite
 logger = logging.getLogger(__name__)
 
 
+# Prefixo do `fail_reason` de um item descartado por ser o MESMO acontecimento
+# que outro evento do Superfeed ja trouxe, com outra `event_key`. E pelo
+# prefixo que as revisoes seguintes da mesma chave sao reconhecidas.
+REKEY_SUPERSEDED_PREFIX = "Mesmo acontecimento de outro evento do Superfeed"
+
+# Status em que um artigo do Superfeed ainda conta como "trabalho feito ou em
+# curso" para a sua URL. Falha, descarte e supersessao liberam a URL.
+_URL_RELEASING_STATUSES = ("FAILED", "FAILED_PERMANENT", "DRAFT_FAILED", "SKIPPED", "SUPERSEDED")
+
+
 def _is_superfeed_like_item(item: Dict[str, Any]) -> bool:
     """Local check to avoid importing cluster adapter into the store layer."""
     if item.get("origin") == "superfeed":
@@ -624,6 +634,23 @@ class Database:
                     else:
                         versioned_identity_is_new = True
 
+                # Chave nova, artigos ja escritos.
+                #
+                # O RSS Prime cunha `event_key` por topico: o mesmo acontecimento
+                # tem uma chave em `movies` e outra em `cinema_cinerie`. Quando
+                # a fonte troca de topico — ou o RSS Prime recunha um evento — a
+                # chave nova chega com revisao 1, a precedencia acima a aceita
+                # como trabalho novo e nenhum dedup de URL e consultado. Seria
+                # republicar o que ja saiu. A linha e gravada mesmo assim, como
+                # SUPERSEDED: sem ela a reconciliacao de eventos recriaria a
+                # tarefa.
+                rekey_reason = None
+                if versioned_identity_is_new:
+                    rekey_reason = self._rekeyed_event_reason(
+                        event_key,
+                        item.get("urls") or ([item_url] if item_url else []),
+                    )
+
                 # Fallback coberto por Superfeed: bloqueia apenas a URL especifica.
                 if (
                     not versioned_identity_is_new
@@ -707,6 +734,16 @@ class Database:
                         )
                     )
                     item["db_id"] = cursor.lastrowid
+                    if rekey_reason:
+                        cursor.execute(
+                            "UPDATE seen_articles SET status = 'SUPERSEDED', fail_reason = ? WHERE id = ?",
+                            (rekey_reason, item["db_id"]),
+                        )
+                        logger.info(
+                            "[SUPERFEED_REKEY] event_key=%s revision=%s descartado: %s",
+                            event_key, event_revision, rekey_reason,
+                        )
+                        continue
                     new_articles.append(item)
             self.conn.commit()
         except sqlite3.Error as e:
@@ -834,6 +871,59 @@ class Database:
         except sqlite3.Error as e:
             logger.error(f"Failed to register Superfeed covered URLs: {e}", exc_info=True)
             self.conn.rollback()
+
+    def _rekeyed_event_reason(self, event_key: str, urls: List[str]) -> Optional[str]:
+        """Motivo para descartar *event_key* como reedicao de outro evento, ou None.
+
+        Uma chave com qualquer linha normal e uma chave conhecida: suas revisoes
+        seguem a regra de versao e nada aqui interfere. Uma chave cujas linhas
+        foram todas descartadas por este motivo continua descartada — a materia
+        ja saiu sob a chave antiga, e uma revisao 2 da chave nova a publicaria de
+        novo. Uma chave nunca vista e descartada quando alguma das suas URLs ja e
+        trabalho de OUTRO evento do Superfeed: artigo com outra `event_key` que
+        nao falhou nem foi descartado, ou URL registrada como coberta.
+
+        Item de fallback (sem `event_key`) nao entra aqui: a regra de sempre, em
+        que o Superfeed vence o fallback, continua igual.
+        """
+        if not event_key:
+            return None
+        cursor = self._get_cursor()
+        cursor.execute(
+            "SELECT status, fail_reason FROM seen_articles WHERE event_key = ?",
+            (event_key,),
+        )
+        rows = cursor.fetchall()
+        if rows:
+            if all(
+                row["status"] == "SUPERSEDED"
+                and str(row["fail_reason"] or "").startswith(REKEY_SUPERSEDED_PREFIX)
+                for row in rows
+            ):
+                return rows[0]["fail_reason"]
+            return None
+
+        placeholders = ",".join("?" for _ in _URL_RELEASING_STATUSES)
+        for url in urls or []:
+            canonical = canonicalize_url(url or "")
+            if not canonical:
+                continue
+            cursor.execute(
+                f"""
+                SELECT event_key FROM seen_articles
+                WHERE canonical_url = ?
+                  AND event_key IS NOT NULL AND event_key != ?
+                  AND COALESCE(status, 'NEW') NOT IN ({placeholders})
+                LIMIT 1
+                """,
+                (canonical, event_key, *_URL_RELEASING_STATUSES),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                return f"{REKEY_SUPERSEDED_PREFIX} (event_key={row['event_key']}, url={canonical})"
+            if self.is_url_covered(url):
+                return f"{REKEY_SUPERSEDED_PREFIX} (url coberta={canonical})"
+        return None
 
     def is_url_covered(self, url: str) -> bool:
         """

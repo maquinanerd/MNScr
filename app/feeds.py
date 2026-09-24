@@ -320,7 +320,12 @@ def _parse_sf_fields(entry: dict) -> dict:
 def enrich_feed_item(item: Dict[str, Any], feed_config: Dict[str, Any], source_id: str) -> Dict[str, Any]:
     """Aplica metadados operacionais do pipeline a um item normalizado."""
     origin = feed_config.get("origin") or ("superfeed" if item.get("has_superfeed_meta") else "fallback")
-    topic = item.get("topic") or feed_config.get("topic") or feed_config.get("category")
+    # O topico da FONTE vence o `sf:topic` do item. O RSS Prime passou a ter
+    # superfeeds por portal (`cinema_cinerie`, `series_mn`...), e o item traz esse
+    # nome; aqui dentro o topico e a taxonomia do MNScr (`movies`, `tv`), a mesma
+    # dos fallbacks — e e por ela que o Superfeed os cobre. Com o slug do RSS
+    # Prime, o item deixaria de encontrar os fallbacks do proprio assunto.
+    topic = feed_config.get("topic") or item.get("topic") or feed_config.get("category")
 
     primary_url = item.get("url")
     urls = [u for u in item.get("urls", []) if u]
