@@ -58,6 +58,18 @@ class ExplodingClient:
         raise RuntimeError("cota estourada")
 
 
+class RecordingClient(FakeClient):
+    """Guarda os kwargs da chamada: e neles que vai o modelo escolhido."""
+
+    def __init__(self, response='{"claims": []}'):
+        super().__init__(response)
+        self.kwargs = []
+
+    def generate_text(self, prompt, **kwargs):
+        self.kwargs.append(kwargs)
+        return super().generate_text(prompt, **kwargs)
+
+
 # ===========================================================================
 # Defeito 1 — material de fonte unica
 # ===========================================================================
@@ -149,6 +161,35 @@ def test_sem_cliente_devolve_none_sem_levantar(monkeypatch):
 
 def test_falha_do_modelo_nunca_derruba_o_draft():
     assert request_claim_extraction(make_draft(), client=ExplodingClient()) is None
+
+
+def test_a_extracao_roda_no_modelo_auxiliar_e_nao_no_do_redator(monkeypatch):
+    """Conferir afirmacao e trabalho auxiliar, e a saida e 86% do custo dela.
+
+    Herdando `AI_MODEL` ela ia para o modelo do redator, seis vezes mais caro por
+    token de saida. Em 22-24/09/2026 isso foi US$ 1,25 de US$ 5,07 — um quarto da
+    conta gasto num passo de conferencia.
+    """
+    from app import config
+
+    monkeypatch.setattr(config, "FACTUAL_MODEL", "gemini-2.5-flash-lite")
+    cliente = RecordingClient()
+
+    request_claim_extraction(make_draft(), client=cliente)
+
+    assert cliente.kwargs[0]["model_override"] == "gemini-2.5-flash-lite"
+
+
+def test_modelo_do_gemini_nunca_e_pedido_a_outro_provedor(monkeypatch):
+    """Um nome de modelo do Gemini mandado ao DeepSeek e uma chamada que morre."""
+    from app import config
+
+    monkeypatch.setattr(config, "AI_AUX_PROVIDER", "deepseek", raising=False)
+    cliente = RecordingClient()
+
+    request_claim_extraction(make_draft(), client=cliente)
+
+    assert "model_override" not in cliente.kwargs[0]
 
 
 def test_resposta_vazia_vira_none():

@@ -16,8 +16,7 @@ A funcao vizinha ``collect_image_captions_from_article`` ja fazia certo, com
 
 from bs4 import BeautifulSoup
 
-from app.extractor import _clean_english_captions, _collapse_ws
-from app.extractor import ContentExtractor
+from app.extractor import ContentExtractor, _clean_english_captions, _collapse_ws
 
 #: Markup equivalente ao da Hollywood Reporter que produziu o log acima.
 FIGCAPTION_REAL = (
