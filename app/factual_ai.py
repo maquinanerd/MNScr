@@ -191,7 +191,19 @@ def request_claim_extraction(
         draft_id, resolved_version, resolved_max,
     )
     try:
-        raw, tokens = client.generate_text(prompt, response_schema=CLAIMS_RESPONSE_SCHEMA)
+        # O modelo so e trocado quando o auxiliar e o Gemini: `FACTUAL_MODEL` nomeia
+        # um modelo do Gemini, e manda-lo a outro provedor seria pedir um modelo que
+        # nao existe do lado de la — a chamada morreria e a avaliacao factual cairia
+        # para os claims deterministicos sem ninguem entender por que.
+        aux = (getattr(config, "AI_AUX_PROVIDER", "") or "gemini").strip().lower()
+        extras = (
+            {"model_override": config.FACTUAL_MODEL}
+            if aux == "gemini" and config.FACTUAL_MODEL
+            else {}
+        )
+        raw, tokens = client.generate_text(
+            prompt, response_schema=CLAIMS_RESPONSE_SCHEMA, **extras
+        )
     except Exception as exc:  # noqa: BLE001 - a avaliação factual nunca custa o draft
         logger.warning(
             "[CLAIM_EXTRACTION_FAILED] draft_id=%s erro=%s: seguindo com claims deterministicos",

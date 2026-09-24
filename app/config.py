@@ -231,6 +231,14 @@ FACTUAL_PROMPT_VERSION = (
 FACTUAL_PROMPT_DIR = (
     os.getenv('MNSCR_FACTUAL_PROMPT_DIR') or 'config/prompts'
 ).strip()
+#: Modelo da extracao de claims. Ela e trabalho AUXILIAR — le o que o redator
+#: escreveu e o interroga —, e por isso segue o modelo do validador e nao o do
+#: redator. Sem esta linha ela herdava `AI_MODEL`, seis vezes mais caro na saida
+#: (1,50 contra 0,40 por milhao), e a saida e 86% do custo dela: em 22–24/09/2026
+#: foram US$ 1,25 de US$ 5,07, um quarto da conta, para um trabalho de conferencia.
+FACTUAL_MODEL = (
+    os.getenv('MNSCR_FACTUAL_MODEL') or 'gemini-2.5-flash-lite'
+).strip()
 MAX_CLAIMS_PER_DRAFT = int(os.getenv('MNSCR_MAX_CLAIMS_PER_DRAFT', 100))
 MAX_EVIDENCE_PER_CLAIM = int(os.getenv('MNSCR_MAX_EVIDENCE_PER_CLAIM', 10))
 MAX_EVIDENCE_EXCERPT_CHARS = int(os.getenv('MNSCR_MAX_EVIDENCE_EXCERPT_CHARS', 500))
