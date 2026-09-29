@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}Painel MNScr{% endblock %}</title>
+  <style>
+    :root { --bg:#f6f6f7; --card:#fff; --ink:#18181b; --muted:#66666f; --line:#e3e3e8; --brand:#e30613; --brand-ink:#b00710;
+            --ok:#0f7a3a; --warn:#9a6700; --err:#b00710; --chip:#f0f0f3; --track:#ececf0; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#111114; --card:#1a1a1f; --ink:#ececf1; --muted:#a0a0ab; --line:#2c2c34; --brand-ink:#ff6b73;
+              --ok:#4ad07f; --warn:#e6b450; --err:#ff6b73; --chip:#24242b; --track:#2c2c34; }
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+    a { color: var(--brand-ink); }
+    header { background: var(--card); border-bottom: 1px solid var(--line); }
+    .bar { max-width: 1180px; margin: 0 auto; padding: 10px 16px; display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+    .logo { font-weight: 800; letter-spacing: -.02em; }
+    .logo span { color: var(--brand); }
+    nav a { text-decoration:none; color: var(--muted); padding: 6px 2px; border-bottom: 2px solid transparent; }
+    nav a.on { color: var(--ink); border-bottom-color: var(--brand); }
+    nav { display:flex; gap:16px; flex-wrap:wrap; flex:1; }
+    @media (max-width: 640px) {
+      .bar { gap: 10px 16px; }
+      .bar form { margin-left: auto; }
+      nav { order: 3; flex-basis: 100%; gap: 14px; }
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 60px; }
+    h1 { font-size: 22px; margin: 0 0 14px; letter-spacing:-.02em; }
+    h2 { font-size: 17px; margin: 0 0 10px; }
+    .card { background: var(--card); border:1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    .grid { display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-bottom: 16px; }
+    .grid .card { margin-bottom: 0; }
+    .big { font-size: 28px; font-weight: 800; letter-spacing: -.02em; line-height: 1.2; }
+    .kv { display:flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+    table { width:100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align:left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    .table-wrap { overflow-x:auto; }
+    label { display:block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+    input[type=text], input[type=password] {
+      width:100%; padding: 8px 10px; border:1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: inherit; }
+    button { display:inline-block; font: inherit; font-weight: 600; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+      background: var(--card); color: var(--ink); cursor: pointer; }
+    button.primary { background: var(--brand); border-color: var(--brand); color:#fff; }
+    .inline { display:inline; }
+    .muted { color: var(--muted); }
+    .small { font-size: 13px; }
+    .chip { display:inline-block; padding: 1px 8px; border-radius: 999px; background: var(--chip); font-size: 12px; white-space:nowrap; }
+    .ok { color: var(--ok); }
+    .erro { color: var(--err); }
+    .aviso { color: var(--warn); }
+    .meter { height: 10px; border-radius: 999px; background: var(--track); overflow: hidden; margin: 8px 0 4px; }
+    .meter > span { display:block; height: 100%; background: var(--ok); border-radius: 999px; }
+    .meter.alto > span { background: var(--warn); }
+    .meter.cheio > span { background: var(--err); }
+    .flash { padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border:1px solid var(--line); background: var(--card); }
+    .flash.erro { border-color: var(--err); color: var(--ink); }
+    .flash.aviso { border-color: var(--warn); color: var(--ink); }
+    .flash.ok { border-color: var(--ok); color: var(--ink); }
+    code { font-size: 12px; background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+    .narrow { max-width: 420px; margin: 60px auto; }
+    details summary { cursor: pointer; }
+    .quebra { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  {% if admin %}
+  <header>
+    <div class="bar">
+      <div class="logo">MNScr<span>·</span>painel</div>
+      <nav>
+        <a href="/" class="{{ 'on' if path == '/' }}">Visão geral</a>
+        <a href="/publicacoes" class="{{ 'on' if path.startswith('/publicacoes') }}">Publicações</a>
+        <a href="/gasto" class="{{ 'on' if path.startswith('/gasto') }}">Gasto de IA</a>
+        <a href="/falhas" class="{{ 'on' if path.startswith('/falhas') }}">Falhas</a>
+      </nav>
+      <form method="post" action="/logout" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit">Sair</button>
+      </form>
+    </div>
+  </header>
+  {% endif %}
+  <main>
+    {% for f in flash %}<div class="flash {{ f.kind }}">{{ f.message }}</div>{% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

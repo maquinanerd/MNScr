@@ -1,9 +1,12 @@
 # MNScr no Coolify
 
 O MNScr roda 24/7 no Coolify (`https://vps.cinerie.com`), no build pack **Docker
-Compose** com `/docker-compose.coolify.yml`, a partir da `main` deste repositório. Não
-serve HTTP e não tem domínio: lê os superfeeds da Cinerie no RSS Prime e publica no CMS
-da Cinerie.
+Compose** com `/docker-compose.coolify.yml`, a partir da `main` deste repositório. São
+dois serviços no mesmo volume:
+
+- `mnscr`, o robô: lê os superfeeds da Cinerie no RSS Prime e publica no CMS da
+  Cinerie. Não serve HTTP;
+- `painel`, um site só de leitura, com login, para acompanhá-lo (seção [Painel](#painel)).
 
 ## Onde mora o estado
 
@@ -16,6 +19,7 @@ Tudo que precisa sobreviver a um redeploy fica no volume `<app>_mnscr-data`, mon
 | `/data/.env` | as chaves (Gemini, Payload/Cinerie, TMDB…); `/app/.env` aponta para ele |
 | `/data/logs/` | `app.log` e a contagem de tokens |
 | `/data/drafts/`, `/data/debug/` | rascunhos locais e prompts que falharam |
+| `/data/painel.db`, `/data/painel.secret` | o acesso ao painel: administrador e a chave que assina o cookie |
 
 O Coolify define só `MNSCR_DB_PATH=/data/app.db`, `MNSCR_LOCAL_DRAFT_DIR=/data/drafts` e
 o teto `MNSCR_AI_DAILY_BUDGET_USD` (abaixo), e isso vence o `.env` (`app/config.py`
@@ -82,3 +86,49 @@ Até 29/09/2026 a média foi US$ 0,011 por matéria: US$ 1 rende umas 90 por dia
 A tabela de preços é fixa no código. Se o Google mudar o preço, ou o `.env` passar a
 usar um modelo fora dela, atualize `PRICES_USD_PER_MTOK`: modelo desconhecido conta
 pelo preço mais caro da tabela.
+
+## Painel
+
+Site só de leitura (`app/painel`), no domínio que o Coolify gera para o serviço
+`painel` (*Domains* do recurso; tem de estar em **https**, porque o cookie de sessão
+exige HTTPS). Páginas:
+
+| Página | O que mostra |
+| --- | --- |
+| Visão geral | último ciclo do robô (alerta se passar de 2,5 intervalos sem ciclo), gasto de IA de hoje contra o teto, publicadas hoje/ontem/7 dias, fila, últimas publicações |
+| Publicações | as 100 últimas no Cinerie, com link para a matéria |
+| Gasto de IA | 30 dias: gasto por modelo, chamadas, matérias e custo por matéria |
+| Falhas | envios ao Cinerie que não terminaram publicados, erros ao escrever e descartes do filtro de entrada |
+
+Ele não muda nada no robô: lê o `app.db` com `mode=ro`, não carrega nem abre o `.env` do
+robô (`PYTHON_DOTENV_DISABLED=1`; a base dos links vem de `CINERIE_PUBLIC_BASE_URL` no
+compose) e guarda o próprio acesso em `/data/painel.db`. Cair ou reiniciar o painel não
+encosta no robô, e vice-versa.
+
+**Risco assumido:** o painel roda com o mesmo usuário (uid 10001) e o mesmo volume do
+robô, então o processo *poderia* ler `/data/.env`. Separar não funciona com o SQLite em
+WAL: o leitor precisa criar `app.db-wal`/`-shm` na pasta do banco quando o robô está sem
+conexão aberta, e com outro usuário ou montagem `:ro` o painel deixaria de ler
+justamente quando o robô para. O que segura: nenhuma rota serve arquivo nem aceita
+caminho, as consultas são fixas e só leitura, tudo fica atrás de login, e o CSP não
+deixa rodar script.
+
+- **Primeiro acesso:** abra o domínio do painel. Ele pede o código que imprime no log do
+  contêiner do painel (*Logs* do recurso, contêiner `painel-…`, linha
+  `[MNSCR_PAINEL] primeiro acesso: … código` seguido de 16 caracteres), um usuário e
+  uma senha de pelo menos 10 caracteres. Existe um administrador só.
+- **Esqueceu a senha:** no *Terminal* do recurso, contêiner do painel:
+
+  ```sh
+  python -m app.painel --novo-acesso
+  ```
+
+  Apaga o administrador, derruba as sessões abertas e imprime um código novo; o painel
+  volta a pedir o primeiro acesso.
+- **Segurança:** senha com scrypt, sessão assinada de 12 h, CSRF em todo formulário,
+  5 tentativas de login a cada 5 minutos por IP, **Sair** (do administrador) invalida
+  todo cookie emitido antes. Nenhum JavaScript; só links `http(s)`; cabeçalhos CSP,
+  `X-Frame-Options: DENY` e `no-store`.
+  `/health` é público e só responde `{"status": "ok"}`.
+- **"Último ciclo: ainda não registrado"** até o primeiro ciclo depois deste deploy: o
+  robô passa a gravar o início de cada ciclo (`pipeline_state.ultimo_ciclo_utc`).

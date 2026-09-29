@@ -75,9 +75,11 @@ jobs:
           from app.cinerie.contract import local_identity
           from app.editorial_gate.policy import load_policy
           from app.factual_ai import load_claim_prompt
+          from app.painel.web import TEMPLATES
           assert local_identity().schema_hash.startswith('sha256:')
           load_policy('mnscr-editorial-gate-v1')
           assert load_claim_prompt('factual_claim_extraction_v1', 'config/prompts')
+          assert (TEMPLATES / 'base.html').is_file(), 'templates do painel fora do wheel'
           print('wheel OK fora do checkout')
           "
           /tmp/venv-wheel/bin/mnscr --cinerie-contract > /dev/null

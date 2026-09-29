@@ -1,0 +1,19 @@
+{% if itens %}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Quando</th><th>Matéria</th><th>Situação</th><th>Fonte original</th></tr></thead>
+  <tbody>
+  {% for p in itens %}
+    <tr>
+      <td class="num">{{ p.quando | quando }}</td>
+      <td class="quebra">{% if p.url %}<a href="{{ p.url }}" target="_blank" rel="noopener noreferrer">{{ p.titulo }}</a>{% else %}{{ p.titulo }}{% endif %}</td>
+      <td>{% if p.ok %}<span class="ok">publicada</span>{% else %}<span class="erro">{{ p.situacao }}</span>{% if p.detalhe %}<div class="muted small quebra">{{ p.detalhe }}</div>{% endif %}{% endif %}</td>
+      <td class="muted small quebra">{{ p.fonte }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">Nenhuma publicação registrada ainda.</p>
+{% endif %}
