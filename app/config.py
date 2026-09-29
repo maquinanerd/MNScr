@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import re
 from typing import Any, Dict, List, Optional
@@ -620,6 +621,24 @@ AI_MODEL = os.getenv('AI_MODEL', 'gemini-3.1-flash-lite')
 AI_POST_WRITER_BUDGET_TOKENS = int(os.getenv('AI_POST_WRITER_BUDGET_TOKENS', '16000'))
 AI_POST_WRITER_BUDGET_PER_1K_SOURCE = int(os.getenv('AI_POST_WRITER_BUDGET_PER_1K_SOURCE', '6000'))
 
+
+def parse_budget_usd(raw: Optional[str]) -> Optional[float]:
+    """`1.00`, `1,50` ou `0`. None quando o valor não é um número >= 0."""
+    try:
+        value = float(str(raw).strip().replace(',', '.'))
+    except (TypeError, ValueError):
+        return None
+    # NaN, infinito ("inf", "1e309") e negativo: só o 0 desliga o teto.
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value
+
+
+# Teto de gasto diário com IA, em dólares, somado no dia de São Paulo (app/ai_spend.py).
+# Batido o teto, nenhuma matéria nova vai para a IA até a meia-noite. 0 desliga.
+AI_DAILY_BUDGET_USD_RAW = os.getenv('MNSCR_AI_DAILY_BUDGET_USD', '1.00')
+AI_DAILY_BUDGET_USD = parse_budget_usd(AI_DAILY_BUDGET_USD_RAW)
+
 # Gates de indexação foram removidos na MS-1: MNScr não indexa e não publica.
 # A decisão de indexação pertence ao sistema do Cinerie.
 
@@ -786,6 +805,21 @@ def get_runtime_config_issues() -> List[str]:
 
     if not AI_API_KEYS:
         issues.append("Nenhuma chave GEMINI válida foi encontrada")
+
+    if AI_DAILY_BUDGET_USD is None:
+        issues.append(
+            f"MNSCR_AI_DAILY_BUDGET_USD={AI_DAILY_BUDGET_USD_RAW!r} não é um valor em dólares "
+            "(use por exemplo 1.00; 0 desliga o teto)"
+        )
+    elif AI_DAILY_BUDGET_USD > 0:
+        from app.ai_spend import unpriced_models
+
+        sem_preco = unpriced_models()
+        if sem_preco:
+            issues.append(
+                f"Modelos de IA sem preço em app/ai_spend.py (PRICES_USD_PER_MTOK): {', '.join(sem_preco)}. "
+                "Sem o preço o teto diário erraria a conta: cadastre-o ou use MNSCR_AI_DAILY_BUDGET_USD=0."
+            )
 
     if FACTUAL_ASSESSMENT_ENABLED:
         issues.extend(get_factual_config_issues())

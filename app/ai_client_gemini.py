@@ -281,13 +281,17 @@ def _generate_content(api_key: str, prompt: str, model: str = MODEL, **kwargs):
 
 
 class AIClient:
-    def __init__(self, keys, min_interval_s, backoff_base=20, backoff_max=300):
+    def __init__(self, keys, min_interval_s, backoff_base=20, backoff_max=300, spend_recorder=None):
         self.pool = KeyPool(keys)
         self.rl = RateLimiter(min_interval_s)
         self.backoff_base = backoff_base
         self.backoff_max = backoff_max
         self.last_used_key = None
         self.last_used_model = MODEL
+        # Recebe (modelo, tokens_info) de TODA resposta paga, inclusive a bloqueada
+        # por politica (a entrada e cobrada). E o que alimenta o teto diario
+        # (app/ai_spend.py); sem ele, nada e somado.
+        self.spend_recorder = spend_recorder
         logging.info(f"{_gemini_log_prefix(MODEL_CHAIN[0] if MODEL_CHAIN else '')} AI CLIENT: Inicializado com {len(keys)} chaves de API | modelos={MODEL_CHAIN}")
 
     def generate_text(self, prompt: str, **kwargs) -> tuple:
@@ -376,6 +380,10 @@ class AIClient:
                     else:
                         logging.warning(f"AVISO: Sem metadata de tokens. Estado da resposta: {type(resp).__name__}")
 
+                    # Antes de extrair o texto: um prompt bloqueado levanta ali, e a
+                    # entrada dele ja foi cobrada.
+                    self._record_spend(model, tokens_info)
+
                     total = tokens_info["prompt_tokens"] + tokens_info["completion_tokens"]
                     if total == 0:
                         logging.warning("TOKENS ZERADOS! Pode indicar erro na resposta.")
@@ -456,6 +464,14 @@ class AIClient:
             time.sleep(min(5, backoff))
 
         raise RuntimeError(f"IA falhou apos {MAX_AI_ATTEMPTS} tentativas usando modelos {model_chain}")
+
+    def _record_spend(self, model: str, tokens_info: dict) -> None:
+        if self.spend_recorder is None:
+            return
+        try:
+            self.spend_recorder(model, tokens_info)
+        except Exception as exc:  # a chamada ja foi paga; a conta nao pode derruba-la
+            logging.error("[AI_SPEND] falha ao registrar o gasto da chamada: %s", exc, exc_info=True)
 
     def get_last_used_key(self) -> str:
         """Retorna as ultimas 4 caracteres da chave usada (para logging)."""
