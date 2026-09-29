@@ -33,6 +33,11 @@ services:
       context: .
       dockerfile: Dockerfile
     entrypoint: ["python", "-m", "app.painel"]
+    # A porta declarada no contêiner: o proxy acha a 8080 sozinho, mesmo quando o
+    # domínio fica sem porta — editar o domínio na tela do Coolify a descarta, e o
+    # proxy respondia 503 "no available server" (29/09/2026).
+    expose:
+      - "8080"
     environment:
       # Faz o Coolify gerar o domínio e apontar o proxy HTTPS para a porta 8080.
       - SERVICE_FQDN_PAINEL_8080
