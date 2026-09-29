@@ -1,0 +1,25 @@
+# Estado e segredo nunca entram na imagem: moram no volume /data (Dockerfile).
+.env
+.env.*
+!.env.example
+*service-account*.json
+data/
+logs/
+artifacts/
+debug/
+build/
+
+# Ambiente local e ferramentas.
+.venv/
+.git/
+.github/
+.claude/
+.hermes/
+.local/
+.replit
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+**/__pycache__/
+*.egg-info/
+tests/
