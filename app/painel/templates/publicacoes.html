@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Publicações · Painel MNScr{% endblock %}
+{% block content %}
+<h1>Publicações no Cinerie</h1>
+<div class="card">
+  {% if itens is none %}
+  <p class="muted">O banco do robô ainda não chegou ao volume.</p>
+  {% else %}
+  <p class="muted small">As 100 mais recentes, no horário de São Paulo.</p>
+  {% include "_publicacoes.html" %}
+  {% endif %}
+</div>
+{% endblock %}

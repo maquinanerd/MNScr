@@ -10,13 +10,14 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, urlsplit
 
 from bs4 import BeautifulSoup
 
-from . import ai_spend
+from . import ai_spend, teto
 from .ai_processor import AIProcessor
 from .ai_validator import expand_article_if_too_short, validate_and_fix_ai_json
 from .cleaners import clean_html_for_globo_esporte
@@ -663,7 +664,7 @@ def _ai_daily_budget_pause() -> Optional[float]:
             status.day, status.spent_usd, status.budget_usd,
         )
         _ai_budget_notice_day = status.day
-    return min(AI_BUDGET_RECHECK_S, ai_spend.seconds_until_next_day() + 1)
+    return min(AI_BUDGET_RECHECK_S, teto.seconds_until_next_day() + 1)
 
 
 def _process_one_queued_article() -> Optional[Dict[str, Any]]:
@@ -3147,9 +3148,27 @@ def _build_link_map_for_replay() -> Dict[str, Any]:
         return {}
 
 
+#: Início do último ciclo, em UTC. O painel (app/painel) lê para dizer se o robô está
+#: rodando: sem ele, "parado" e "sem nada novo nos feeds" pareceriam a mesma coisa.
+CYCLE_HEARTBEAT_KEY = "ultimo_ciclo_utc"
+
+
+def _mark_cycle_heartbeat() -> None:
+    # So sinalizacao para o painel: falhar aqui nunca pode derrubar o ciclo.
+    try:
+        db = Database()
+        try:
+            db.set_pipeline_state(CYCLE_HEARTBEAT_KEY, datetime.now(timezone.utc).isoformat())
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[CYCLE_HEARTBEAT] inicio do ciclo nao registrado: %s", exc)
+
+
 def run_pipeline_cycle(*, start_worker: bool = True, skip_pending_guard: bool = False):
     """Read feeds and enqueue articles for the worker or a bounded synchronous run."""
     initialize_runtime()
+    _mark_cycle_heartbeat()
     reconcile_event_tasks()
     schedule_cinerie_dispatch()
     if start_worker:

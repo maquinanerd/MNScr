@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Entrar · Painel MNScr{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Painel MNScr</h1>
+  <form method="post" action="/login">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="user">Usuário</label>
+    <input id="user" name="user" type="text" autocomplete="username" required>
+    <label for="password">Senha</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <p><button class="primary" type="submit">Entrar</button></p>
+  </form>
+</div>
+{% endblock %}

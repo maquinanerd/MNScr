@@ -22,11 +22,12 @@ import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
 from . import config
 from .sqlite_utils import connect_sqlite
+from .teto import local_day
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,6 @@ PRICES_USD_PER_MTOK: dict[str, tuple[float, float]] = {
 # Modelo fora da tabela conta pelo preço mais caro dela: melhor a trava fechar cedo
 # do que um modelo novo passar de graça pela conta.
 _UNKNOWN_MODEL_PRICE = max(PRICES_USD_PER_MTOK.values(), key=lambda price: price[1])
-
-# O Brasil não tem horário de verão desde 2019: um deslocamento fixo dispensa a base
-# de fusos (tzdata), que no Windows nem sempre está instalada.
-SAO_PAULO = timezone(timedelta(hours=-3), "America/Sao_Paulo")
 
 # Gasto que o banco recusou gravar (lock além do busy_timeout, disco cheio). A
 # chamada já foi paga: o valor fica aqui, entra na próxima gravação e, até lá, conta
@@ -70,21 +67,6 @@ def call_cost_usd(model: str, tokens_info: Mapping[str, Any]) -> float:
     prompt_tokens = int(tokens_info.get("prompt_tokens") or 0)
     output_tokens = int(tokens_info.get("completion_tokens") or 0) + int(tokens_info.get("thoughts_tokens") or 0)
     return (prompt_tokens * input_price + output_tokens * output_price) / 1_000_000
-
-
-def local_day(now: Optional[datetime] = None) -> str:
-    """O dia do teto: a data em São Paulo, `AAAA-MM-DD`."""
-    moment = now or datetime.now(timezone.utc)
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(SAO_PAULO).date().isoformat()
-
-
-def seconds_until_next_day(now: Optional[datetime] = None) -> float:
-    """Quanto falta para a meia-noite de São Paulo, quando o teto zera."""
-    moment = (now or datetime.now(timezone.utc)).astimezone(SAO_PAULO)
-    midnight = datetime.combine(moment.date() + timedelta(days=1), datetime.min.time(), tzinfo=SAO_PAULO)
-    return max(0.0, (midnight - moment).total_seconds())
 
 
 @dataclass(frozen=True)

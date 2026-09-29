@@ -11,6 +11,7 @@ import pytest
 from app import ai_spend, config, pipeline
 from app.ai_client_gemini import AIClient
 from app.exceptions import BlockedPromptError
+from app.teto import local_day, parse_budget_usd, seconds_until_next_day
 
 # 12:00 em São Paulo.
 MEIO_DIA = datetime(2026, 9, 29, 15, 0, tzinfo=timezone.utc)
@@ -61,12 +62,12 @@ def test_modelo_fora_da_tabela_conta_pelo_mais_caro():
 
 def test_o_dia_e_o_de_sao_paulo_e_nao_o_de_utc():
     # 02:30 UTC do dia 30 ainda é 23:30 do dia 29 em São Paulo.
-    assert ai_spend.local_day(datetime(2026, 9, 30, 2, 30, tzinfo=timezone.utc)) == "2026-09-29"
-    assert ai_spend.local_day(datetime(2026, 9, 30, 3, 0, tzinfo=timezone.utc)) == "2026-09-30"
+    assert local_day(datetime(2026, 9, 30, 2, 30, tzinfo=timezone.utc)) == "2026-09-29"
+    assert local_day(datetime(2026, 9, 30, 3, 0, tzinfo=timezone.utc)) == "2026-09-30"
 
 
 def test_segundos_ate_a_meia_noite_de_sao_paulo():
-    assert ai_spend.seconds_until_next_day(MEIO_DIA) == 12 * 3600
+    assert seconds_until_next_day(MEIO_DIA) == 12 * 3600
 
 
 # --- valor do teto ----------------------------------------------------------
@@ -88,7 +89,7 @@ def test_segundos_ate_a_meia_noite_de_sao_paulo():
     ],
 )
 def test_valor_do_teto(bruto, esperado):
-    assert config.parse_budget_usd(bruto) == esperado
+    assert parse_budget_usd(bruto) == esperado
 
 
 def test_teto_invalido_impede_o_robo_de_subir(monkeypatch):
@@ -251,16 +252,16 @@ def dia_estourado(monkeypatch):
 
 
 def test_teto_batido_devolve_a_espera_ate_a_proxima_checagem(dia_estourado, monkeypatch):
-    monkeypatch.setattr(pipeline.ai_spend, "seconds_until_next_day", lambda: 40.0)
+    monkeypatch.setattr(pipeline.teto, "seconds_until_next_day", lambda: 40.0)
     assert pipeline._ai_daily_budget_pause() == 41.0
-    monkeypatch.setattr(pipeline.ai_spend, "seconds_until_next_day", lambda: 8 * 3600)
+    monkeypatch.setattr(pipeline.teto, "seconds_until_next_day", lambda: 8 * 3600)
     assert pipeline._ai_daily_budget_pause() == pipeline.AI_BUDGET_RECHECK_S
 
 
 def test_banco_ilegivel_espera_so_ate_a_proxima_checagem(monkeypatch):
     ilegivel = ai_spend.BudgetStatus(day="2026-09-29", spent_usd=0.0, budget_usd=1.0, unreadable=True)
     monkeypatch.setattr(pipeline.ai_spend, "budget_status", lambda **_kw: ilegivel)
-    monkeypatch.setattr(pipeline.ai_spend, "seconds_until_next_day", lambda: 8 * 3600)
+    monkeypatch.setattr(pipeline.teto, "seconds_until_next_day", lambda: 8 * 3600)
     assert pipeline._ai_daily_budget_pause() == pipeline.AI_BUDGET_RECHECK_S
 
 

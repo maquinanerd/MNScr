@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Visão geral · Painel MNScr{% endblock %}
+{% block content %}
+<h1>Visão geral</h1>
+
+{% if not v.banco_ok %}
+<div class="card">
+  <h2>O banco do robô ainda não chegou</h2>
+  <p class="muted">O robô espera o <code>app.db</code> e o <code>.env</code> no volume. Envie com
+  <code>tools\coolify\enviar-estado.ps1</code> (docs/operations/mnscr-coolify.md).</p>
+</div>
+{% else %}
+
+{% if v.ciclo_atrasado %}
+<div class="flash erro">Nenhum ciclo desde {{ v.ultimo_ciclo | quando }} ({{ v.ultimo_ciclo | ha }}). O robô roda um a cada
+  {{ intervalo_min }} min: confira o recurso MNScr no Coolify (Runtime Logs).</div>
+{% endif %}
+{% if v.teto_atingido %}
+<div class="flash aviso">Teto de gasto de IA do dia atingido ({{ v.gasto_hoje | usd(4) }} de {{ v.teto | usd }}). Nenhuma matéria
+  nova vai para a IA até a meia-noite; a fila espera.</div>
+{% endif %}
+{% if v.envios_com_problema %}
+<div class="flash aviso">{{ v.envios_com_problema }} envio(s) ao Cinerie não terminaram como publicados. <a href="/falhas">Ver falhas</a>.</div>
+{% endif %}
+
+<div class="grid">
+  <div class="card">
+    <h2>Robô</h2>
+    <div class="kv"><span class="muted">Último ciclo</span>
+      <span>{% if v.ultimo_ciclo %}{{ v.ultimo_ciclo | ha }} <span class="muted small">({{ v.ultimo_ciclo | quando }})</span>{% else %}<span class="muted">ainda não registrado</span>{% endif %}</span></div>
+    <div class="kv"><span class="muted">Última publicação</span>
+      <span>{% if v.ultima_publicacao %}{{ v.ultima_publicacao | ha }} <span class="muted small">({{ v.ultima_publicacao | quando }})</span>{% else %}—{% endif %}</span></div>
+    <div class="kv"><span class="muted">Situação</span>
+      <span>{% if v.ciclo_atrasado %}<span class="erro">parado?</span>{% elif v.teto_atingido %}<span class="aviso">esperando o teto zerar</span>{% elif v.ultimo_ciclo %}<span class="ok">rodando</span>{% else %}<span class="muted">sem registro de ciclo</span>{% endif %}</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Gasto de IA hoje</h2>
+    {% if v.teto %}
+    <div class="big">{{ v.gasto_hoje | usd(2) }} <span class="muted small">de {{ v.teto | usd }}</span></div>
+    <div class="meter {{ 'cheio' if v.teto_pct >= 100 else ('alto' if v.teto_pct >= 80 else '') }}"><span style="width: {{ v.teto_pct }}%"></span></div>
+    <div class="muted small">{{ v.teto_pct }}% do teto diário</div>
+    {% elif v.teto == 0 %}
+    <div class="big">{{ v.gasto_hoje | usd(2) }}</div><div class="muted small">teto desligado</div>
+    {% else %}
+    <div class="big">{{ v.gasto_hoje | usd(2) }}</div><div class="erro small">teto inválido na configuração</div>
+    {% endif %}
+    <div class="kv"><span class="muted">Média por matéria</span><span>{{ v.custo_medio | usd(4) }}</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Publicadas no Cinerie</h2>
+    <div class="big">{{ v.publicadas_hoje }} <span class="muted small">hoje</span></div>
+    <div class="kv"><span class="muted">Ontem</span><span>{{ v.publicadas_ontem }}</span></div>
+    <div class="kv"><span class="muted">Últimos 7 dias</span><span>{{ v.publicadas_7d }}</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Fila</h2>
+    <div class="big">{{ v.fila_total }} <span class="muted small">matérias</span></div>
+    {% for status, n in v.fila | dictsort %}
+    <div class="kv"><span class="muted">{{ STATUS_FILA.get(status, status) }}</span><span>{{ n }}</span></div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Últimas publicações</h2>
+  {% set itens = v.ultimas %}{% include "_publicacoes.html" %}
+  <p class="small"><a href="/publicacoes">Ver as últimas 100</a></p>
+</div>
+{% endif %}
+{% endblock %}

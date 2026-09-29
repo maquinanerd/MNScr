@@ -1,11 +1,12 @@
 import logging
-import math
 import os
 import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
+
+from .teto import budget_from_env
 
 # Carrega variáveis de ambiente de um arquivo .env.
 #
@@ -622,22 +623,9 @@ AI_POST_WRITER_BUDGET_TOKENS = int(os.getenv('AI_POST_WRITER_BUDGET_TOKENS', '16
 AI_POST_WRITER_BUDGET_PER_1K_SOURCE = int(os.getenv('AI_POST_WRITER_BUDGET_PER_1K_SOURCE', '6000'))
 
 
-def parse_budget_usd(raw: Optional[str]) -> Optional[float]:
-    """`1.00`, `1,50` ou `0`. None quando o valor não é um número >= 0."""
-    try:
-        value = float(str(raw).strip().replace(',', '.'))
-    except (TypeError, ValueError):
-        return None
-    # NaN, infinito ("inf", "1e309") e negativo: só o 0 desliga o teto.
-    if not math.isfinite(value) or value < 0:
-        return None
-    return value
-
-
-# Teto de gasto diário com IA, em dólares, somado no dia de São Paulo (app/ai_spend.py).
-# Batido o teto, nenhuma matéria nova vai para a IA até a meia-noite. 0 desliga.
-AI_DAILY_BUDGET_USD_RAW = os.getenv('MNSCR_AI_DAILY_BUDGET_USD', '1.00')
-AI_DAILY_BUDGET_USD = parse_budget_usd(AI_DAILY_BUDGET_USD_RAW)
+# Teto de gasto diário com IA, em dólares, somado no dia de São Paulo (app/ai_spend.py,
+# app/teto.py). Batido o teto, nenhuma matéria nova vai para a IA até a meia-noite. 0 desliga.
+AI_DAILY_BUDGET_USD_RAW, AI_DAILY_BUDGET_USD = budget_from_env()
 
 # Gates de indexação foram removidos na MS-1: MNScr não indexa e não publica.
 # A decisão de indexação pertence ao sistema do Cinerie.

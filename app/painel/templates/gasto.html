@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Gasto de IA · Painel MNScr{% endblock %}
+{% block content %}
+<h1>Gasto de IA</h1>
+<div class="card">
+  <p class="muted small">Custo de toda chamada ao Gemini (redator, validador, checagem factual), somado no dia de São Paulo.
+    Teto diário: <strong>{% if teto %}{{ teto | usd }}{% elif teto == 0 %}desligado{% else %}inválido{% endif %}</strong>
+    — muda em <em>Environment Variables</em> do recurso no Coolify (<code>MNSCR_AI_DAILY_BUDGET_USD</code>).
+    A conta começou em 29/09/2026.</p>
+  {% if dias is none %}
+  <p class="muted">O banco do robô ainda não chegou ao volume.</p>
+  {% elif not dias %}
+  <p class="muted">Nenhum gasto registrado nos últimos 30 dias.</p>
+  {% else %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Dia</th><th class="num">Gasto</th><th>Do teto</th><th class="num">Chamadas</th><th>Por modelo</th><th class="num">Matérias</th><th class="num">Por matéria</th></tr></thead>
+    <tbody>
+    {% for d in dias %}
+      {% set pct = ((d.usd / teto * 100) | round | int) if teto else none %}
+      <tr>
+        <td>{{ d.dia.strftime('%d/%m') }}</td>
+        {% if d.medido %}
+        <td class="num">{{ d.usd | usd(4) }}</td>
+        <td>{% if pct is not none %}<div class="meter {{ 'cheio' if pct >= 100 else ('alto' if pct >= 80 else '') }}"><span style="width: {{ [pct, 100] | min }}%"></span></div><span class="muted small">{{ pct }}%</span>{% else %}—{% endif %}</td>
+        <td class="num">{{ d.chamadas }}</td>
+        <td class="small">{% for modelo, usd, calls in d.por_modelo %}<div><code>{{ modelo }}</code> {{ usd | usd(4) }} <span class="muted">({{ calls }})</span></div>{% endfor %}</td>
+        {% else %}
+        <td class="num muted" colspan="4">não medido</td>
+        {% endif %}
+        <td class="num">{{ d.publicadas }}</td>
+        <td class="num">{{ d.custo_por_materia | usd(4) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

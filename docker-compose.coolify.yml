@@ -1,11 +1,16 @@
 # MNScr no Coolify (build pack "Docker Compose").
 #
-# Um serviço, um volume, nenhuma porta: o MNScr não serve HTTP — ele lê os superfeeds da
-# Cinerie no RSS Prime e publica no CMS da Cinerie. Nenhum domínio a configurar.
+# Dois serviços no mesmo volume:
+# - `mnscr`, o robô: não serve HTTP; lê os superfeeds da Cinerie no RSS Prime e publica
+#   no CMS da Cinerie;
+# - `painel`, o site só leitura para acompanhá-lo (app/painel), com login e domínio
+#   próprio. Lê o banco do robô em modo leitura e guarda o próprio acesso em
+#   /data/painel.db. Cair ou reiniciar o painel não encosta no robô.
 #
-# Nenhuma variável aqui é segredo, nem o teto de gasto diário com IA. As chaves (Gemini, Payload/Cinerie, TMDB…) chegam no
-# `.env` que o tools/coolify/enviar-estado.ps1 copia para o volume, junto com o banco. O
-# que o Coolify define abaixo vence o `.env` (app/config.py carrega com override=False).
+# Nenhuma variável aqui é segredo, nem o teto de gasto diário com IA. As chaves (Gemini,
+# Payload/Cinerie, TMDB…) chegam no `.env` que o tools/coolify/enviar-estado.ps1 copia
+# para o volume, junto com o banco. O que o Coolify define abaixo vence o `.env`
+# (app/config.py carrega com override=False). O painel nem lê o `.env`.
 
 services:
   mnscr:
@@ -22,6 +27,34 @@ services:
     volumes:
       - mnscr-data:/data
     restart: unless-stopped
+
+  painel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["python", "-m", "app.painel"]
+    environment:
+      # Faz o Coolify gerar o domínio e apontar o proxy HTTPS para a porta 8080.
+      - SERVICE_FQDN_PAINEL_8080
+      - PORT=8080
+      - MNSCR_DB_PATH=/data/app.db
+      - MNSCR_PAINEL_DB_PATH=/data/painel.db
+      # As chaves do robô não são do painel: o `.env` do volume não é carregado nem lido.
+      - PYTHON_DOTENV_DISABLED=1
+      - TZ=America/Sao_Paulo
+      # A base dos links das matérias (não é segredo; o robô tem a mesma no `.env`).
+      - CINERIE_PUBLIC_BASE_URL=https://cinerie.com/pt/noticias
+      # O mesmo teto do robô, para a barra de gasto.
+      - MNSCR_AI_DAILY_BUDGET_USD=${MNSCR_AI_DAILY_BUDGET_USD:-1.00}
+    volumes:
+      - mnscr-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
 volumes:
   mnscr-data:

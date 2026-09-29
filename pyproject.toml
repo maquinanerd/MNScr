@@ -32,10 +32,18 @@ dependencies = [
     # a declaracao, o resolvedor nao tem motivo para sair da versao vulneravel.
     "cryptography>=50.0.0",
     "charset-normalizer==3.4.4",
+    # Painel só leitura (app/painel), o mesmo stack do painel do MN-Prime.
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "jinja2>=3.1.5",
+    "python-multipart>=0.0.20",
+    "itsdangerous>=2.2",
 ]
 
 [project.optional-dependencies]
 dev = [
+    # O TestClient do FastAPI, nos testes do painel.
+    "httpx>=0.28",
     "pytest>=8.3.0",
     "ruff>=0.8.0",
 ]
@@ -57,7 +65,7 @@ build-backend = "setuptools.build_meta"
 include = ["app*", "contracts*", "config*"]
 
 [tool.setuptools.package-data]
-"*" = ["*.json", "*.txt", "*.md"]
+"*" = ["*.json", "*.txt", "*.md", "*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
