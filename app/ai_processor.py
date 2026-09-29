@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from app.editorial_qa import run_editorial_style_qa
 
+from . import ai_spend
 from .ai_client_gemini import AIClient
 from .config import (
     AI_API_KEYS,
@@ -175,6 +176,9 @@ class AIProcessor:
                 min_interval_s=AI_MIN_INTERVAL_S,
                 backoff_base=BACKOFF_BASE_S,
                 backoff_max=BACKOFF_MAX_S,
+                # Redator, validador, expansao e checagem factual usam este mesmo
+                # cliente: todo gasto do dia passa por aqui.
+                spend_recorder=ai_spend.record_call,
             )
 
     @classmethod

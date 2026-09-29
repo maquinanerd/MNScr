@@ -16,6 +16,7 @@ from urllib.parse import urlparse, urlsplit
 
 from bs4 import BeautifulSoup
 
+from . import ai_spend
 from .ai_processor import AIProcessor
 from .ai_validator import expand_article_if_too_short, validate_and_fix_ai_json
 from .cleaners import clean_html_for_globo_esporte
@@ -132,6 +133,9 @@ ARTICLE_WATCHDOG_TIMEOUT_S = int(os.getenv('ARTICLE_WATCHDOG_TIMEOUT_S', 300))
 CLAIM_STALE_TIMEOUT_S = int(os.getenv('CLAIM_STALE_TIMEOUT_S', ARTICLE_WATCHDOG_TIMEOUT_S * 2))
 CINERIE_DISPATCH_LIMIT = int(os.getenv('MNSCR_CINERIE_DISPATCH_LIMIT', 10))
 CINERIE_DISPATCH_LEASE_SECONDS = int(os.getenv('MNSCR_CINERIE_DISPATCH_LEASE_SECONDS', 900))
+# Com o teto diario de IA batido, o worker reconfere a cada 5 minutos (ou na virada
+# do dia, se vier antes): subir MNSCR_AI_DAILY_BUDGET_USD e reiniciar libera na hora.
+AI_BUDGET_RECHECK_S = 300
 
 # Exit codes are shared with the CLI entrypoint.  In particular, an unfinished
 # backlog is never reported as a successful --once invocation.
@@ -626,6 +630,42 @@ def _once_link_map() -> Dict[str, Any]:
         return {"posts": []}
 
 
+_ai_budget_notice_day: Optional[str] = None
+
+
+def _ai_daily_budget_pause() -> Optional[float]:
+    """Segundos a esperar antes de pegar materia nova; None se o dia ainda tem saldo.
+
+    Checado ANTES do claim, como a protecao de RPM: a materia fica NEW/QUEUED, sem
+    gastar `fail_count`, e anda sozinha quando o dia vira (app/ai_spend.py).
+    """
+    global _ai_budget_notice_day
+    status = ai_spend.budget_status()
+    if not status.exhausted:
+        if _ai_budget_notice_day is not None:
+            logger.info(
+                "[AI_DAILY_BUDGET] saldo liberado: dia=%s gasto_usd=%.4f teto_usd=%s. O worker volta a pegar materias.",
+                status.day, status.spent_usd, status.budget_usd,
+            )
+            _ai_budget_notice_day = None
+        return None
+    if status.unreadable:
+        logger.warning(
+            "[AI_DAILY_BUDGET] gasto do dia ilegivel no banco: nenhuma materia nova vai para a IA; "
+            "reconfere em %ss.",
+            AI_BUDGET_RECHECK_S,
+        )
+        return AI_BUDGET_RECHECK_S
+    if _ai_budget_notice_day != status.day:
+        logger.warning(
+            "[AI_DAILY_BUDGET] teto atingido: dia=%s gasto_usd=%.4f teto_usd=%s. Nenhuma materia nova vai "
+            "para a IA ate a meia-noite (Sao Paulo); a fila fica como esta.",
+            status.day, status.spent_usd, status.budget_usd,
+        )
+        _ai_budget_notice_day = status.day
+    return min(AI_BUDGET_RECHECK_S, ai_spend.seconds_until_next_day() + 1)
+
+
 def _process_one_queued_article() -> Optional[Dict[str, Any]]:
     """Claim and process exactly one item using the canonical batch processor.
 
@@ -714,6 +754,10 @@ def run_pipeline_once(*, deadline_seconds: float, max_items: int) -> OnceRunResu
                 return False
             if result.claimed >= max_items:
                 result.stop_reason = "item_limit"
+                result.exit_code = EXIT_DEADLINE_EXCEEDED
+                return False
+            if _ai_daily_budget_pause() is not None:
+                result.stop_reason = "ai_daily_budget"
                 result.exit_code = EXIT_DEADLINE_EXCEEDED
                 return False
             row = _process_one_queued_article()
@@ -2052,6 +2096,12 @@ def worker_loop():
             logger.info("[RPM PROTECTION] Resumindo pipeline apÃƒÂ³s pausa de 5 minutos.")
             continue
 
+        # Teto diario de IA: tambem antes do claim, pelo mesmo motivo.
+        budget_pause_s = _ai_daily_budget_pause()
+        if budget_pause_s is not None:
+            _worker_stop_requested.wait(budget_pause_s)
+            continue
+
         # Get articles from queue (batch size 1)
         articles = []
         start_wait = time.time()
@@ -3051,6 +3101,11 @@ def process_stored_event(event) -> Dict[str, Any]:
     produces is the deterministic id of that revision — replaying revision 2
     can never overwrite revision 1.
     """
+    if _ai_daily_budget_pause() is not None:
+        raise RuntimeError(
+            "Teto diario de IA atingido (MNSCR_AI_DAILY_BUDGET_USD): reprocesse depois da meia-noite "
+            "ou suba o teto."
+        )
     db = Database()
     try:
         article = db.get_article_by_event_key(event.event_key, event.revision)

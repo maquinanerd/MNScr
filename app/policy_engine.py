@@ -17,6 +17,7 @@ import os
 import re as _re
 from typing import Any, Dict, List, Optional
 
+from .ai_spend import PRICES_USD_PER_MTOK
 from .config import (
     AI_POST_WRITER_BUDGET_PER_1K_SOURCE,
     AI_POST_WRITER_BUDGET_TOKENS,
@@ -439,13 +440,10 @@ class ArticleBudget:
         out_tok = getattr(self, 'output_tokens', 0)
         total = self.used_tokens or (in_tok + out_tok)
 
-        prices = {
-            "gemini-3.1-flash-lite": (0.25, 1.50),
-            "gemini-2.5-flash-lite": (0.10, 0.40),
-            "gemini-2.5-flash": (0.30, 2.50),
-        }
+        prices = PRICES_USD_PER_MTOK
         # Tokens are aggregated across stages; without per-stage model tracking
-        # this stays an estimate. The caller may pass the dominant model.
+        # this stays an estimate. The caller may pass the dominant model. The
+        # real per-call spend (and the daily cap) lives in app/ai_spend.py.
         input_price, output_price = prices.get(cost_model, prices["gemini-3.1-flash-lite"])
         usd = (in_tok * input_price / 1000000) + (out_tok * output_price / 1000000)
 

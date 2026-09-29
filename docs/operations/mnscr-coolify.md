@@ -17,9 +17,10 @@ Tudo que precisa sobreviver a um redeploy fica no volume `<app>_mnscr-data`, mon
 | `/data/logs/` | `app.log` e a contagem de tokens |
 | `/data/drafts/`, `/data/debug/` | rascunhos locais e prompts que falharam |
 
-O Coolify define só `MNSCR_DB_PATH=/data/app.db` e `MNSCR_LOCAL_DRAFT_DIR=/data/drafts`,
-e isso vence o `.env` (`app/config.py` carrega com `override=False`). Nenhum segredo vai
-para variável do painel nem para a imagem (`.dockerignore`).
+O Coolify define só `MNSCR_DB_PATH=/data/app.db`, `MNSCR_LOCAL_DRAFT_DIR=/data/drafts` e
+o teto `MNSCR_AI_DAILY_BUDGET_USD` (abaixo), e isso vence o `.env` (`app/config.py`
+carrega com `override=False`). Nenhum segredo vai para variável do painel nem para a
+imagem (`.dockerignore`).
 
 ## A virada (uma vez)
 
@@ -55,3 +56,29 @@ variável definida no painel do Coolify também vale e vence o `.env`.
 
 Nunca use `-Substituir` depois da virada sem querer isso: ele troca o banco do servidor
 pelo local, mais velho, e apaga o que foi publicado desde então.
+
+## Teto de gasto com IA
+
+`MNSCR_AI_DAILY_BUDGET_USD` (padrão `1.00`; `0` desliga) limita, em dólares, o que o
+MNScr gasta de Gemini por dia de São Paulo. O custo de toda resposta — redator,
+validador, checagem factual — é somado na tabela `ai_spend_daily` do próprio banco,
+com os preços de `app/ai_spend.py`. Batido o teto, o worker não pega matéria nova até
+a meia-noite: a fila espera como está, sem gastar tentativa nem virar falha. A matéria
+que já estava na IA termina, então o dia pode passar do teto pelo custo de uma matéria.
+
+Até 29/09/2026 a média foi US$ 0,011 por matéria: US$ 1 rende umas 90 por dia.
+
+- **Mudar o teto:** *Environment Variables* do recurso no Coolify, editar
+  `MNSCR_AI_DAILY_BUDGET_USD`, depois **Redeploy**. Um valor inválido impede o
+  robô de subir, com a mensagem no log.
+- **Ver nos logs:** `[AI_SPEND]` a cada chamada (custo e total do dia) e
+  `[AI_DAILY_BUDGET] teto atingido` uma vez por dia, quando trava.
+- **Ver o gasto dos últimos dias** (*Terminal* do recurso):
+
+  ```sh
+  python -c "import sqlite3; c = sqlite3.connect('/data/app.db'); print(c.execute('select day, round(sum(usd), 4), sum(calls) from ai_spend_daily group by day order by day desc limit 7').fetchall())"
+  ```
+
+A tabela de preços é fixa no código. Se o Google mudar o preço, ou o `.env` passar a
+usar um modelo fora dela, atualize `PRICES_USD_PER_MTOK`: modelo desconhecido conta
+pelo preço mais caro da tabela.

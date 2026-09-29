@@ -3,7 +3,7 @@
 # Um serviço, um volume, nenhuma porta: o MNScr não serve HTTP — ele lê os superfeeds da
 # Cinerie no RSS Prime e publica no CMS da Cinerie. Nenhum domínio a configurar.
 #
-# Nenhuma variável aqui é segredo. As chaves (Gemini, Payload/Cinerie, TMDB…) chegam no
+# Nenhuma variável aqui é segredo, nem o teto de gasto diário com IA. As chaves (Gemini, Payload/Cinerie, TMDB…) chegam no
 # `.env` que o tools/coolify/enviar-estado.ps1 copia para o volume, junto com o banco. O
 # que o Coolify define abaixo vence o `.env` (app/config.py carrega com override=False).
 
@@ -16,6 +16,9 @@ services:
       - MNSCR_DB_PATH=/data/app.db
       - MNSCR_LOCAL_DRAFT_DIR=/data/drafts
       - TZ=America/Sao_Paulo
+      # Teto de gasto diário com IA, em dólares (app/ai_spend.py). Aparece editável
+      # em Environment Variables do Coolify; mudou, Redeploy. 0 desliga.
+      - MNSCR_AI_DAILY_BUDGET_USD=${MNSCR_AI_DAILY_BUDGET_USD:-1.00}
     volumes:
       - mnscr-data:/data
     restart: unless-stopped
