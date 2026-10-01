@@ -89,9 +89,11 @@ pelo preço mais caro da tabela.
 
 ## Painel
 
-Site só de leitura (`app/painel`), no domínio que o Coolify gera para o serviço
-`painel` (*Domains* do recurso; tem de estar em **https**, porque o cookie de sessão
-exige HTTPS). Páginas:
+Site só de leitura (`app/painel`), em
+`https://painel-bkzummsoks1q2xlpr1yjbsfl.62.171.164.224.sslip.io` — o domínio que o
+Coolify gerou para o serviço `painel` (*Domains* do recurso). Tem de ficar em **https**:
+o cookie de sessão exige. Editar o domínio nessa tela descarta a porta interna; o
+compose declara `expose: 8080`, e o proxy acha a porta mesmo assim. Páginas:
 
 | Página | O que mostra |
 | --- | --- |
